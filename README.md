@@ -26,8 +26,10 @@ An ML-powered agent that predicts household energy consumption and optimizes usa
 ### 4. Optimization & Integration
 - **Optimization (`optimize_plan.py`)**:
   - Fetches tomorrow's hourly spot prices from Nordpool (`sensor.nordpool_total`).
-  - **EV Strategy**: Identifies the 4 cheapest hours for charging.
-  - **Heating Strategy**: Boosts GSHP setpoint if price is below the daily 20th percentile.
+  - Fetches hourly solar forecast from Solcast (`sensor.solcast_pv_forecast_forecast_tomorrow`).
+  - **EV Strategy**: Identifies the 4 cheapest hours for charging (based on spot price).
+  - **Heating Strategy**: Boosts GSHP setpoint if the **effective price** is below the daily 20th percentile.
+    - *Effective Price* is considered 0.0 €/kWh if solar production > 0.5 kWh.
   - Generates `optimization_plan.json`.
 - **Integration (`push_to_ha.py`)**:
   - Pushes the optimization plan to a Home Assistant sensor: `sensor.hepo_optimization_plan`.
