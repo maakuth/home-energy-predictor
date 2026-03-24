@@ -1,0 +1,106 @@
+import os
+import psycopg2
+import pandas as pd
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
+
+load_dotenv(override=True)
+
+ENTITIES = {
+    'sensor.ulkona_temperature_2': 'outside_temp',
+    'sensor.mlp_teho': 'gshp_power',
+    'sensor.saikaan_olohuone_current_power': 'aahp_living_power',
+    'sensor.mokkimokin_ilp_power': 'aahp_cabin_power',
+    'sensor.mummun_energy': 'mummun_energy',
+    'sensor.mlp_varaajan_lampotila': 'accumulator_temp',
+    'sensor.xpz_491_battery_level': 'ev_soc',
+    'device_tracker.xpz_491_position': 'ev_position',
+    'sensor.sahkokauppa_nyt': 'total_power',
+    'sensor.solcast_pv_forecast_forecast_tomorrow': 'solar_forecast'
+}
+
+def get_metadata_ids(cur):
+    query = "SELECT metadata_id, entity_id FROM states_meta WHERE entity_id IN %s"
+    cur.execute(query, (tuple(ENTITIES.keys()),))
+    return {row[1]: row[0] for row in cur.fetchall()}
+
+def extract_states(cur, metadata_id, days=365):
+    start_ts = (datetime.now() - timedelta(days=days)).timestamp()
+    query = """
+        SELECT last_updated_ts, state 
+        FROM states 
+        WHERE metadata_id = %s AND last_updated_ts > %s
+        ORDER BY last_updated_ts ASC
+    """
+    cur.execute(query, (metadata_id, start_ts))
+    return cur.fetchall()
+
+def main():
+    conn = psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD")
+    )
+    cur = conn.cursor()
+    
+    metadata_map = get_metadata_ids(cur)
+    all_dfs = []
+    
+    for entity_id, col_name in ENTITIES.items():
+        if entity_id not in metadata_map:
+            print(f"⚠️ Warning: Metadata ID for {entity_id} not found.")
+            continue
+            
+        print(f"Extracting {entity_id}...")
+        rows = extract_states(cur, metadata_map[entity_id])
+        if not rows:
+            print(f"No data for {entity_id}")
+            continue
+            
+        df = pd.DataFrame(rows, columns=['ts', col_name])
+        df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+        df = df.set_index('timestamp').drop(columns=['ts'])
+        
+        # Numeric conversion (except for position)
+        if col_name != 'ev_position':
+            df[col_name] = pd.to_numeric(df[col_name], errors='coerce')
+        
+        # Resample to hourly
+        if col_name == 'ev_position':
+            # Is home if any state in that hour says 'home'
+            resampled = df[col_name].resample('1h').apply(lambda x: 'home' in x.values if not x.empty else None)
+        elif col_name == 'mummun_energy':
+            # Handle energy total to power conversion later
+            resampled = df[col_name].resample('1h').mean()
+        else:
+            resampled = df[col_name].resample('1h').mean()
+            
+        all_dfs.append(resampled)
+    
+    cur.close()
+    conn.close()
+    
+    print("Merging data...")
+    final_df = pd.concat(all_dfs, axis=1)
+    
+    # Calculate Power from Energy for Mummun Energy (delta kWh / delta t)
+    # Energy is in kWh. Resampling to 1h means delta_t is 1h.
+    # So Power (kW) = Delta kWh
+    if 'mummun_energy' in final_df.columns:
+        final_df['mummun_power'] = final_df['mummun_energy'].diff().clip(lower=0)
+        final_df = final_df.drop(columns=['mummun_energy'])
+    
+    # Gap Filling
+    # Linear interpolation for gaps < 2 hours
+    # Only interpolate numeric columns
+    numeric_cols = final_df.select_dtypes(include=['number']).columns
+    final_df[numeric_cols] = final_df[numeric_cols].interpolate(method='linear', limit=2)
+    
+    # Create final dataset
+    final_df.to_csv('raw_data.csv')
+    print(f"✅ Data extraction complete. Saved to raw_data.csv. Shape: {final_df.shape}")
+
+if __name__ == "__main__":
+    main()
