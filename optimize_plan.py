@@ -112,6 +112,10 @@ def optimize():
     print(f"\nOptimization Plan for Tomorrow:")
     print(f"Price Threshold (20th percentile effective): {price_threshold:.3f} €/kWh")
     
+    # Calculate tomorrow's date for timestamps
+    tomorrow = datetime.now() + timedelta(days=1)
+    tomorrow = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
+    
     final_plan = []
     print("Hour | Pred (kWh) | Price (€) | Solar (kWh) | Actions")
     print("-----|------------|-----------|-------------|--------")
@@ -119,6 +123,9 @@ def optimize():
         p_pred = predictions[h] if h < len(predictions) else 0
         p_price = prices[h]
         p_solar = hourly_solar[h]
+        
+        # Calculate timestamp for this hour
+        ts = tomorrow + timedelta(hours=h)
         
         actions = []
         if ev_plan[h]: actions.append('⚡ CHARGE')
@@ -129,6 +136,7 @@ def optimize():
         print(f"{h:02d}:00 | {p_pred:10.2f} | {p_price:9.3f} | {p_solar:11.2f} | {action_str}")
         
         final_plan.append({
+            'timestamp': ts.isoformat(),
             'hour': h,
             'predicted_usage': float(p_pred),
             'spot_price': float(p_price),

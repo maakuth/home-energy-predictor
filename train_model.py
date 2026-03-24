@@ -1,0 +1,64 @@
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
+import joblib
+import json
+
+def train():
+    print('Loading processed data...')
+    df = pd.read_csv('processed_data.csv', index_col=0)
+    
+    # Target (Y)
+    target = 'total_power'
+    
+    # Features (X)
+    # Features mentioned in PLAN.md:
+    # Weather: outside_temp, solar_forecast
+    # Thermal State: accumulator_temp, is_fireplace_active (lagged)
+    # EV State: ev_soc, ev_is_home (proxied by ev_position)
+    # Temporal: hour, day_of_week, month
+    features = [
+        'outside_temp', 'solar_forecast', 
+        'accumulator_temp', 'is_fireplace_lag1', 
+        'ev_soc', 'ev_position',
+        'hour', 'day_of_week', 'month'
+    ]
+    
+    X = df[features]
+    y = df[target]
+    
+    print(f'Training with features: {features}')
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Model Specification
+    model = xgb.XGBRegressor(
+        n_estimators=1000,
+        learning_rate=0.05,
+        max_depth=6,
+        early_stopping_rounds=50,
+        random_state=42
+    )
+    
+    print('Fitting model...')
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_test, y_test)],
+        verbose=False
+    )
+    
+    # Evaluation
+    predictions = model.predict(X_test)
+    mae = mean_absolute_error(y_test, predictions)
+    print(f'✅ Model Training Complete. MAE: {mae:.4f}')
+    
+    # Save model
+    model.save_model('energy_model.json')
+    # Save feature list for inference
+    with open('model_features.json', 'w') as f:
+        json.dump(features, f)
+    print('Model saved to energy_model.json')
+
+if __name__ == '__main__':
+    train()

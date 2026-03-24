@@ -27,8 +27,9 @@ def push_plan():
         'content-type': 'application/json',
     }
     
-    # State: Current timestamp
-    state = datetime.now().isoformat()
+    # State: Total predicted energy for tomorrow (sum of hourly predictions)
+    total_energy = sum(p['predicted_usage'] for p in plan)
+    state = f"{total_energy:.2f}"
     
     # Attributes: The full plan
     payload = {
@@ -36,7 +37,9 @@ def push_plan():
         'attributes': {
             'friendly_name': 'HEPO Optimization Plan',
             'plan': plan,
-            'unit_of_measurement': 'timestamp'
+            'unit_of_measurement': 'kWh',
+            'device_class': 'energy',
+            'last_updated_ts': datetime.now().isoformat()
         }
     }
     
