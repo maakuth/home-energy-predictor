@@ -6,4 +6,5 @@ __pycache__/
 .venv
 env/
 venv/
+test_venv/
 ENV/
