@@ -23,7 +23,8 @@ python train_model.py
 
 # 4. Predict Tomorrow
 echo "[4/5] Predicting Tomorrow..."
-python predict_tomorrow.py
+#python predict_tomorrow.py
+python predict_future.py
 
 # 5. Optimize & Push
 echo "[5/5] Optimizing & Pushing Plan..."

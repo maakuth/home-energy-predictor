@@ -27,7 +27,7 @@ def push_plan():
         'content-type': 'application/json',
     }
     
-    # State: Total predicted energy for tomorrow (sum of hourly predictions)
+    # State: Total predicted energy from current hour to end of tomorrow (sum of hourly predictions)
     total_energy = sum(p['predicted_usage'] for p in plan)
     state = f"{total_energy:.2f}"
     
