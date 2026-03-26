@@ -139,11 +139,13 @@ def predict():
     predictions = model.predict(X_inference)
     
     # Combine predictions with timestamps
+    # predicted_usage is now total home consumption (grid + solar),
+    # suitable for battery BESS control decisions.
     results = []
     for i, p in enumerate(predictions):
         results.append({
             'timestamp': timestamps[i],
-            'predicted_usage': float(p),
+            'predicted_usage': float(p),       # total home load (kWh)
             'solar_forecast': float(inference_data[i]['solar_forecast'])
         })
         

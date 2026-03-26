@@ -10,8 +10,9 @@ def train():
     print('Loading processed data...')
     df = pd.read_csv('processed_data.csv', index_col=0)
     
-    # Target (Y)
-    target = 'total_power'
+    # Target (Y): total home consumption = grid meter + solar production
+    # (grid meter goes negative during solar export, so we add actual solar to get true load)
+    target = 'total_home_power'
     
     # Features (X)
     # Features mentioned in PLAN.md:
