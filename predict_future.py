@@ -4,6 +4,7 @@ import numpy as np
 import xgboost as xgb
 import json
 import requests
+import csv
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -140,6 +141,7 @@ def predict():
     # predicted_usage is now total home consumption (grid + solar),
     # suitable for battery BESS control decisions.
     results = []
+    generated_at = datetime.now().astimezone().isoformat()
     for i, p in enumerate(predictions):
         results.append({
             'timestamp': timestamps[i],
@@ -152,6 +154,17 @@ def predict():
     with open('future_predictions.json', 'w') as f:
         json.dump(results, f, indent=2)
     print('\n✅ Predictions saved to future_predictions.json')
+
+    # Archive predictions for feedback loop
+    history_file = 'prediction_history.csv'
+    file_exists = os.path.isfile(history_file)
+    with open(history_file, 'a', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['generated_at', 'target_timestamp', 'predicted_usage'])
+        for res in results:
+            writer.writerow([generated_at, res['timestamp'], res['predicted_usage']])
+    print(f'✅ Archived {len(results)} points to {history_file}')
 
 if __name__ == '__main__':
     predict()

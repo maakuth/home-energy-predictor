@@ -66,20 +66,29 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
         return None
 
     df_prices = pd.DataFrame(all_raw)
-    if 'start' not in df_prices.columns or 'value' not in df_prices.columns:
+    if "start" not in df_prices.columns or "value" not in df_prices.columns:
         return None
 
-    df_prices['start'] = pd.to_datetime(df_prices['start'])
-    df_prices = df_prices.drop_duplicates(subset='start').set_index('start').sort_index()
-    interval_prices_series = df_prices['value'].resample(f'{PLAN_INTERVAL_MINUTES}min').mean()
+    # Convert to datetime and ensure it's timezone-aware (matching prediction_timestamps)
+    df_prices["start"] = pd.to_datetime(df_prices["start"], utc=True)
+    df_prices = df_prices.drop_duplicates(subset="start").set_index("start").sort_index()
 
-    aligned = []
-    for ts in prediction_timestamps:
-        if ts in interval_prices_series.index:
-            aligned.append(interval_prices_series[ts])
-        else:
-            aligned.append(np.nan)
-    return np.array(aligned, dtype=float)
+    # Resample to the target interval. If data is already 15-min, this does little.
+    # If data is hourly, this creates 15-min slots which we then ffill.
+    interval_prices_series = df_prices["value"].resample(f"{PLAN_INTERVAL_MINUTES}min").ffill()
+
+    # Reindex to match prediction_timestamps exactly.
+    # We use ffill to handle cases where the price horizon is shorter than the prediction horizon.
+    # This ensures that even if tomorrow's prices aren't out yet, we use the last known price
+    # (or a fallback) instead of NaNs.
+    target_index = pd.to_datetime(prediction_timestamps, utc=True)
+    aligned_series = interval_prices_series.reindex(target_index, method="ffill")
+
+    # If there are still NaNs at the beginning (e.g. prediction starts before price data),
+    # we bfill them.
+    aligned_series = aligned_series.bfill()
+
+    return aligned_series.values
 
 
 def fetch_market_prices(prediction_timestamps):
@@ -101,13 +110,6 @@ def fetch_market_prices(prediction_timestamps):
         aligned = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps)
 
         if aligned is not None:
-            nan_count = int(np.isnan(aligned).sum())
-            if nan_count > 0:
-                print(f"⚠️ Warning: {nan_count} hours without market data from {sensor}. Padding with local mean.")
-                mean_price = np.nanmean(aligned)
-                if np.isnan(mean_price):
-                    mean_price = 0.0
-                aligned = np.nan_to_num(aligned, nan=mean_price)
             return aligned, sensor
 
         # Fallback: single numeric state (constant across horizon).
