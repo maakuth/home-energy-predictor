@@ -25,15 +25,42 @@ An ML-powered agent that predicts household energy consumption and optimizes usa
 
 ### 4. Optimization & Integration
 - **Optimization (`optimize_plan.py`)**:
-  - Fetches tomorrow's hourly spot prices from Nordpool (`sensor.nordpool_total`).
+  - Fetches hourly market prices from Home Assistant, preferring `sensor.current_electricity_market_price` (fallback: Nordpool sensors).
   - Fetches hourly solar forecast from Solcast (`sensor.solcast_pv_forecast_forecast_tomorrow`).
+  - Builds asymmetric tariff prices:
+    - **Import price** = market price + transfer + tax + adders (optional VAT multiplier)
+    - **Export price** = market price - export deductions
+  - Runs battery dispatch planning with configurable battery constraints (default capacity 40 kWh):
+    - SOC window, reserve SOC, max charge/discharge power, charge/discharge efficiency
+    - Solar surplus charging, expensive-hour discharge, optional export arbitrage
   - **EV Strategy**: Identifies the 4 cheapest hours for charging (based on spot price).
   - **Heating Strategy**: Boosts GSHP setpoint if the **effective price** is below the daily 20th percentile.
     - *Effective Price* is considered 0.0 €/kWh if solar production > 0.5 kWh.
-  - Generates `optimization_plan.json`.
+  - Generates `optimization_plan.json` with legacy EV/heat flags and battery fields (`battery_action`, `soc_kwh`, `soc_pct`, `grid_import_kwh`, `grid_export_kwh`, `estimated_hour_cost`, `estimated_hour_savings`, etc.).
 - **Integration (`push_to_ha.py`)**:
   - Pushes the optimization plan to a Home Assistant sensor: `sensor.hepo_optimization_plan`.
   - The plan is stored in the sensor's attributes as a JSON list.
+
+## Battery/Tariff Configuration
+
+Set these in `.env` to tune battery dispatch economics and constraints:
+
+- `BATTERY_CAPACITY_KWH` (default `40.0`)
+- `BATTERY_MIN_SOC_PCT` (default `10.0`)
+- `BATTERY_MAX_SOC_PCT` (default `90.0`)
+- `BATTERY_RESERVE_SOC_PCT` (default `BATTERY_MIN_SOC_PCT`)
+- `BATTERY_INITIAL_SOC_PCT` (default `50.0`)
+- `BATTERY_MAX_CHARGE_KW` (default `10.0`)
+- `BATTERY_MAX_DISCHARGE_KW` (default `10.0`)
+- `BATTERY_CHARGE_EFFICIENCY` (default `0.95`)
+- `BATTERY_DISCHARGE_EFFICIENCY` (default `0.95`)
+- `BATTERY_ALLOW_EXPORT` (default `true`)
+
+- `GRID_TRANSFER_EUR_PER_KWH` (default `0.0`)
+- `ELECTRICITY_TAX_EUR_PER_KWH` (default `0.0`)
+- `IMPORT_FIXED_ADDERS_EUR_PER_KWH` (default `0.0`)
+- `IMPORT_VAT_MULTIPLIER` (default `1.0`)
+- `EXPORT_DEDUCTION_EUR_PER_KWH` (default `0.0`)
 
 ## Usage
 
