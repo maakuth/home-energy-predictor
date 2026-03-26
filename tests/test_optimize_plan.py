@@ -57,6 +57,7 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "1.0",
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "true",
+                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             predictions = np.array([0.0, 0.0])
@@ -83,6 +84,7 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "1.0",
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "false",
+                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             predictions = np.array([4.0, 4.0, 4.0, 4.0])
@@ -112,6 +114,7 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "0.95",
                 "BATTERY_DISCHARGE_EFFICIENCY": "0.95",
                 "BATTERY_ALLOW_EXPORT": "true",
+                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             predictions = np.array([0.0] * 12 + [8.0] * 12)
@@ -139,6 +142,7 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "1.0",
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "false",
+                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             # No load, no solar. High export value would encourage export arbitrage if enabled.

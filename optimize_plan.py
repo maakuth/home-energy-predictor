@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+PLAN_INTERVAL_MINUTES = int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
+PLAN_INTERVAL_HOURS = max(PLAN_INTERVAL_MINUTES, 1) / 60.0
+
 def get_ha_state(entity_id):
     host = os.getenv('HA_HOST')
     token = os.getenv('HA_TOKEN')
@@ -57,7 +60,7 @@ def load_predictions(file_path='future_predictions.json'):
     return predictions_data, predictions, prediction_timestamps, prediction_solar
 
 
-def align_hourly_prices(raw_today, raw_tomorrow, prediction_timestamps):
+def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
     all_raw = raw_today + raw_tomorrow
     if not all_raw:
         return None
@@ -68,12 +71,12 @@ def align_hourly_prices(raw_today, raw_tomorrow, prediction_timestamps):
 
     df_prices['start'] = pd.to_datetime(df_prices['start'])
     df_prices = df_prices.drop_duplicates(subset='start').set_index('start').sort_index()
-    hourly_prices_series = df_prices['value'].resample('1h').mean()
+    interval_prices_series = df_prices['value'].resample(f'{PLAN_INTERVAL_MINUTES}min').mean()
 
     aligned = []
     for ts in prediction_timestamps:
-        if ts in hourly_prices_series.index:
-            aligned.append(hourly_prices_series[ts])
+        if ts in interval_prices_series.index:
+            aligned.append(interval_prices_series[ts])
         else:
             aligned.append(np.nan)
     return np.array(aligned, dtype=float)
@@ -95,7 +98,7 @@ def fetch_market_prices(prediction_timestamps):
         attrs = state.get('attributes', {})
         raw_today = attrs.get('raw_today', []) or []
         raw_tomorrow = attrs.get('raw_tomorrow', []) or []
-        aligned = align_hourly_prices(raw_today, raw_tomorrow, prediction_timestamps)
+        aligned = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps)
 
         if aligned is not None:
             nan_count = int(np.isnan(aligned).sum())
@@ -143,6 +146,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
     discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
     allow_export = get_env_bool('BATTERY_ALLOW_EXPORT', True)
+    interval_hours = get_env_float('PLAN_INTERVAL_HOURS', PLAN_INTERVAL_HOURS)
+    interval_hours = max(interval_hours, 1e-6)
 
     charge_eff = min(max(charge_eff, 0.01), 1.0)
     discharge_eff = min(max(discharge_eff, 0.01), 1.0)
@@ -175,13 +180,13 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         discharge_to_load = 0.0
         discharge_to_export = 0.0
 
-        # Available headroom to charge this hour (input kWh before charge efficiency).
+        # Available headroom to charge this interval (input kWh before charge efficiency).
         soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
-        charge_limit_input_kwh = min(max_charge_kw, soc_room_kwh / charge_eff)
+        charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
 
-        # Available output from battery this hour (kWh delivered after discharge efficiency).
+        # Available output from battery this interval (kWh delivered after discharge efficiency).
         soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
-        discharge_limit_output_kwh = min(max_discharge_kw, soc_available_kwh * discharge_eff)
+        discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
 
         if net_load < 0 and charge_limit_input_kwh > 0:
             solar_surplus = -net_load
@@ -194,7 +199,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             soc_kwh -= discharge_to_load / discharge_eff
             discharge_limit_output_kwh -= discharge_to_load
 
-        # Grid charging only if no battery discharge this hour and arbitrage looks profitable.
+        # Grid charging only if no battery discharge this interval and arbitrage looks profitable.
         profitable_grid_charge = (best_future_value * round_trip_eff) > current_import
         is_cheap_hour = current_import <= import_q30
         if discharge_to_load == 0.0 and charge_limit_input_kwh > 0 and profitable_grid_charge and is_cheap_hour:
@@ -237,7 +242,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
         battery_plan.append({
             'battery_action': battery_action,
-            'battery_power_kw': float(charge_total - discharge_total),
+            'battery_power_kw': float((charge_total - discharge_total) / interval_hours),
             'soc_kwh': float(soc_kwh),
             'soc_pct': float((soc_kwh / capacity_kwh) * 100.0 if capacity_kwh > 0 else 0.0),
             'grid_import_kwh': float(grid_import_kwh),
@@ -268,8 +273,9 @@ def optimize():
 
     solar_array = np.array(prediction_solar, dtype=float)
 
-    HOURS_TO_CHARGE = 4
-    cheapest_indices = np.argsort(import_prices)[:HOURS_TO_CHARGE]
+    ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
+    intervals_to_charge = max(1, int(round(ev_charge_hours / PLAN_INTERVAL_HOURS)))
+    cheapest_indices = np.argsort(import_prices)[:intervals_to_charge]
     ev_plan = [1 if i in cheapest_indices else 0 for i in range(len(import_prices))]
     
     effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)
@@ -279,6 +285,7 @@ def optimize():
     battery_plan = plan_battery_dispatch(predictions, solar_array, import_prices, export_prices)
 
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
+    print(f"Interval: {PLAN_INTERVAL_MINUTES} minutes")
     print(f"Import Price Threshold (20th percentile effective): {price_threshold:.3f} €/kWh")
     
     final_plan = []

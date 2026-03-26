@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 
 load_dotenv(override=True)
 
+RESAMPLE_INTERVAL = os.getenv('DATA_RESAMPLE_INTERVAL', '15min')
+
 ENTITIES = {
     'sensor.ulkona_temperature_2': 'outside_temp',
     'sensor.mlp_teho': 'gshp_power',
@@ -68,15 +70,15 @@ def main():
         if col_name != 'ev_position':
             df[col_name] = pd.to_numeric(df[col_name], errors='coerce')
         
-        # Resample to hourly
+        # Resample to configured interval (default 15 minutes).
         if col_name == 'ev_position':
-            # Is home if any state in that hour says 'home'
-            resampled = df[col_name].resample('1h').apply(lambda x: 'home' in x.values if not x.empty else None)
+            # Is home if any state in the interval says 'home'.
+            resampled = df[col_name].resample(RESAMPLE_INTERVAL).apply(lambda x: 'home' in x.values if not x.empty else None)
         elif col_name == 'mummun_energy':
             # Handle energy total to power conversion later
-            resampled = df[col_name].resample('1h').mean()
+            resampled = df[col_name].resample(RESAMPLE_INTERVAL).mean()
         else:
-            resampled = df[col_name].resample('1h').mean()
+            resampled = df[col_name].resample(RESAMPLE_INTERVAL).mean()
             
         all_dfs.append(resampled)
     
@@ -86,15 +88,15 @@ def main():
     print("Merging data...")
     final_df = pd.concat(all_dfs, axis=1)
     
-    # Calculate Power from Energy for Mummun Energy (delta kWh / delta t)
-    # Energy is in kWh. Resampling to 1h means delta_t is 1h.
-    # So Power (kW) = Delta kWh
+    # Convert cumulative energy delta to average power over each interval.
+    # kW = delta_kWh / delta_hours.
     if 'mummun_energy' in final_df.columns:
-        final_df['mummun_power'] = final_df['mummun_energy'].diff().clip(lower=0)
+        delta_hours = pd.Timedelta(RESAMPLE_INTERVAL).total_seconds() / 3600.0
+        final_df['mummun_power'] = (final_df['mummun_energy'].diff() / max(delta_hours, 1e-9)).clip(lower=0)
         final_df = final_df.drop(columns=['mummun_energy'])
     
     # Gap Filling
-    # Linear interpolation for gaps < 2 hours
+    # Linear interpolation for short gaps.
     # Only interpolate numeric columns
     numeric_cols = final_df.select_dtypes(include=['number']).columns
     final_df[numeric_cols] = final_df[numeric_cols].interpolate(method='linear', limit=2)

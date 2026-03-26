@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+PLAN_INTERVAL_MINUTES = int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
+PLAN_INTERVAL_HOURS = max(PLAN_INTERVAL_MINUTES, 1) / 60.0
+
 def get_ha_state(entity_id):
     host = os.getenv('HA_HOST')
     token = os.getenv('HA_TOKEN')
@@ -68,8 +71,8 @@ def optimize():
         df_prices['start'] = pd.to_datetime(df_prices['start'])
         df_prices = df_prices.set_index('start')
         
-        # Resample to hourly mean
-        hourly_prices = df_prices['value'].resample('1h').mean()
+        # Resample to configured interval mean (default 15 minutes).
+        interval_prices = df_prices['value'].resample(f'{PLAN_INTERVAL_MINUTES}min').mean()
     except Exception as e:
         print(f'Error processing prices: {e}')
         return
@@ -86,7 +89,7 @@ def optimize():
     pred_df = pred_df.set_index('timestamp')
     
     # Use reindex to align prices
-    aligned_prices = hourly_prices.reindex(pred_df.index, method='nearest')
+    aligned_prices = interval_prices.reindex(pred_df.index, method='nearest')
     pred_df['spot_price'] = aligned_prices
     
     # Fill missing prices
@@ -97,9 +100,9 @@ def optimize():
         daily_prices = group['spot_price'].values
         daily_solar = group['solar_forecast'].values
         
-        # EV Strategy: N cheapest hours in this day's window
-        n_hours = min(len(daily_prices), 4)
-        cheapest_indices = np.argsort(daily_prices)[:n_hours]
+        # EV Strategy: choose enough cheapest intervals to fill configured charge hours.
+        n_intervals = min(len(daily_prices), max(1, int(round(4.0 / PLAN_INTERVAL_HOURS))))
+        cheapest_indices = np.argsort(daily_prices)[:n_intervals]
         
         ev_flags = np.zeros(len(daily_prices), dtype=bool)
         ev_flags[cheapest_indices] = True

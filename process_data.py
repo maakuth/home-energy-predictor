@@ -58,6 +58,7 @@ def process_data():
     
     print('Adding temporal features...')
     df['hour'] = df.index.hour
+    df['quarter_hour'] = df.index.minute // 15
     df['day_of_week'] = df.index.dayofweek
     df['month'] = df.index.month
     

@@ -19,12 +19,12 @@ def train():
     # Weather: outside_temp, solar_forecast
     # Thermal State: accumulator_temp, is_fireplace_active (lagged)
     # EV State: ev_soc, ev_is_home (proxied by ev_position)
-    # Temporal: hour, day_of_week, month
+    # Temporal: hour, quarter_hour, day_of_week, month
     features = [
         'outside_temp', 'solar_forecast', 
         'accumulator_temp', 'is_fireplace_lag1', 
         'ev_soc', 'ev_position',
-        'hour', 'day_of_week', 'month'
+        'hour', 'quarter_hour', 'day_of_week', 'month'
     ]
     
     X = df[features]

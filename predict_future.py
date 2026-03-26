@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
+
 def get_ha_state(entity_id):
     host = os.getenv('HA_HOST')
     token = os.getenv('HA_TOKEN')
@@ -88,9 +90,13 @@ def predict():
         print('Error: Model files not found. Run train_model.py first.')
         return
 
-    # Determine prediction window: From next hour until end of tomorrow
+    # Determine prediction window: from next interval until end of available solar horizon.
     now = datetime.now().astimezone() # Use aware datetime
-    start_time = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    interval = max(PREDICTION_INTERVAL_MINUTES, 1)
+    minutes_to_next = interval - (now.minute % interval)
+    if minutes_to_next == interval and now.second == 0 and now.microsecond == 0:
+        minutes_to_next = 0
+    start_time = (now + timedelta(minutes=minutes_to_next)).replace(second=0, microsecond=0)
     
     # Find the latest timestamp in solar data (usually end of tomorrow)
     # If solar data is short, limit to what we have
@@ -103,18 +109,9 @@ def predict():
     
     current_ts = start_time
     while current_ts <= end_time:
-        # Get solar for this hour
-        # Resample logic: take the nearest or interpolate?
-        # Solar data is hourly or 30min? Let's check. 
-        # Usually detailedHourly is 30min or hourly. Let's use asof/nearest for simplicity or resample.
-        # But for now, let's just use the index lookup with tolerance.
-        
+        # Get nearest solar estimate for this interval.
         try:
-            # Look up solar forecast for this specific hour
-            # We use truncate to hour just in case
-            lookup_ts = current_ts.replace(minute=0)
-            # Find closest index
-            idx = df_solar.index.get_indexer([lookup_ts], method='nearest')[0]
+            idx = df_solar.index.get_indexer([current_ts], method='nearest')[0]
             solar_val = df_solar.iloc[idx]['pv_estimate']
         except Exception:
             solar_val = 0.0
@@ -127,13 +124,14 @@ def predict():
             'ev_soc': soc_val,
             'ev_position': 1, # Assume home
             'hour': current_ts.hour,
+            'quarter_hour': current_ts.minute // 15,
             'day_of_week': current_ts.weekday(),
             'month': current_ts.month
         }
         inference_data.append(row)
         timestamps.append(current_ts.isoformat())
         
-        current_ts += timedelta(hours=1)
+        current_ts += timedelta(minutes=interval)
         
     X_inference = pd.DataFrame(inference_data)[features]
     predictions = model.predict(X_inference)
@@ -149,7 +147,7 @@ def predict():
             'solar_forecast': float(inference_data[i]['solar_forecast'])
         })
         
-    print(f'\nGenerated {len(results)} hourly predictions.')
+    print(f'\nGenerated {len(results)} predictions at {interval}-minute resolution.')
     
     with open('future_predictions.json', 'w') as f:
         json.dump(results, f, indent=2)

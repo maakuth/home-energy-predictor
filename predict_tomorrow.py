@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
+
 def get_ha_state(entity_id):
     host = os.getenv('HA_HOST')
     token = os.getenv('HA_TOKEN')
@@ -62,8 +64,9 @@ def predict():
     tomorrow = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
     print(f'Predicting for {tomorrow.date()} using Solar Forecast: {solar_val} kWh')
     inference_data = []
-    for h in range(24):
-        ts = tomorrow + timedelta(hours=h)
+    total_steps = int((24 * 60) / max(PREDICTION_INTERVAL_MINUTES, 1))
+    for i in range(total_steps):
+        ts = tomorrow + timedelta(minutes=i * PREDICTION_INTERVAL_MINUTES)
         row = {
             'outside_temp': temp_val,
             'solar_forecast': solar_val,
@@ -72,15 +75,17 @@ def predict():
             'ev_soc': soc_val,
             'ev_position': 1,
             'hour': ts.hour,
+            'quarter_hour': ts.minute // 15,
             'day_of_week': ts.weekday(),
             'month': ts.month
         }
         inference_data.append(row)
     X_inference = pd.DataFrame(inference_data)[features]
     predictions = model.predict(X_inference)
-    print('\nPredicted Hourly Usage (kWh):')
-    for h, p in enumerate(predictions):
-        print(f' {h:02d}:00 -> {p:.2f} kWh')
+    print('\nPredicted Usage per Interval (kWh):')
+    for i, p in enumerate(predictions):
+        ts = tomorrow + timedelta(minutes=i * PREDICTION_INTERVAL_MINUTES)
+        print(f' {ts.strftime("%H:%M")} -> {p:.2f} kWh')
     np.save('tomorrow_predictions.npy', predictions)
     print('\n✅ Predictions saved to tomorrow_predictions.npy')
 
