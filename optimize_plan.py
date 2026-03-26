@@ -65,6 +65,13 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
     if not all_raw:
         return None
 
+    # Handle if raw_today is a list of floats (like in your nordpool_total.yaml 'today' attribute)
+    if all_raw and not isinstance(all_raw[0], dict):
+        # We assume these are hourly prices starting from today at 00:00
+        # This is a bit of a guess, but common for the Nordpool 'today' attribute.
+        start_date = pd.to_datetime(datetime.now().date(), utc=True)
+        all_raw = [{"start": start_date + timedelta(hours=i), "value": v} for i, v in enumerate(all_raw)]
+
     df_prices = pd.DataFrame(all_raw)
     if "start" not in df_prices.columns or "value" not in df_prices.columns:
         return None
@@ -105,12 +112,20 @@ def fetch_market_prices(prediction_timestamps):
             continue
 
         attrs = state.get('attributes', {})
-        raw_today = attrs.get('raw_today', []) or []
-        raw_tomorrow = attrs.get('raw_tomorrow', []) or []
-        aligned = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps)
-
-        if aligned is not None:
-            return aligned, sensor
+        # Check multiple possible attribute names for price lists
+        raw_today = attrs.get('raw_today') or attrs.get('today') or []
+        
+        # Only use tomorrow prices if they are marked as valid
+        tomorrow_valid = attrs.get('tomorrow_valid', False)
+        raw_tomorrow = []
+        if tomorrow_valid:
+            raw_tomorrow = attrs.get('raw_tomorrow') or attrs.get('tomorrow') or []
+        
+        # If we have a list of prices, use the alignment logic
+        if isinstance(raw_today, list) and len(raw_today) > 0:
+            aligned = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps)
+            if aligned is not None:
+                return aligned, sensor
 
         # Fallback: single numeric state (constant across horizon).
         try:
