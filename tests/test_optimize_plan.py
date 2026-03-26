@@ -69,7 +69,7 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertEqual(plan[0]["battery_action"], "charge")
         # Without battery, export would be 3.0 kWh. With 2 kW charge limit, export should drop to 1.0.
         self.assertAlmostEqual(plan[0]["grid_export_kwh"], 1.0, places=6)
-        self.assertAlmostEqual(plan[0]["battery_charge_kwh"], 2.0, places=6)
+        self.assertAlmostEqual(plan[0]["battery_power_kw"], 2.0, places=6)
 
     def test_high_import_price_discharges_battery_for_load(self):
         with patched_env(
@@ -93,7 +93,7 @@ class OptimizePlanTests(unittest.TestCase):
             plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         # At least one expensive hour should trigger discharge-to-load.
-        discharged_hours = [i for i, row in enumerate(plan) if row["battery_discharge_kwh"] > 0.0]
+            discharged_hours = [i for i, row in enumerate(plan) if row["battery_power_kw"] < 0.0]
         self.assertTrue(len(discharged_hours) >= 1)
 
         # Any discharged hour should show reduced grid import vs native 4.0 kWh load.

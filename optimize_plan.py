@@ -237,8 +237,6 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
         battery_plan.append({
             'battery_action': battery_action,
-            'battery_charge_kwh': float(charge_total),
-            'battery_discharge_kwh': float(discharge_total),
             'battery_power_kw': float(charge_total - discharge_total),
             'soc_kwh': float(soc_kwh),
             'soc_pct': float((soc_kwh / capacity_kwh) * 100.0 if capacity_kwh > 0 else 0.0),
