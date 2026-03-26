@@ -99,43 +99,47 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
 
 
 def fetch_market_prices(prediction_timestamps):
-    # Primary source: price without tax + grid transfer.
     candidate_sensors = [
-        'sensor.current_electricity_market_price',
-        'sensor.nordpool_kwh_fi_eur_3_10_0',
-        'sensor.nordpool_total',
+        "sensor.current_electricity_market_price",
+        "sensor.nordpool_kwh_fi_eur_3_10_0",
+        "sensor.nordpool_total",
     ]
+
+    best_fallback = None
+    best_fallback_sensor = None
 
     for sensor in candidate_sensors:
         state = get_ha_state(sensor)
         if not state:
             continue
 
-        attrs = state.get('attributes', {})
+        attrs = state.get("attributes", {})
         # Check multiple possible attribute names for price lists
-        raw_today = attrs.get('raw_today') or attrs.get('today') or []
-        
+        raw_today = attrs.get("raw_today") or attrs.get("today") or []
+
         # Only use tomorrow prices if they are marked as valid
-        tomorrow_valid = attrs.get('tomorrow_valid', False)
+        tomorrow_valid = attrs.get("tomorrow_valid", False)
         raw_tomorrow = []
         if tomorrow_valid:
-            raw_tomorrow = attrs.get('raw_tomorrow') or attrs.get('tomorrow') or []
-        
-        # If we have a list of prices, use the alignment logic
+            raw_tomorrow = attrs.get("raw_tomorrow") or attrs.get("tomorrow") or []
+
+        # If we have a list of prices, use it immediately and ignore single-state sensors
         if isinstance(raw_today, list) and len(raw_today) > 0:
             aligned = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps)
             if aligned is not None:
                 return aligned, sensor
 
-        # Fallback: single numeric state (constant across horizon).
-        try:
-            base_price = float(state.get('state'))
-            if np.isfinite(base_price):
-                return np.full(len(prediction_timestamps), base_price, dtype=float), sensor
-        except (TypeError, ValueError):
-            pass
+        # If we haven't found a list yet, keep track of the first available single state
+        if best_fallback is None:
+            try:
+                base_price = float(state.get("state"))
+                if np.isfinite(base_price):
+                    best_fallback = np.full(len(prediction_timestamps), base_price, dtype=float)
+                    best_fallback_sensor = sensor
+            except (TypeError, ValueError):
+                pass
 
-    return None, None
+    return best_fallback, best_fallback_sensor
 
 
 def build_tariff_prices(market_prices):
