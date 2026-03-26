@@ -84,14 +84,25 @@ def analyze():
         print("No overlapping data between history and actuals.")
         return
     
-    comparison['error'] = comparison['predicted_usage'] - comparison['actual_usage']
-    comparison['abs_error'] = comparison['error'].abs()
+    # Aggregating to 3-hour blocks (sum of kWh in each block)
+    # This makes the analysis much more robust to random human behavior.
+    comparison_resampled = comparison.resample('3h').agg({
+        'predicted_usage': 'sum',
+        'actual_usage': 'sum'
+    }).dropna()
+
+    if comparison_resampled.empty:
+        print("No overlapping data after 3h resampling.")
+        return
+
+    comparison_resampled['error'] = comparison_resampled['predicted_usage'] - comparison_resampled['actual_usage']
+    comparison_resampled['abs_error'] = comparison_resampled['error'].abs()
     
-    mae = comparison['abs_error'].mean()
-    bias = comparison['error'].mean()
-    rmse = np.sqrt((comparison['error']**2).mean())
+    mae = comparison_resampled['abs_error'].mean()
+    bias = comparison_resampled['error'].mean()
+    rmse = np.sqrt((comparison_resampled['error']**2).mean())
     
-    print(f"Analysis Results (N={len(comparison)}):")
+    print(f"Analysis Results (3-Hour Windows, N={len(comparison_resampled)}):")
     print(f"  MAE: {mae:.3f} kWh")
     print(f"  Bias: {bias:.3f} kWh")
     print(f"  RMSE: {rmse:.3f} kWh")
@@ -105,11 +116,12 @@ def analyze():
     payload = {
         'state': f"{mae:.3f}",
         'attributes': {
-            'friendly_name': 'HEPO Prediction Accuracy (MAE)',
+            'friendly_name': 'HEPO Prediction Accuracy (MAE, 3h windows)',
             'unit_of_measurement': 'kWh',
             'bias': float(bias),
             'rmse': float(rmse),
-            'sample_count': len(comparison),
+            'sample_count': len(comparison_resampled),
+            'window_size': '3h',
             'last_updated': datetime.now().isoformat()
         }
     }
