@@ -138,14 +138,16 @@ def predict():
     predictions = model.predict(X_inference)
     
     # Combine predictions with timestamps
-    # predicted_usage is now total home consumption (grid + solar),
-    # suitable for battery BESS control decisions.
+    # Convert model output (average kW) to Energy (kWh) for the interval
+    # kWh = kW * (minutes / 60)
+    interval_hours = interval / 60.0
     results = []
     generated_at = datetime.now().astimezone().isoformat()
     for i, p in enumerate(predictions):
+        p_kwh = float(p) * interval_hours
         results.append({
             'timestamp': timestamps[i],
-            'predicted_usage': float(p),       # total home load (kWh)
+            'predicted_usage': p_kwh,       # total home load (kWh)
             'solar_forecast': float(inference_data[i]['solar_forecast'])
         })
         

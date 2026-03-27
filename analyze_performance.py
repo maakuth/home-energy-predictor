@@ -77,9 +77,12 @@ def analyze():
     df_history = df_history.set_index('target_timestamp')
     
     df_actual = fetch_actuals()
+    # actual_usage in df_actual is average Power (kW) over the interval.
+    # Convert kW to kWh per 15-min interval.
+    df_actual['actual_usage_kwh'] = df_actual['actual_usage'] * 0.25
     
     # Merge
-    comparison = df_history.join(df_actual, how='inner')
+    comparison = df_history.join(df_actual[['actual_usage_kwh']], how='inner')
     if comparison.empty:
         print("No overlapping data between history and actuals.")
         return
@@ -88,14 +91,14 @@ def analyze():
     # This makes the analysis much more robust to random human behavior.
     comparison_resampled = comparison.resample('3h').agg({
         'predicted_usage': 'sum',
-        'actual_usage': 'sum'
+        'actual_usage_kwh': 'sum'
     }).dropna()
 
     if comparison_resampled.empty:
         print("No overlapping data after 3h resampling.")
         return
 
-    comparison_resampled['error'] = comparison_resampled['predicted_usage'] - comparison_resampled['actual_usage']
+    comparison_resampled['error'] = comparison_resampled['predicted_usage'] - comparison_resampled['actual_usage_kwh']
     comparison_resampled['abs_error'] = comparison_resampled['error'].abs()
     
     mae = comparison_resampled['abs_error'].mean()
@@ -103,9 +106,13 @@ def analyze():
     rmse = np.sqrt((comparison_resampled['error']**2).mean())
     
     print(f"Analysis Results (3-Hour Windows, N={len(comparison_resampled)}):")
-    print(f"  MAE: {mae:.3f} kWh")
-    print(f"  Bias: {bias:.3f} kWh")
-    print(f"  RMSE: {rmse:.3f} kWh")
+    print(f"  MAE (Energy): {mae:.3f} kWh")
+    print(f"  Bias (Energy): {bias:.3f} kWh")
+    print(f"  RMSE (Energy): {rmse:.3f} kWh")
+    
+    # Optional: Report Power Bias if requested
+    # bias_kw = bias / 3.0
+    # print(f"  Avg Power Bias: {bias_kw:.3f} kW")
     
     # Push to HA
     host = os.getenv('HA_HOST')
