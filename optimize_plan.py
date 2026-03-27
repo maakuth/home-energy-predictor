@@ -252,6 +252,9 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         hour_cost_no_battery = (no_battery_import * current_import) - (no_battery_export * current_export)
         hour_cost_with_battery = (grid_import_kwh * current_import) - (grid_export_kwh * current_export)
 
+        charge_total = charge_from_solar + charge_from_grid
+        discharge_total = discharge_to_load + discharge_to_export
+
         # Determine the primary intention for the action string
         if charge_from_solar > 1e-9 and charge_from_grid > 1e-9:
             battery_action = 'charge_mixed'
