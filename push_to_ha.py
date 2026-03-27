@@ -28,7 +28,7 @@ def push_plan():
     }
     
     # State: Total predicted energy from current hour to end of tomorrow (sum of hourly predictions)
-    total_energy = sum(p['predicted_usage'] for p in plan)
+    total_energy = sum(p['predicted_usage_kwh'] for p in plan)
     state = f"{total_energy:.2f}"
     
     # Attributes: The full plan
