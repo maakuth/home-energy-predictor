@@ -13,9 +13,9 @@ fi
 
 echo "=== Starting Frequent HEPO Update: $(date) ==="
 
-# 1. Extract Latest States
+# 1. Extract Latest States (only 3 days for speed)
 echo "[1/4] Extracting Data..."
-python extract_data.py
+python extract_data.py --days 3
 
 # 2. Process
 echo "[2/4] Processing Data..."

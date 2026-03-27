@@ -1,6 +1,7 @@
 import os
 import psycopg2
 import pandas as pd
+import argparse
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -39,6 +40,10 @@ def extract_states(cur, metadata_id, days=365):
     return cur.fetchall()
 
 def main():
+    parser = argparse.ArgumentParser(description='Extract historical data from Home Assistant DB.')
+    parser.add_argument('--days', type=int, default=365, help='Number of days to look back.')
+    args = parser.parse_args()
+
     conn = psycopg2.connect(
         host=os.getenv("DB_HOST"),
         port=os.getenv("DB_PORT"),
@@ -56,8 +61,8 @@ def main():
             print(f"⚠️ Warning: Metadata ID for {entity_id} not found.")
             continue
             
-        print(f"Extracting {entity_id}...")
-        rows = extract_states(cur, metadata_map[entity_id])
+        print(f"Extracting {entity_id} (last {args.days} days)...")
+        rows = extract_states(cur, metadata_map[entity_id], days=args.days)
         if not rows:
             print(f"No data for {entity_id}")
             continue

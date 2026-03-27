@@ -9,9 +9,9 @@ source venv/bin/activate
 
 echo "=== Starting Daily HEPO Pipeline: Tue Mar 24 13:12:24 UTC 2026 ==="
 
-# 1. Extract Data
+# 1. Extract Data (Full Year for Training)
 echo "[1/5] Extracting Data..."
-python extract_data.py
+python extract_data.py --days 365
 
 # 2. Process Data
 echo "[2/5] Processing Data..."
