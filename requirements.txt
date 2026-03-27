@@ -1,8 +1,9 @@
-pandas
-numpy
-xgboost
-psycopg2-binary
-requests
-python-dotenv
-scikit-learn
-joblib
+numpy>=2.0
+pandas>=3.0
+requests>=2.32
+python-dotenv>=1.2
+psycopg2-binary>=2.9
+xgboost>=3.0
+scikit-learn>=1.8
+joblib>=1.5
+
