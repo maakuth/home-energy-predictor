@@ -252,18 +252,29 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         hour_cost_no_battery = (no_battery_import * current_import) - (no_battery_export * current_export)
         hour_cost_with_battery = (grid_import_kwh * current_import) - (grid_export_kwh * current_export)
 
-        charge_total = charge_from_solar + charge_from_grid
-        discharge_total = discharge_to_load + discharge_to_export
-        if charge_total > 1e-9:
-            battery_action = 'charge'
-        elif discharge_total > 1e-9:
-            battery_action = 'discharge'
+        # Determine the primary intention for the action string
+        if charge_from_solar > 1e-9 and charge_from_grid > 1e-9:
+            battery_action = 'charge_mixed'
+        elif charge_from_solar > 1e-9:
+            battery_action = 'charge_solar'
+        elif charge_from_grid > 1e-9:
+            battery_action = 'charge_grid'
+        elif discharge_to_load > 1e-9 and discharge_to_export > 1e-9:
+            battery_action = 'discharge_mixed'
+        elif discharge_to_load > 1e-9:
+            battery_action = 'discharge_load'
+        elif discharge_to_export > 1e-9:
+            battery_action = 'discharge_export'
         else:
             battery_action = 'idle'
 
         battery_plan.append({
             'battery_action': battery_action,
             'battery_power_kw': float((charge_total - discharge_total) / interval_hours),
+            'charge_from_solar_kwh': float(charge_from_solar),
+            'charge_from_grid_kwh': float(charge_from_grid),
+            'discharge_to_load_kwh': float(discharge_to_load),
+            'discharge_to_export_kwh': float(discharge_to_export),
             'soc_kwh': float(soc_kwh),
             'soc_pct': float((soc_kwh / capacity_kwh) * 100.0 if capacity_kwh > 0 else 0.0),
             'grid_import_kwh': float(grid_import_kwh),
@@ -328,7 +339,7 @@ def optimize():
         if p_solar > 0.5:
             actions.append('SOLAR')
         if b['battery_action'] != 'idle':
-            actions.append(f"BATTERY_{b['battery_action'].upper()}")
+            actions.append(b['battery_action'].upper())
         action_str = ' '.join(actions)
         
         print(
