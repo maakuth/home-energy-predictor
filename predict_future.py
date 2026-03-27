@@ -4,7 +4,7 @@ import numpy as np
 import xgboost as xgb
 import json
 import requests
-import csv
+import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -157,16 +157,37 @@ def predict():
         json.dump(results, f, indent=2)
     print('\n✅ Predictions saved to future_predictions.json')
 
-    # Archive predictions for feedback loop
-    history_file = 'prediction_history.csv'
-    file_exists = os.path.isfile(history_file)
-    with open(history_file, 'a', newline='') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(['generated_at', 'target_timestamp', 'predicted_usage'])
-        for res in results:
-            writer.writerow([generated_at, res['timestamp'], res['predicted_usage']])
-    print(f'✅ Archived {len(results)} points to {history_file}')
+    # Archive predictions for feedback loop using SQLite
+    db_file = 'hepo.db'
+    try:
+        conn = sqlite3.connect(db_file)
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS predictions (
+                target_timestamp TEXT,
+                generated_at TEXT,
+                predicted_usage_kwh REAL,
+                solar_forecast_kwh REAL,
+                PRIMARY KEY (target_timestamp, generated_at)
+            )
+        ''')
+        
+        # Insert predictions.
+        data_to_insert = [
+            (res['timestamp'], generated_at, res['predicted_usage'], res['solar_forecast'])
+            for res in results
+        ]
+        cur.executemany('''
+            INSERT OR REPLACE INTO predictions 
+            (target_timestamp, generated_at, predicted_usage_kwh, solar_forecast_kwh)
+            VALUES (?, ?, ?, ?)
+        ''', data_to_insert)
+        
+        conn.commit()
+        conn.close()
+        print(f'✅ Archived {len(results)} points to {db_file} (SQLite)')
+    except Exception as e:
+        print(f'⚠️ Error archiving to SQLite: {e}')
 
 if __name__ == '__main__':
     predict()

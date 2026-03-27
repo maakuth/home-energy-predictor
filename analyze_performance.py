@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import psycopg2
+import sqlite3
 import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -63,17 +64,34 @@ def fetch_actuals(days=2):
     return df_actual[['actual_usage']]
 
 def analyze():
-    if not os.path.exists('prediction_history.csv'):
-        print("No prediction history found.")
+    db_file = 'hepo.db'
+    if not os.path.exists(db_file):
+        print("No prediction history (hepo.db) found.")
         return
 
-    print("Loading prediction history...")
-    df_history = pd.read_csv('prediction_history.csv')
+    print("Loading prediction history from SQLite...")
+    try:
+        conn = sqlite3.connect(db_file)
+        # We want the MOST RECENT prediction for each target timestamp
+        query = """
+            SELECT target_timestamp, predicted_usage_kwh as predicted_usage
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
+                FROM predictions
+            )
+            WHERE rn = 1
+        """
+        df_history = pd.read_sql_query(query, conn)
+        conn.close()
+    except Exception as e:
+        print(f"Error reading SQLite: {e}")
+        return
+
+    if df_history.empty:
+        print("Prediction history is empty.")
+        return
+
     df_history['target_timestamp'] = pd.to_datetime(df_history['target_timestamp'], utc=True)
-    df_history['generated_at'] = pd.to_datetime(df_history['generated_at'], utc=True)
-    
-    # We want the MOST RECENT prediction for each target timestamp
-    df_history = df_history.sort_values('generated_at').drop_duplicates('target_timestamp', keep='last')
     df_history = df_history.set_index('target_timestamp')
     
     df_actual = fetch_actuals()
