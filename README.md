@@ -67,3 +67,18 @@ Set these in `.env` (refer to `README.md` for full list):
 - `GRID_TRANSFER_EUR_PER_KWH`: Variable transfer costs.
 - `IMPORT_VAT_MULTIPLIER`: Tax calculations.
 - `DATA_RESAMPLE_INTERVAL`: Typically `15min`.
+
+## Future Battery Integration
+When the physical battery is installed, the following updates are required:
+
+### 1. Load Calculation (`process_data.py`)
+Currently, `total_home_power = grid_power + solar_actual`.
+With a battery, you must subtract the battery's net discharge to get the **true house load**:
+`total_home_power = grid_power + solar_actual - (battery_discharge_power - battery_charge_power)`
+
+### 2. Closed-Loop SOC (`optimize_plan.py`)
+- **Initial State:** Update `fetch_ha_state` to pull the **real-time Battery SOC** from Home Assistant at the start of each optimization run.
+- **Constraints:** Fine-tune `BATTERY_CHARGE_EFFICIENCY` and `BATTERY_DISCHARGE_EFFICIENCY` based on real-world data from the inverter.
+
+### 3. Inverter Automation
+Use the `battery_action` field from the `sensor.hepo_optimization_plan` to trigger the inverter's operating modes (e.g., via Modbus or a Home Assistant integration).
