@@ -138,16 +138,14 @@ def predict():
     predictions = model.predict(X_inference)
     
     # Combine predictions with timestamps
-    # Convert model output (average kW) to Energy (kWh) for the interval
-    # kWh = kW * (minutes / 60)
-    interval_hours = interval / 60.0
+    # Model output is average Power (kW) for the interval
     results = []
     generated_at = datetime.now().astimezone().isoformat()
     for i, p in enumerate(predictions):
-        p_kwh = float(p) * interval_hours
+        p_kw = float(p)
         results.append({
             'timestamp': timestamps[i],
-            'predicted_usage': p_kwh,       # total home load (kWh)
+            'predicted_usage': p_kw,       # average power (kW)
             'solar_forecast': float(inference_data[i]['solar_forecast'])
         })
         
@@ -166,8 +164,8 @@ def predict():
             CREATE TABLE IF NOT EXISTS predictions (
                 target_timestamp TEXT,
                 generated_at TEXT,
-                predicted_usage_kwh REAL,
-                solar_forecast_kwh REAL,
+                predicted_usage_kw REAL,
+                solar_forecast_kw REAL,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
@@ -179,7 +177,7 @@ def predict():
         ]
         cur.executemany('''
             INSERT OR REPLACE INTO predictions 
-            (target_timestamp, generated_at, predicted_usage_kwh, solar_forecast_kwh)
+            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw)
             VALUES (?, ?, ?, ?)
         ''', data_to_insert)
         

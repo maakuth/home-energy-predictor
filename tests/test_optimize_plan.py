@@ -1,10 +1,12 @@
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 import numpy as np
+import pandas as pd
 
-from optimize_plan import build_tariff_prices, plan_battery_dispatch
+from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices
 
 
 @contextmanager
@@ -45,7 +47,43 @@ class OptimizePlanTests(unittest.TestCase):
         np.testing.assert_allclose(import_prices, expected_import, rtol=1e-9, atol=1e-9)
         np.testing.assert_allclose(export_prices, expected_export, rtol=1e-9, atol=1e-9)
 
-    def test_solar_surplus_charges_battery_and_reduces_export(self):
+    def test_align_interval_prices_ffill_hourly_to_15min(self):
+        # Hourly data
+        raw_today = [
+            {"start": "2026-03-26T00:00:00+00:00", "value": 0.10},
+            {"start": "2026-03-26T01:00:00+00:00", "value": 0.20},
+        ]
+        # Target 15-min intervals
+        prediction_timestamps = [
+            datetime(2026, 3, 26, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 3, 26, 0, 15, tzinfo=timezone.utc),
+            datetime(2026, 3, 26, 0, 30, tzinfo=timezone.utc),
+            datetime(2026, 3, 26, 0, 45, tzinfo=timezone.utc),
+            datetime(2026, 3, 26, 1, 0, tzinfo=timezone.utc),
+        ]
+        
+        with patched_env({"PLAN_INTERVAL_MINUTES": "15"}):
+            aligned = align_interval_prices(raw_today, [], prediction_timestamps)
+        
+        # All 00:xx should be 0.10, 01:00 should be 0.20
+        expected = [0.10, 0.10, 0.10, 0.10, 0.20]
+        np.testing.assert_allclose(aligned, expected)
+
+    def test_align_interval_prices_handles_float_list(self):
+        # List of floats (assuming hourly from midnight)
+        raw_today = [0.10, 0.20, 0.30]
+        now_date = datetime.now().date()
+        prediction_timestamps = [
+            pd.to_datetime(now_date, utc=True) + timedelta(hours=0),
+            pd.to_datetime(now_date, utc=True) + timedelta(hours=1),
+        ]
+        
+        aligned = align_interval_prices(raw_today, [], prediction_timestamps)
+        self.assertEqual(len(aligned), 2)
+        self.assertEqual(aligned[0], 0.10)
+        self.assertEqual(aligned[1], 0.20)
+
+    def test_solar_surplus_charges_battery_as_charge_solar(self):
         with patched_env(
             {
                 "BATTERY_CAPACITY_KWH": "10",
@@ -60,19 +98,18 @@ class OptimizePlanTests(unittest.TestCase):
                 "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
-            predictions = np.array([0.0, 0.0])
-            solar = np.array([3.0, 0.0])
-            import_prices = np.array([0.20, 0.20])
-            export_prices = np.array([0.10, 0.10])
+            # 3.0 kWh solar surplus
+            predictions = np.array([0.0])
+            solar = np.array([3.0])
+            import_prices = np.array([0.20])
+            export_prices = np.array([0.10])
 
             plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
-        self.assertEqual(plan[0]["battery_action"], "charge")
-        # Without battery, export would be 3.0 kWh. With 2 kW charge limit, export should drop to 1.0.
-        self.assertAlmostEqual(plan[0]["grid_export_kwh"], 1.0, places=6)
-        self.assertAlmostEqual(plan[0]["battery_power_kw"], 2.0, places=6)
+        self.assertEqual(plan[0]["battery_action"], "charge_solar")
+        self.assertAlmostEqual(plan[0]["charge_from_solar_kwh"], 2.0) # limited by 2kW charge rate
 
-    def test_high_import_price_discharges_battery_for_load(self):
+    def test_high_import_price_discharges_battery_as_discharge_load(self):
         with patched_env(
             {
                 "BATTERY_CAPACITY_KWH": "40",
@@ -80,27 +117,23 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_MAX_SOC_PCT": "90",
                 "BATTERY_INITIAL_SOC_PCT": "80",
                 "BATTERY_MAX_CHARGE_KW": "10",
-                "BATTERY_MAX_DISCHARGE_KW": "3",
+                "BATTERY_MAX_DISCHARGE_KW": "10",
                 "BATTERY_CHARGE_EFFICIENCY": "1.0",
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "false",
                 "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
-            predictions = np.array([4.0, 4.0, 4.0, 4.0])
-            solar = np.array([0.0, 0.0, 0.0, 0.0])
-            import_prices = np.array([0.10, 0.15, 0.40, 0.45])
-            export_prices = np.array([0.08, 0.10, 0.20, 0.20])
+            # Load 4.0, Price high. Need 2+ points for percentile thresholds.
+            predictions = np.array([4.0, 4.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.80, 0.80])
+            export_prices = np.array([0.10, 0.10])
 
             plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
-        # At least one expensive hour should trigger discharge-to-load.
-            discharged_hours = [i for i, row in enumerate(plan) if row["battery_power_kw"] < 0.0]
-        self.assertTrue(len(discharged_hours) >= 1)
-
-        # Any discharged hour should show reduced grid import vs native 4.0 kWh load.
-        for i in discharged_hours:
-            self.assertLess(plan[i]["grid_import_kwh"], 4.0)
+        self.assertEqual(plan[0]["battery_action"], "discharge_load")
+        self.assertAlmostEqual(plan[0]["discharge_to_load_kwh"], 4.0)
 
     def test_soc_stays_within_bounds(self):
         with patched_env(

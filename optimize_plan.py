@@ -317,7 +317,12 @@ def optimize():
     price_threshold = np.percentile(effective_prices, 20)
     heating_plan = [1 if p <= price_threshold else 0 for p in effective_prices]
 
-    battery_plan = plan_battery_dispatch(predictions, solar_array, import_prices, export_prices)
+    # Convert Power (kW) to Energy (kWh) for the battery dispatch logic
+    # kWh = kW * interval_hours
+    predictions_kwh = predictions * PLAN_INTERVAL_HOURS
+    solar_kwh = solar_array * PLAN_INTERVAL_HOURS
+
+    battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
 
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
     print(f"Interval: {PLAN_INTERVAL_MINUTES} minutes")
@@ -327,11 +332,11 @@ def optimize():
     print('Time | Pred | Market | Import | Export | Solar | Grid In | Grid Out | SOC% | Actions')
     print('-----|------|--------|--------|--------|-------|---------|----------|------|--------')
     for i, ts in enumerate(prediction_timestamps):
-        p_pred = float(predictions[i])
+        p_pred_kw = float(predictions[i])
         p_market = float(market_prices[i])
         p_import = float(import_prices[i])
         p_export = float(export_prices[i])
-        p_solar = solar_array[i]
+        p_solar_kw = solar_array[i]
         b = battery_plan[i]
         
         actions = []
@@ -339,26 +344,28 @@ def optimize():
             actions.append('EV_CHARGE')
         if heating_plan[i]:
             actions.append('HEAT_BOOST')
-        if p_solar > 0.5:
+        if p_solar_kw > 0.5:
             actions.append('SOLAR')
         if b['battery_action'] != 'idle':
             actions.append(b['battery_action'].upper())
         action_str = ' '.join(actions)
         
         print(
-            f"{ts.strftime('%m-%d %H:%M')} | {p_pred:4.1f} | {p_market:6.3f} | {p_import:6.3f} | "
-            f"{p_export:6.3f} | {p_solar:5.2f} | {b['grid_import_kwh']:7.2f} | {b['grid_export_kwh']:8.2f} | "
+            f"{ts.strftime('%m-%d %H:%M')} | {p_pred_kw:4.1f} | {p_market:6.3f} | {p_import:6.3f} | "
+            f"{p_export:6.3f} | {p_solar_kw:5.2f} | {b['grid_import_kwh']:7.2f} | {b['grid_export_kwh']:8.2f} | "
             f"{b['soc_pct']:4.1f} | {action_str}"
         )
         
         final_plan.append({
             'timestamp': ts.isoformat(),
-            'predicted_usage': float(p_pred),
+            'predicted_usage_kw': float(p_pred_kw),
+            'predicted_usage_kwh': float(predictions_kwh[i]),
             'spot_price': float(p_market),
             'market_base_price': float(p_market),
             'import_unit_price': float(p_import),
             'export_unit_price': float(p_export),
-            'solar_forecast': float(p_solar),
+            'solar_forecast_kw': float(p_solar_kw),
+            'solar_forecast_kwh': float(solar_kwh[i]),
             'ev_charge': bool(ev_plan[i]),
             'heat_boost': bool(heating_plan[i]),
             **b,

@@ -74,7 +74,7 @@ def analyze():
         conn = sqlite3.connect(db_file)
         # We want the MOST RECENT prediction for each target timestamp
         query = """
-            SELECT target_timestamp, predicted_usage_kwh as predicted_usage
+            SELECT target_timestamp, predicted_usage_kw as predicted_usage
             FROM (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
                 FROM predictions
@@ -96,27 +96,22 @@ def analyze():
     
     df_actual = fetch_actuals()
     # actual_usage in df_actual is average Power (kW) over the interval.
-    # Convert kW to kWh per 15-min interval.
-    df_actual['actual_usage_kwh'] = df_actual['actual_usage'] * 0.25
     
     # Merge
-    comparison = df_history.join(df_actual[['actual_usage_kwh']], how='inner')
+    comparison = df_history.join(df_actual[['actual_usage']], how='inner')
     if comparison.empty:
         print("No overlapping data between history and actuals.")
         return
     
-    # Aggregating to 3-hour blocks (sum of kWh in each block)
+    # Aggregating to 3-hour blocks (AVERAGE of kW in each block)
     # This makes the analysis much more robust to random human behavior.
-    comparison_resampled = comparison.resample('3h').agg({
-        'predicted_usage': 'sum',
-        'actual_usage_kwh': 'sum'
-    }).dropna()
+    comparison_resampled = comparison.resample('3h').mean().dropna()
 
     if comparison_resampled.empty:
         print("No overlapping data after 3h resampling.")
         return
 
-    comparison_resampled['error'] = comparison_resampled['predicted_usage'] - comparison_resampled['actual_usage_kwh']
+    comparison_resampled['error'] = comparison_resampled['predicted_usage'] - comparison_resampled['actual_usage']
     comparison_resampled['abs_error'] = comparison_resampled['error'].abs()
     
     mae = comparison_resampled['abs_error'].mean()
@@ -124,13 +119,9 @@ def analyze():
     rmse = np.sqrt((comparison_resampled['error']**2).mean())
     
     print(f"Analysis Results (3-Hour Windows, N={len(comparison_resampled)}):")
-    print(f"  MAE (Energy): {mae:.3f} kWh")
-    print(f"  Bias (Energy): {bias:.3f} kWh")
-    print(f"  RMSE (Energy): {rmse:.3f} kWh")
-    
-    # Optional: Report Power Bias if requested
-    # bias_kw = bias / 3.0
-    # print(f"  Avg Power Bias: {bias_kw:.3f} kW")
+    print(f"  MAE (Power): {mae:.3f} kW")
+    print(f"  Bias (Power): {bias:.3f} kW")
+    print(f"  RMSE (Power): {rmse:.3f} kW")
     
     # Push to HA
     host = os.getenv('HA_HOST')
@@ -142,7 +133,7 @@ def analyze():
         'state': f"{mae:.3f}",
         'attributes': {
             'friendly_name': 'HEPO Prediction Accuracy (MAE, 3h windows)',
-            'unit_of_measurement': 'kWh',
+            'unit_of_measurement': 'kW',
             'bias': float(bias),
             'rmse': float(rmse),
             'sample_count': len(comparison_resampled),
