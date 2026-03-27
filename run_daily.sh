@@ -7,28 +7,34 @@ cd "."
 # Activate virtual environment
 source venv/bin/activate
 
-echo "=== Starting Daily HEPO Pipeline: Tue Mar 24 13:12:24 UTC 2026 ==="
+# Use a lockfile to prevent race conditions with run_frequent.sh
+(
+  # For daily, we wait for the lock (don't exit immediately like frequent)
+  flock 200
 
-# 1. Extract Data (Full Year for Training)
-echo "[1/5] Extracting Data..."
-python extract_data.py --days 365
+  echo "=== Starting Daily HEPO Pipeline: $(date) ==="
 
-# 2. Process Data
-echo "[2/5] Processing Data..."
-python process_data.py
+  # 1. Extract Data (Full Year for Training)
+  echo "[1/5] Extracting Data..."
+  python extract_data.py --days 365
 
-# 3. Retrain Model (Optional - could be conditional)
-echo "[3/5] Retraining Model..."
-python train_model.py
+  # 2. Process Data
+  echo "[2/5] Processing Data..."
+  python process_data.py
 
-# 4. Predict Tomorrow
-echo "[4/5] Predicting Tomorrow..."
-#python predict_tomorrow.py
-python predict_future.py
+  # 3. Retrain Model
+  echo "[3/5] Retraining Model..."
+  python train_model.py
 
-# 5. Optimize & Push
-echo "[5/5] Optimizing & Pushing Plan..."
-python optimize_plan.py
-python push_to_ha.py
+  # 4. Predict Future
+  echo "[4/5] Predicting Future..."
+  python predict_future.py
 
-echo "=== Pipeline Complete: Tue Mar 24 13:12:24 UTC 2026 ==="
+  # 5. Optimize & Push
+  echo "[5/5] Optimizing & Pushing Plan..."
+  python optimize_plan.py
+  python push_to_ha.py
+
+  echo "=== Pipeline Complete: $(date) ==="
+
+) 200>/tmp/hepo.lock
