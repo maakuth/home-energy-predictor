@@ -8,3 +8,9 @@ env/
 venv/
 test_venv/
 ENV/
+
+# Data and Model Artifacts
+*.csv
+*.json
+hepo.db
+!model_features.json
