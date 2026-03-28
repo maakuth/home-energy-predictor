@@ -59,7 +59,7 @@ def predict():
         return
         
     df_solar = pd.DataFrame(solar_data)
-    df_solar['period_start'] = pd.to_datetime(df_solar['period_start'])
+    df_solar['period_start'] = pd.to_datetime(df_solar['period_start'], utc=True)
     df_solar = df_solar.sort_values('period_start').set_index('period_start')
     
     # Current states

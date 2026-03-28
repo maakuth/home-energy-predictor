@@ -10,7 +10,7 @@ def process_data():
         print('Error: raw_data.csv not found.')
         return
     
-    df.index = pd.to_datetime(df.index)
+    df.index = pd.to_datetime(df.index, utc=True)
     
     print('Denoising and filling gaps...')
     fill_zero_cols = ['gshp_power', 'aahp_living_power', 'aahp_cabin_power', 'mummun_power', 'solar_forecast', 'solar_actual']
