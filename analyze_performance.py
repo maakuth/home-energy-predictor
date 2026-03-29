@@ -103,45 +103,73 @@ def analyze():
         print("No overlapping data between history and actuals.")
         return
     
-    # Aggregating to 3-hour blocks (AVERAGE of kW in each block)
-    # This makes the analysis much more robust to random human behavior.
-    comparison_resampled = comparison.resample('3h').mean().dropna()
-
-    if comparison_resampled.empty:
-        print("No overlapping data after 3h resampling.")
-        return
-
-    comparison_resampled['error'] = comparison_resampled['predicted_usage'] - comparison_resampled['actual_usage']
-    comparison_resampled['abs_error'] = comparison_resampled['error'].abs()
-    
-    mae = comparison_resampled['abs_error'].mean()
-    bias = comparison_resampled['error'].mean()
-    rmse = np.sqrt((comparison_resampled['error']**2).mean())
-    
-    print(f"Analysis Results (3-Hour Windows, N={len(comparison_resampled)}):")
-    print(f"  MAE (Power): {mae:.3f} kW")
-    print(f"  Bias (Power): {bias:.3f} kW")
-    print(f"  RMSE (Power): {rmse:.3f} kW")
-    
-    # Push to HA
-    host = os.getenv('HA_HOST')
-    token = os.getenv('HA_TOKEN')
-    if host and not host.startswith(('http://', 'https://')): host = f'http://{host}'
-    url = f'{host}/api/states/sensor.hepo_accuracy'
-    
-    payload = {
-        'state': f"{mae:.3f}",
-        'attributes': {
-            'friendly_name': 'HEPO Prediction Accuracy (MAE, 3h windows)',
-            'unit_of_measurement': 'kW',
-            'bias': float(bias),
-            'rmse': float(rmse),
-            'sample_count': len(comparison_resampled),
-            'window_size': '3h',
-            'last_updated': datetime.now().isoformat()
+    # --- 3-Hour Analysis (Average Power kW) ---
+    comparison_resampled_3h = comparison.resample('3h').mean().dropna()
+    if not comparison_resampled_3h.empty:
+        comparison_resampled_3h['error'] = comparison_resampled_3h['predicted_usage'] - comparison_resampled_3h['actual_usage']
+        comparison_resampled_3h['abs_error'] = comparison_resampled_3h['error'].abs()
+        mae_3h = comparison_resampled_3h['abs_error'].mean()
+        bias_3h = comparison_resampled_3h['error'].mean()
+        rmse_3h = np.sqrt((comparison_resampled_3h['error']**2).mean())
+        print(f"Analysis Results (3-Hour Power, N={len(comparison_resampled_3h)}):")
+        print(f"  MAE: {mae_3h:.3f} kW, Bias: {bias_3h:.3f} kW")
+        
+        # Push 3h metrics
+        payload_3h = {
+            'state': f"{mae_3h:.3f}",
+            'attributes': {
+                'friendly_name': 'HEPO Prediction Accuracy (3h Power)',
+                'unit_of_measurement': 'kW',
+                'bias': float(bias_3h),
+                'rmse': float(rmse_3h),
+                'sample_count': len(comparison_resampled_3h),
+                'window_size': '3h',
+                'last_updated': datetime.now().isoformat()
+            }
         }
-    }
-    requests.post(url, headers={'Authorization': f'Bearer {token}', 'content-type': 'application/json'}, json=payload)
+        try: requests.post(url, headers=headers, json=payload_3h, timeout=5)
+        except: pass
+
+    # --- 24-Hour Analysis (Total Energy kWh) ---
+    # Convert kW to kWh per 15-min interval (kW * 0.25h)
+    comparison_kwh = comparison.copy()
+    comparison_kwh['predicted_usage'] *= 0.25
+    comparison_kwh['actual_usage'] *= 0.25
+    
+    # Aggregating to 24-hour blocks (sum of kWh)
+    comparison_resampled_24h = comparison_kwh.resample('24h').sum().dropna()
+    # Filter out partial days (we want at least 90 out of 96 intervals)
+    counts = comparison_kwh.resample('24h').count()
+    comparison_resampled_24h = comparison_resampled_24h[counts['actual_usage'] >= 90]
+
+    if not comparison_resampled_24h.empty:
+        comparison_resampled_24h['error'] = comparison_resampled_24h['predicted_usage'] - comparison_resampled_24h['actual_usage']
+        comparison_resampled_24h['abs_error'] = comparison_resampled_24h['error'].abs()
+        
+        mae_24h = comparison_resampled_24h['abs_error'].mean()
+        bias_24h = comparison_resampled_24h['error'].mean()
+        rmse_24h = np.sqrt((comparison_resampled_24h['error']**2).mean())
+        
+        print(f"Analysis Results (24-Hour Energy, N={len(comparison_resampled_24h)}):")
+        print(f"  MAE: {mae_24h:.3f} kWh, Bias: {bias_24h:.3f} kWh")
+        
+        # Push 24h metrics
+        url_24h = f'{host}/api/states/sensor.hepo_accuracy_24h'
+        payload_24h = {
+            'state': f"{mae_24h:.3f}",
+            'attributes': {
+                'friendly_name': 'HEPO Prediction Accuracy (24h Energy)',
+                'unit_of_measurement': 'kWh',
+                'bias': float(bias_24h),
+                'rmse': float(rmse_24h),
+                'sample_count': len(comparison_resampled_24h),
+                'window_size': '24h',
+                'last_updated': datetime.now().isoformat()
+            }
+        }
+        try: requests.post(url_24h, headers=headers, json=payload_24h, timeout=5)
+        except: pass
+        
     print("✅ Accuracy metrics pushed to Home Assistant.")
 
 if __name__ == "__main__":

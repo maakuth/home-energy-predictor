@@ -29,6 +29,12 @@ def push_plan():
     
     # State: Total predicted energy from current hour to end of tomorrow (sum of hourly predictions)
     total_energy = sum(p['predicted_usage_kwh'] for p in plan)
+    
+    # Calculate 24h estimate (first 24 hours of the plan)
+    # Each interval is PLAN_INTERVAL_MINUTES (usually 15). 24h = 96 intervals.
+    intervals_in_24h = 96 
+    usage_24h = sum(p['predicted_usage_kwh'] for p in plan[:intervals_in_24h])
+    
     state = f"{total_energy:.2f}"
     
     # Attributes: The full plan
@@ -39,6 +45,7 @@ def push_plan():
             'plan': plan,
             'unit_of_measurement': 'kWh',
             'device_class': 'energy',
+            'predicted_24h_usage': round(usage_24h, 2),
             'last_updated_ts': datetime.now().isoformat()
         }
     }
@@ -48,12 +55,24 @@ def push_plan():
         response = requests.post(url, headers=headers, json=payload, timeout=10)
         if response.status_code in [200, 201]:
             print('✅ Plan successfully pushed to Home Assistant!')
-            print(f'Response: {response.json()}')
         else:
             print(f'❌ Error pushing plan: {response.status_code}')
-            print(response.text)
     except Exception as e:
         print(f'❌ Connection failed: {e}')
+
+    # Also push 24h usage as a standalone sensor for easier history tracking
+    url_24h = f'{host}/api/states/sensor.hepo_predicted_24h_usage'
+    payload_24h = {
+        'state': f"{usage_24h:.2f}",
+        'attributes': {
+            'friendly_name': 'HEPO Predicted 24h Consumption',
+            'unit_of_measurement': 'kWh',
+            'device_class': 'energy'
+        }
+    }
+    try:
+        requests.post(url_24h, headers=headers, json=payload_24h, timeout=10)
+    except: pass
 
 if __name__ == '__main__':
     push_plan()
