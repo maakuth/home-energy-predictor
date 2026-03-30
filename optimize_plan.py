@@ -418,6 +418,7 @@ def optimize():
         p_pred_kw = float(predictions[i])
         p_market = float(market_prices[i])
         p_import = float(import_prices[i])
+        p_export = float(export_prices[i])
         p_solar_kw = solar_array[i]
         b = battery_plan[i]
         g = gshp_plan[i]
