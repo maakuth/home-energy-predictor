@@ -263,6 +263,86 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
     return battery_plan
 
+def plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices):
+    # Constants/Defaults (can be overridden by .env)
+    electric_power_kw = get_env_float('GSHP_ELECTRIC_POWER_KW', 3.5)
+    cop = get_env_float('GSHP_COP', 3.5)
+    heat_power_kw = electric_power_kw * cop
+    reservoir_l = get_env_float('GSHP_RESERVOIR_LITERS', 500)
+    # Energy to heat reservoir by 1C: (L * 4.18 kJ/kgK) / 3600 = kWh/K
+    kwh_per_degree = (reservoir_l * 4.18) / 3600.0 
+    
+    min_temp = get_env_float('GSHP_MIN_TEMP', 45.0)
+    max_temp = get_env_float('GSHP_MAX_TEMP', 55.0)
+    
+    # Simple heat loss model: heat_demand = (target_temp - outside_temp) * k
+    # Based on your data: ~4.7C drop/hr at 50C reservoir. 
+    # 4.7C * 0.58 kWh/C = 2.7 kW loss. 
+    # If outside was ~0C, k = 2.7 / 20 = 0.135
+    heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135) 
+    
+    initial_temp = get_env_float('GSHP_INITIAL_TEMP', 50.0)
+    is_hp_running = get_env_bool('GSHP_IS_RUNNING', False)
+    
+    # Layering effect: 3C drop over 15 mins (1 interval) after a long pause
+    layering_drop = get_env_float('GSHP_INITIAL_TEMP_DROP', 3.0)
+    
+    horizon = len(prediction_timestamps)
+    interval_h = PLAN_INTERVAL_HOURS
+    
+    current_temp = initial_temp
+    gshp_plan = []
+    
+    # We use a simple greedy approach with lookahead for optimization
+    # But primarily we ensure the 45-55 constraint.
+    price_q20 = np.percentile(import_prices, 20)
+    
+    for i in range(horizon):
+        price = import_prices[i]
+        o_temp = outside_temps[i]
+        
+        # Calculate heat demand (kW)
+        # Assuming house target is 20C
+        demand_kw = max(0, (20.0 - o_temp) * heat_loss_k)
+        
+        # Decide if we should START
+        # 1. Mandatory if at or below min_temp
+        # 2. Strategic if price is very low and we have room
+        should_start = False
+        if current_temp <= min_temp:
+            should_start = True
+        elif price <= price_q20 and current_temp < (max_temp - 2.0):
+            should_start = True
+            
+        # If we are already running, we stay running until max_temp
+        # unless it's extremely expensive (not implemented for simplicity now)
+        if is_hp_running:
+            if current_temp >= max_temp:
+                is_hp_running = False
+            else:
+                is_hp_running = True # Keep running
+        else:
+            if should_start:
+                is_hp_running = True
+                # Apply layering drop simulation logic
+                # In reality, the drop happens even if the net energy increases.
+                # We subtract it from the temperature for this interval.
+                current_temp -= layering_drop
+
+        # Update temperature
+        # net_heat_kw = (HP_heat if ON else 0) - house_demand
+        net_heat_kw = (heat_power_kw if is_hp_running else 0) - demand_kw
+        temp_delta = (net_heat_kw * interval_h) / kwh_per_degree
+        current_temp += temp_delta
+        
+        gshp_plan.append({
+            'gshp_intent': 'START' if is_hp_running else 'STOP',
+            'gshp_temp_sim': float(current_temp),
+            'gshp_demand_kw': float(demand_kw)
+        })
+        
+    return gshp_plan
+
 def optimize():
     print('Loading predictions...')
     try:
@@ -297,20 +377,50 @@ def optimize():
 
     battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
 
+    # --- GSHP State Fetch ---
+    acc_temp_state = get_ha_state('sensor.mlp_varaajan_lampotila')
+    current_acc_temp = 50.0
+    try:
+        current_acc_temp = float(acc_temp_state.get('state', 50.0))
+    except (TypeError, ValueError):
+        pass
+    
+    gshp_power_state = get_ha_state('sensor.mlp_teho')
+    is_hp_currently_running = False
+    try:
+        # HP is running if power > 100W (standby is ~23W)
+        is_hp_currently_running = float(gshp_power_state.get('state', 0)) > 100
+    except (TypeError, ValueError):
+        pass
+
+    os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
+    os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
+
+    # Outside temp for heat demand model (use predicted or current)
+    # The 'predictions_data' has 'outside_temp' if we passed it in predict_future, 
+    # but currently predict_future.py just fills it with a constant 'temp_val'.
+    # For now, let's assume outside_temp is in predictions_data or use a default.
+    outside_temps = [p.get('outside_temp', 5.0) for p in predictions_data]
+    if not outside_temps:
+        outside_temps = np.full(len(prediction_timestamps), 5.0)
+
+    gshp_plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
     print(f"Interval: {PLAN_INTERVAL_MINUTES} minutes")
     print(f"Import Price Threshold (20th percentile effective): {price_threshold:.3f} €/kWh")
+    print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {'RUNNING' if is_hp_currently_running else 'STOPPED'}")
     
     final_plan = []
-    print('Time | Pred | Market | Import | Export | Solar | Grid In | Grid Out | SOC% | Actions')
-    print('-----|------|--------|--------|--------|-------|---------|----------|------|--------')
+    print('Time | Pred | Market | Import | Solar | SOC% | Intent | Acc Sim')
+    print('-----|------|--------|--------|-------|------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
         p_pred_kw = float(predictions[i])
         p_market = float(market_prices[i])
         p_import = float(import_prices[i])
-        p_export = float(export_prices[i])
         p_solar_kw = solar_array[i]
         b = battery_plan[i]
+        g = gshp_plan[i]
         
         actions = []
         if ev_plan[i]:
@@ -321,12 +431,13 @@ def optimize():
             actions.append('SOLAR')
         if b['battery_action'] != 'idle':
             actions.append(b['battery_action'].upper())
+        if g['gshp_intent'] == 'START':
+            actions.append('GSHP_START')
         action_str = ' '.join(actions)
         
         print(
             f"{ts.strftime('%m-%d %H:%M')} | {p_pred_kw:4.1f} | {p_market:6.3f} | {p_import:6.3f} | "
-            f"{p_export:6.3f} | {p_solar_kw:5.2f} | {b['grid_import_kwh']:7.2f} | {b['grid_export_kwh']:8.2f} | "
-            f"{b['soc_pct']:4.1f} | {action_str}"
+            f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
         )
         
         final_plan.append({
@@ -341,6 +452,8 @@ def optimize():
             'solar_forecast_kwh': float(solar_kwh[i]),
             'ev_charge': bool(ev_plan[i]),
             'heat_boost': bool(heating_plan[i]),
+            'gshp_intent': g['gshp_intent'],
+            'gshp_temp_simulated': g['gshp_temp_sim'],
             **b,
         })
         

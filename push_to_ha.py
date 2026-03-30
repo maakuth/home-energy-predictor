@@ -31,6 +31,15 @@ def push_plan():
     if push_ha_state('sensor.hepo_optimization_plan', f"{total_energy:.2f}", attributes):
         print('✅ Plan successfully pushed!')
 
+    # Push current GSHP intent
+    current_gshp_intent = plan[0].get('gshp_intent', 'STOP')
+    attributes_gshp = {
+        'friendly_name': 'HEPO GSHP Intent',
+        'simulated_temp': plan[0].get('gshp_temp_simulated')
+    }
+    push_ha_state('sensor.hepo_gshp_intent', current_gshp_intent, attributes_gshp)
+    print(f'✅ GSHP Intent pushed: {current_gshp_intent}')
+
     # Also push 24h usage as a standalone sensor for easier history tracking
     attributes_24h = {
         'friendly_name': 'HEPO Predicted 24h Consumption',
