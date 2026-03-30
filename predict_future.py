@@ -126,8 +126,10 @@ def predict():
         p_kw = float(p)
         results.append({
             'timestamp': timestamps[i],
-            'predicted_usage': p_kw,       # average power (kW)
-            'solar_forecast': float(inference_data[i]['solar_forecast'])
+            'predicted_baseload': p_kw,     # house usage without GSHP (kW)
+            'predicted_usage': p_kw,        # backward compatibility
+            'solar_forecast': float(inference_data[i]['solar_forecast']),
+            'outside_temp': float(inference_data[i]['outside_temp'])
         })
         
     print(f'\nGenerated {len(results)} predictions at {interval}-minute resolution.')

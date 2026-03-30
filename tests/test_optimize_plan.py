@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 
-from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices
+from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices, plan_gshp_dispatch
 
 
 @contextmanager
@@ -95,7 +95,6 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "1.0",
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "true",
-                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             # 3.0 kWh solar surplus
@@ -104,7 +103,8 @@ class OptimizePlanTests(unittest.TestCase):
             import_prices = np.array([0.20])
             export_prices = np.array([0.10])
 
-            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         self.assertEqual(plan[0]["battery_action"], "charge_solar")
         self.assertAlmostEqual(plan[0]["charge_from_solar_kwh"], 2.0) # limited by 2kW charge rate
@@ -121,7 +121,6 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "1.0",
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "false",
-                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             # Load 4.0, Price high. Need 2+ points for percentile thresholds.
@@ -130,7 +129,8 @@ class OptimizePlanTests(unittest.TestCase):
             import_prices = np.array([0.80, 0.80])
             export_prices = np.array([0.10, 0.10])
 
-            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         self.assertEqual(plan[0]["battery_action"], "discharge_load")
         self.assertAlmostEqual(plan[0]["discharge_to_load_kwh"], 4.0)
@@ -147,7 +147,6 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "0.95",
                 "BATTERY_DISCHARGE_EFFICIENCY": "0.95",
                 "BATTERY_ALLOW_EXPORT": "true",
-                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             predictions = np.array([0.0] * 12 + [8.0] * 12)
@@ -155,7 +154,8 @@ class OptimizePlanTests(unittest.TestCase):
             import_prices = np.array([0.08] * 12 + [0.40] * 12)
             export_prices = np.array([0.05] * 12 + [0.20] * 12)
 
-            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         min_soc_kwh = 40.0 * 0.20
         max_soc_kwh = 40.0 * 0.80
@@ -175,7 +175,6 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_CHARGE_EFFICIENCY": "1.0",
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "false",
-                "PLAN_INTERVAL_HOURS": "1.0",
             }
         ):
             # No load, no solar. High export value would encourage export arbitrage if enabled.
@@ -184,10 +183,98 @@ class OptimizePlanTests(unittest.TestCase):
             import_prices = np.array([0.20, 0.20, 0.20, 0.20])
             export_prices = np.array([0.60, 0.70, 0.80, 0.90])
 
-            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         self.assertTrue(all(row["battery_action"] == "idle" for row in plan))
         self.assertTrue(all(abs(row["grid_export_kwh"]) < 1e-9 for row in plan))
+
+
+class GSHPPlanTests(unittest.TestCase):
+    def test_gshp_starts_at_min_temp(self):
+        # Initial temp is 65.0C. High loss, but lookahead window (8h) shouldn't hit 45.0 yet.
+        prediction_timestamps = [datetime.now()] * 40
+        outside_temps = [10.0] * 40
+        import_prices = [0.20] * 40
+        
+        # 500L, 0.58 kWh/C. 
+        # Loss at 10C with k=0.1: (20 - 10) * 0.1 = 1kW loss.
+        # 1kW * 0.25h = 0.25kWh. 
+        # 0.25kWh / 0.58 = ~0.43C drop per interval.
+        # After 32 intervals (8h), total drop = 13.7C. 
+        # 65.0 - 13.7 = 51.3 (Still > 45, so lookahead should NOT trigger)
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "65.0",
+            "GSHP_MIN_TEMP": "45.0",
+            "GSHP_IS_RUNNING": "false",
+            "GSHP_HEAT_LOSS_K": "0.1",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            
+        # Should stay STOP for the first several intervals
+        self.assertEqual(plan[0]["gshp_intent"], "STOP")
+        self.assertEqual(plan[10]["gshp_intent"], "STOP")
+
+    def test_gshp_preheats_during_cheap_prices(self):
+        # Temp is 47C (safe). But next hour is expensive.
+        prediction_timestamps = [datetime.now()] * 10
+        outside_temps = [0.0] * 10
+        # Price is cheap now (0.05), but spikes to 0.50 later
+        import_prices = [0.05, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50]
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "47.0",
+            "GSHP_MIN_TEMP": "45.0",
+            "GSHP_IS_RUNNING": "false",
+            "GSHP_HEAT_LOSS_K": "0.1",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            
+        # Should start immediately to take advantage of the 0.05 price
+        self.assertEqual(plan[0]["gshp_intent"], "START")
+
+    def test_gshp_stops_at_max_temp(self):
+        prediction_timestamps = [datetime.now()] * 4
+        outside_temps = [20.0] * 4 # No heat loss
+        import_prices = [0.20] * 4
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "54.9",
+            "GSHP_MAX_TEMP": "55.0",
+            "GSHP_IS_RUNNING": "true",
+            "GSHP_ELECTRIC_POWER_KW": "4.0",
+            "GSHP_COP": "3.5",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            
+        # First interval it's already running and stays running until it crosses 55
+        self.assertEqual(plan[0]["gshp_intent"], "START")
+        # After one interval of 14kW heat into 500L, it definitely hits 55
+        self.assertEqual(plan[1]["gshp_intent"], "STOP")
+
+    def test_gshp_accounts_for_layering_drop(self):
+        prediction_timestamps = [datetime.now()] * 2
+        outside_temps = [10.0] * 2
+        import_prices = [0.01] * 2 # Force start
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "50.0",
+            "GSHP_INITIAL_TEMP_DROP": "3.0",
+            "GSHP_IS_RUNNING": "false",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            
+        # Initial temp 50. After start, sim_temp should include the -3.0 drop
+        # plus the heat gain from the interval. 
+        # Heat gain: (14kW * 0.25h) / 0.58 kWh/C = ~6C.
+        # Net: 50 - 3 + 6 = 53.
+        self.assertLess(plan[0]["gshp_temp_sim"], 55.0)
+        self.assertGreater(plan[0]["gshp_temp_sim"], 51.0) # 50 - 3 + some gain
 
 
 if __name__ == "__main__":

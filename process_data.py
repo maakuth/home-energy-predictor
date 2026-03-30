@@ -35,6 +35,14 @@ def process_data():
     elif 'total_power' in df.columns:
         df['total_home_power'] = df['total_power']
 
+    # Baseload: House consumption excluding the GSHP
+    if 'total_home_power' in df.columns and 'gshp_power' in df.columns:
+        df['baseload_power'] = df['total_home_power'] - df['gshp_power']
+        # Ensure baseload isn't negative due to sensor noise, but keep it realistic
+        df['baseload_power'] = df['baseload_power'].clip(lower=0)
+    else:
+        df['baseload_power'] = df.get('total_home_power', 0)
+
     # Clip component power meters (not the bidirectional grid meter total_power)
     power_cols = [c for c in df.columns if 'power' in c or 'teho' in c or 'energy' in c]
     exclude_from_clip = {'total_power'}  # grid meter, can be negative during solar export

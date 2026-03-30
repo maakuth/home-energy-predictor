@@ -8,8 +8,11 @@ from utils.ha_utils import get_ha_state
 
 load_dotenv(override=True)
 
-PLAN_INTERVAL_MINUTES = int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
-PLAN_INTERVAL_HOURS = max(PLAN_INTERVAL_MINUTES, 1) / 60.0
+def get_plan_interval_minutes():
+    return int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
+
+def get_plan_interval_hours():
+    return max(get_plan_interval_minutes(), 1) / 60.0
 
 def get_env_float(name, default):
     raw = os.getenv(name)
@@ -33,7 +36,8 @@ def load_predictions(file_path='future_predictions.json'):
     with open(file_path, 'r') as f:
         predictions_data = json.load(f)
 
-    predictions = np.array([p['predicted_usage'] for p in predictions_data], dtype=float)
+    # Use 'predicted_baseload' if available, fallback to 'predicted_usage'
+    predictions = np.array([p.get('predicted_baseload', p.get('predicted_usage', 0)) for p in predictions_data], dtype=float)
     prediction_timestamps = [datetime.fromisoformat(p['timestamp']) for p in predictions_data]
     prediction_solar = np.array([p['solar_forecast'] for p in predictions_data], dtype=float)
 
@@ -60,7 +64,7 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
     df_prices = df_prices.drop_duplicates(subset="start").set_index("start").sort_index()
 
     # Resample to the target interval.
-    interval_prices_series = df_prices["value"].resample(f"{PLAN_INTERVAL_MINUTES}min").ffill()
+    interval_prices_series = df_prices["value"].resample(f"{get_plan_interval_minutes()}min").ffill()
 
     # Reindex to match prediction_timestamps exactly.
     target_index = pd.to_datetime(prediction_timestamps, utc=True)
@@ -79,41 +83,24 @@ def fetch_market_prices(prediction_timestamps):
         "sensor.nordpool_total",
     ]
 
-    best_fallback = None
-    best_fallback_sensor = None
-
     for sensor in candidate_sensors:
         state_data = get_ha_state(sensor)
         if not state_data:
             continue
 
         attrs = state_data.get("attributes", {})
-        # Check multiple possible attribute names for price lists
         raw_today = attrs.get("raw_today") or attrs.get("today") or []
-
-        # Only use tomorrow prices if they are marked as valid
         tomorrow_valid = attrs.get("tomorrow_valid", False)
         raw_tomorrow = []
         if tomorrow_valid:
             raw_tomorrow = attrs.get("raw_tomorrow") or attrs.get("tomorrow") or []
 
-        # If we have a list of prices, use it immediately and ignore single-state sensors
         if isinstance(raw_today, list) and len(raw_today) > 0:
             aligned = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps)
             if aligned is not None:
                 return aligned, sensor
 
-        # If we haven't found a list yet, keep track of the first available single state
-        if best_fallback is None:
-            try:
-                base_price = float(state_data.get("state"))
-                if np.isfinite(base_price):
-                    best_fallback = np.full(len(prediction_timestamps), base_price, dtype=float)
-                    best_fallback_sensor = sensor
-            except (TypeError, ValueError):
-                pass
-
-    return best_fallback, best_fallback_sensor
+    return None, None
 
 
 def build_tariff_prices(market_prices):
@@ -141,8 +128,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
     discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
     allow_export = get_env_bool('BATTERY_ALLOW_EXPORT', True)
-    interval_hours = get_env_float('PLAN_INTERVAL_HOURS', PLAN_INTERVAL_HOURS)
-    interval_hours = max(interval_hours, 1e-6)
+    interval_hours = get_plan_interval_hours()
 
     charge_eff = min(max(charge_eff, 0.01), 1.0)
     discharge_eff = min(max(discharge_eff, 0.01), 1.0)
@@ -175,11 +161,9 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         discharge_to_load = 0.0
         discharge_to_export = 0.0
 
-        # Available headroom to charge this interval (input kWh before charge efficiency).
         soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
         charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
 
-        # Available output from battery this interval (kWh delivered after discharge efficiency).
         soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
         discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
 
@@ -194,14 +178,12 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             soc_kwh -= discharge_to_load / discharge_eff
             discharge_limit_output_kwh -= discharge_to_load
 
-        # Grid charging only if no battery discharge this interval and arbitrage looks profitable.
         profitable_grid_charge = (best_future_value * round_trip_eff) > current_import
         is_cheap_hour = current_import <= import_q30
         if discharge_to_load == 0.0 and charge_limit_input_kwh > 0 and profitable_grid_charge and is_cheap_hour:
             charge_from_grid = charge_limit_input_kwh
             soc_kwh += charge_from_grid * charge_eff
 
-        # Optional export arbitrage from stored energy on high-value hours.
         if (
             allow_export
             and charge_from_solar == 0.0
@@ -229,7 +211,6 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         charge_total = charge_from_solar + charge_from_grid
         discharge_total = discharge_to_load + discharge_to_export
 
-        # Determine the primary intention for the action string
         if charge_from_solar > 1e-9 and charge_from_grid > 1e-9:
             battery_action = 'charge_mixed'
         elif charge_from_solar > 1e-9:
@@ -263,9 +244,10 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
     return battery_plan
 
+
 def plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices):
     # Constants/Defaults (can be overridden by .env)
-    electric_power_kw = get_env_float('GSHP_ELECTRIC_POWER_KW', 3.5)
+    electric_power_kw = get_env_float('GSHP_ELECTRIC_POWER_KW', 4.0)
     cop = get_env_float('GSHP_COP', 3.5)
     heat_power_kw = electric_power_kw * cop
     reservoir_l = get_env_float('GSHP_RESERVOIR_LITERS', 500)
@@ -274,63 +256,63 @@ def plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices):
     
     min_temp = get_env_float('GSHP_MIN_TEMP', 45.0)
     max_temp = get_env_float('GSHP_MAX_TEMP', 55.0)
-    
-    # Simple heat loss model: heat_demand = (target_temp - outside_temp) * k
-    # Based on your data: ~4.7C drop/hr at 50C reservoir. 
-    # 4.7C * 0.58 kWh/C = 2.7 kW loss. 
-    # If outside was ~0C, k = 2.7 / 20 = 0.135
     heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135) 
     
     initial_temp = get_env_float('GSHP_INITIAL_TEMP', 50.0)
     is_hp_running = get_env_bool('GSHP_IS_RUNNING', False)
-    
-    # Layering effect: 3C drop over 15 mins (1 interval) after a long pause
     layering_drop = get_env_float('GSHP_INITIAL_TEMP_DROP', 3.0)
     
     horizon = len(prediction_timestamps)
-    interval_h = PLAN_INTERVAL_HOURS
-    
+    interval_h = get_plan_interval_hours()
     current_temp = initial_temp
     gshp_plan = []
     
-    # We use a simple greedy approach with lookahead for optimization
-    # But primarily we ensure the 45-55 constraint.
-    price_q20 = np.percentile(import_prices, 20)
-    
+    # 8-hour lookahead for optimization
+    lookahead_intervals = int(8.0 / interval_h)
+
     for i in range(horizon):
         price = import_prices[i]
         o_temp = outside_temps[i]
-        
-        # Calculate heat demand (kW)
-        # Assuming house target is 20C
         demand_kw = max(0, (20.0 - o_temp) * heat_loss_k)
         
-        # Decide if we should START
-        # 1. Mandatory if at or below min_temp
-        # 2. Strategic if price is very low and we have room
-        should_start = False
-        if current_temp <= min_temp:
-            should_start = True
-        elif price <= price_q20 and current_temp < (max_temp - 2.0):
-            should_start = True
-            
-        # If we are already running, we stay running until max_temp
-        # unless it's extremely expensive (not implemented for simplicity now)
+        # Decide if we should START/STAY ON
         if is_hp_running:
+            # STOP if we hit max_temp or if it's expensive AND we have room
             if current_temp >= max_temp:
                 is_hp_running = False
             else:
-                is_hp_running = True # Keep running
+                is_hp_running = True # Stick to heating cycle until 55C
         else:
+            # Check if we MUST start because we are at min_temp
+            should_start = (current_temp <= min_temp)
+            
+            # Check if we SHOULD start to avoid higher prices later (Strategic Pre-heating)
+            if not should_start and current_temp < (max_temp - 2.0):
+                # How many intervals until we hit min_temp if we stay OFF?
+                temp_sim = current_temp
+                intervals_to_min = horizon - i
+                for j in range(i, min(i + lookahead_intervals, horizon)):
+                    o_j = outside_temps[j]
+                    d_j = max(0, (20.0 - o_j) * heat_loss_k)
+                    temp_sim -= (d_j * interval_h) / kwh_per_degree
+                    if temp_sim <= min_temp:
+                        intervals_to_min = j - i
+                        break
+                
+                # If we will hit min_temp within the lookahead window...
+                if intervals_to_min < lookahead_intervals:
+                    # Find the cheapest price in that window
+                    window_prices = import_prices[i : i + intervals_to_min + 1]
+                    cheapest_in_window = np.min(window_prices)
+                    # Start if NOW is the cheapest time to do it
+                    if price <= cheapest_in_window:
+                        should_start = True
+
             if should_start:
                 is_hp_running = True
-                # Apply layering drop simulation logic
-                # In reality, the drop happens even if the net energy increases.
-                # We subtract it from the temperature for this interval.
                 current_temp -= layering_drop
 
         # Update temperature
-        # net_heat_kw = (HP_heat if ON else 0) - house_demand
         net_heat_kw = (heat_power_kw if is_hp_running else 0) - demand_kw
         temp_delta = (net_heat_kw * interval_h) / kwh_per_degree
         current_temp += temp_delta
@@ -338,10 +320,11 @@ def plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices):
         gshp_plan.append({
             'gshp_intent': 'START' if is_hp_running else 'STOP',
             'gshp_temp_sim': float(current_temp),
-            'gshp_demand_kw': float(demand_kw)
+            'gshp_electric_kw': float(electric_power_kw if is_hp_running else 0)
         })
         
     return gshp_plan
+
 
 def optimize():
     print('Loading predictions...')
@@ -362,22 +345,7 @@ def optimize():
 
     solar_array = np.array(prediction_solar, dtype=float)
 
-    ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
-    intervals_to_charge = max(1, int(round(ev_charge_hours / PLAN_INTERVAL_HOURS)))
-    cheapest_indices = np.argsort(import_prices)[:intervals_to_charge]
-    ev_plan = [1 if i in cheapest_indices else 0 for i in range(len(import_prices))]
-    
-    effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)
-    price_threshold = np.percentile(effective_prices, 20)
-    heating_plan = [1 if p <= price_threshold else 0 for p in effective_prices]
-
-    # Convert Power (kW) to Energy (kWh) for the battery dispatch logic
-    predictions_kwh = predictions * PLAN_INTERVAL_HOURS
-    solar_kwh = solar_array * PLAN_INTERVAL_HOURS
-
-    battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
-
-    # --- GSHP State Fetch ---
+    # --- GSHP Optimization (Must run before battery) ---
     acc_temp_state = get_ha_state('sensor.mlp_varaajan_lampotila')
     current_acc_temp = 50.0
     try:
@@ -388,7 +356,6 @@ def optimize():
     gshp_power_state = get_ha_state('sensor.mlp_teho')
     is_hp_currently_running = False
     try:
-        # HP is running if power > 100W (standby is ~23W)
         is_hp_currently_running = float(gshp_power_state.get('state', 0)) > 100
     except (TypeError, ValueError):
         pass
@@ -396,26 +363,37 @@ def optimize():
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
 
-    # Outside temp for heat demand model (use predicted or current)
-    # The 'predictions_data' has 'outside_temp' if we passed it in predict_future, 
-    # but currently predict_future.py just fills it with a constant 'temp_val'.
-    # For now, let's assume outside_temp is in predictions_data or use a default.
     outside_temps = [p.get('outside_temp', 5.0) for p in predictions_data]
-    if not outside_temps:
-        outside_temps = np.full(len(prediction_timestamps), 5.0)
-
     gshp_plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
 
+    # Combine Baseload + Planned GSHP for Battery optimization
+    planned_gshp_kw = np.array([g['gshp_electric_kw'] for g in gshp_plan])
+    total_planned_load_kw = predictions + planned_gshp_kw
+
+    ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
+    intervals_to_charge = max(1, int(round(ev_charge_hours / get_plan_interval_hours())))
+    cheapest_indices = np.argsort(import_prices)[:intervals_to_charge]
+    ev_plan = [1 if i in cheapest_indices else 0 for i in range(len(import_prices))]
+    
+    effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)
+    price_threshold = np.percentile(effective_prices, 20)
+    heating_plan = [1 if p <= price_threshold else 0 for p in effective_prices]
+
+    # Battery Dispatch uses Total = Baseload + GSHP
+    predictions_kwh = total_planned_load_kw * get_plan_interval_hours()
+    solar_kwh = solar_array * get_plan_interval_hours()
+    battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
+
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
-    print(f"Interval: {PLAN_INTERVAL_MINUTES} minutes")
-    print(f"Import Price Threshold (20th percentile effective): {price_threshold:.3f} €/kWh")
+    print(f"Interval: {get_plan_interval_minutes()} minutes")
     print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {'RUNNING' if is_hp_currently_running else 'STOPPED'}")
     
     final_plan = []
-    print('Time | Pred | Market | Import | Solar | SOC% | Intent | Acc Sim')
-    print('-----|------|--------|--------|-------|------|--------|--------')
+    print('Time | Baseload | GSHP kW | Market | Import | Solar | SOC% | Intent | Acc Sim')
+    print('-----|----------|---------|--------|--------|-------|------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
-        p_pred_kw = float(predictions[i])
+        p_baseload_kw = float(predictions[i])
+        p_gshp_kw = float(planned_gshp_kw[i])
         p_market = float(market_prices[i])
         p_import = float(import_prices[i])
         p_export = float(export_prices[i])
@@ -437,13 +415,15 @@ def optimize():
         action_str = ' '.join(actions)
         
         print(
-            f"{ts.strftime('%m-%d %H:%M')} | {p_pred_kw:4.1f} | {p_market:6.3f} | {p_import:6.3f} | "
+            f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_market:6.3f} | {p_import:6.3f} | "
             f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
         )
         
         final_plan.append({
             'timestamp': ts.isoformat(),
-            'predicted_usage_kw': float(p_pred_kw),
+            'predicted_baseload_kw': p_baseload_kw,
+            'planned_gshp_kw': p_gshp_kw,
+            'predicted_usage_kw': float(total_planned_load_kw[i]),
             'predicted_usage_kwh': float(predictions_kwh[i]),
             'spot_price': float(p_market),
             'market_base_price': float(p_market),
