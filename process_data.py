@@ -36,8 +36,9 @@ def process_data():
         df['total_home_power'] = df['total_power']
 
     # Baseload: House consumption excluding the GSHP
+    # Note: gshp_power sensor (mlp_teho) is in Watts, total_home_power is in kW.
     if 'total_home_power' in df.columns and 'gshp_power' in df.columns:
-        df['baseload_power'] = df['total_home_power'] - df['gshp_power']
+        df['baseload_power'] = df['total_home_power'] - (df['gshp_power'] / 1000.0)
         # Ensure baseload isn't negative due to sensor noise, but keep it realistic
         df['baseload_power'] = df['baseload_power'].clip(lower=0)
     else:
@@ -60,7 +61,8 @@ def process_data():
         df['acc_roc'] = df['accumulator_temp'].diff().fillna(0)
         hp_cols = ['gshp_power', 'aahp_living_power', 'aahp_cabin_power']
         available_hp = [c for c in hp_cols if c in df.columns]
-        df['total_hp_power'] = df[available_hp].sum(axis=1)
+        # HP sensors are in Watts, convert to kW for logic consistency
+        df['total_hp_power'] = df[available_hp].sum(axis=1) / 1000.0
         df['is_fireplace_active'] = ((df['acc_roc'] > 0.3) & (df['total_hp_power'] < 0.5)).astype(int)
         df['is_fireplace_lag1'] = df['is_fireplace_active'].shift(1).fillna(0)
     

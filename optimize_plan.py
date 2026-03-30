@@ -312,15 +312,36 @@ def plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices):
                 is_hp_running = True
                 current_temp -= layering_drop
 
-        # Update temperature
+        # Update temperature with hardware-limit awareness
         net_heat_kw = (heat_power_kw if is_hp_running else 0) - demand_kw
         temp_delta = (net_heat_kw * interval_h) / kwh_per_degree
-        current_temp += temp_delta
+        
+        new_temp = current_temp + temp_delta
+        
+        # Hardware Auto-Stop Logic: If we were heating and crossed max_temp, 
+        # the pump stops mid-interval.
+        actual_electric_kw = electric_power_kw if is_hp_running else 0
+        
+        if is_hp_running and new_temp > max_temp:
+            # How much of the interval did we actually run?
+            temp_gain_needed = max_temp - current_temp
+            total_potential_gain = new_temp - current_temp
+            if total_potential_gain > 0:
+                fraction_run = max(0, min(1, temp_gain_needed / total_potential_gain))
+                actual_electric_kw = electric_power_kw * fraction_run
+            
+            new_temp = max_temp
+            is_hp_running = False # It stops automatically
+            # We keep the intent as START for THIS interval so the automation 
+            # lets it finish reaching the hardware limit. 
+            # The next interval will see temp >= max_temp and set intent to STOP.
+            
+        current_temp = new_temp
         
         gshp_plan.append({
-            'gshp_intent': 'START' if is_hp_running else 'STOP',
+            'gshp_intent': 'START' if (actual_electric_kw > 0) else 'STOP',
             'gshp_temp_sim': float(current_temp),
-            'gshp_electric_kw': float(electric_power_kw if is_hp_running else 0)
+            'gshp_electric_kw': float(actual_electric_kw)
         })
         
     return gshp_plan
