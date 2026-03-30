@@ -3,28 +3,14 @@ import pandas as pd
 import numpy as np
 import psycopg2
 import sqlite3
-import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from utils.ha_utils import push_ha_state
 
 load_dotenv(override=True)
 
-def get_ha_state(entity_id):
-    host = os.getenv('HA_HOST')
-    token = os.getenv('HA_TOKEN')
-    if host and not host.startswith(('http://', 'https://')):
-        host = f'http://{host}'
-    url = f'{host}/api/states/{entity_id}'
-    headers = {'Authorization': f'Bearer {token}', 'content-type': 'application/json'}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except: pass
-    return None
-
 def fetch_actuals(days=2):
-    print(f"Fetching actuals for last {days} days...")
+    print(f"Fetching actuals for last {days} days from PostgreSQL...")
     conn = psycopg2.connect(
         host=os.getenv("DB_HOST"),
         port=os.getenv("DB_PORT"),
@@ -95,7 +81,6 @@ def analyze():
     df_history = df_history.set_index('target_timestamp')
     
     df_actual = fetch_actuals()
-    # actual_usage in df_actual is average Power (kW) over the interval.
     
     # Merge
     comparison = df_history.join(df_actual[['actual_usage']], how='inner')
@@ -115,20 +100,15 @@ def analyze():
         print(f"  MAE: {mae_3h:.3f} kW, Bias: {bias_3h:.3f} kW")
         
         # Push 3h metrics
-        payload_3h = {
-            'state': f"{mae_3h:.3f}",
-            'attributes': {
-                'friendly_name': 'HEPO Prediction Accuracy (3h Power)',
-                'unit_of_measurement': 'kW',
-                'bias': float(bias_3h),
-                'rmse': float(rmse_3h),
-                'sample_count': len(comparison_resampled_3h),
-                'window_size': '3h',
-                'last_updated': datetime.now().isoformat()
-            }
+        attributes_3h = {
+            'friendly_name': 'HEPO Prediction Accuracy (3h Power)',
+            'unit_of_measurement': 'kW',
+            'bias': float(bias_3h),
+            'rmse': float(rmse_3h),
+            'sample_count': len(comparison_resampled_3h),
+            'window_size': '3h'
         }
-        try: requests.post(url, headers=headers, json=payload_3h, timeout=5)
-        except: pass
+        push_ha_state('sensor.hepo_accuracy', f"{mae_3h:.3f}", attributes_3h)
 
     # --- 24-Hour Analysis (Total Energy kWh) ---
     # Convert kW to kWh per 15-min interval (kW * 0.25h)
@@ -138,7 +118,7 @@ def analyze():
     
     # Aggregating to 24-hour blocks (sum of kWh)
     comparison_resampled_24h = comparison_kwh.resample('24h').sum().dropna()
-    # Filter out partial days (we want at least 90 out of 96 intervals)
+    # Filter out partial days (at least 90 out of 96 intervals)
     counts = comparison_kwh.resample('24h').count()
     comparison_resampled_24h = comparison_resampled_24h[counts['actual_usage'] >= 90]
 
@@ -154,21 +134,15 @@ def analyze():
         print(f"  MAE: {mae_24h:.3f} kWh, Bias: {bias_24h:.3f} kWh")
         
         # Push 24h metrics
-        url_24h = f'{host}/api/states/sensor.hepo_accuracy_24h'
-        payload_24h = {
-            'state': f"{mae_24h:.3f}",
-            'attributes': {
-                'friendly_name': 'HEPO Prediction Accuracy (24h Energy)',
-                'unit_of_measurement': 'kWh',
-                'bias': float(bias_24h),
-                'rmse': float(rmse_24h),
-                'sample_count': len(comparison_resampled_24h),
-                'window_size': '24h',
-                'last_updated': datetime.now().isoformat()
-            }
+        attributes_24h = {
+            'friendly_name': 'HEPO Prediction Accuracy (24h Energy)',
+            'unit_of_measurement': 'kWh',
+            'bias': float(bias_24h),
+            'rmse': float(rmse_24h),
+            'sample_count': len(comparison_resampled_24h),
+            'window_size': '24h'
         }
-        try: requests.post(url_24h, headers=headers, json=payload_24h, timeout=5)
-        except: pass
+        push_ha_state('sensor.hepo_accuracy_24h', f"{mae_24h:.3f}", attributes_24h)
         
     print("✅ Accuracy metrics pushed to Home Assistant.")
 

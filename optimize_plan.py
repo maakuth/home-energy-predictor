@@ -2,34 +2,14 @@ import os
 import json
 import numpy as np
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from utils.ha_utils import get_ha_state
 
 load_dotenv(override=True)
 
 PLAN_INTERVAL_MINUTES = int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
 PLAN_INTERVAL_HOURS = max(PLAN_INTERVAL_MINUTES, 1) / 60.0
-
-def get_ha_state(entity_id):
-    host = os.getenv('HA_HOST')
-    token = os.getenv('HA_TOKEN')
-    if host and not host.startswith(('http://', 'https://')):
-        host = f'http://{host}'
-    
-    url = f'{host}/api/states/{entity_id}'
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'content-type': 'application/json',
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f'⚠️ Error fetching {entity_id}: {e}')
-    return None
-
 
 def get_env_float(name, default):
     raw = os.getenv(name)
@@ -68,7 +48,6 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
     # Handle if raw_today is a list of floats (like in your nordpool_total.yaml 'today' attribute)
     if all_raw and not isinstance(all_raw[0], dict):
         # We assume these are hourly prices starting from today at 00:00
-        # This is a bit of a guess, but common for the Nordpool 'today' attribute.
         start_date = pd.to_datetime(datetime.now().date(), utc=True)
         all_raw = [{"start": start_date + timedelta(hours=i), "value": v} for i, v in enumerate(all_raw)]
 
@@ -80,19 +59,14 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
     df_prices["start"] = pd.to_datetime(df_prices["start"], utc=True)
     df_prices = df_prices.drop_duplicates(subset="start").set_index("start").sort_index()
 
-    # Resample to the target interval. If data is already 15-min, this does little.
-    # If data is hourly, this creates 15-min slots which we then ffill.
+    # Resample to the target interval.
     interval_prices_series = df_prices["value"].resample(f"{PLAN_INTERVAL_MINUTES}min").ffill()
 
     # Reindex to match prediction_timestamps exactly.
-    # We use ffill to handle cases where the price horizon is shorter than the prediction horizon.
-    # This ensures that even if tomorrow's prices aren't out yet, we use the last known price
-    # (or a fallback) instead of NaNs.
     target_index = pd.to_datetime(prediction_timestamps, utc=True)
     aligned_series = interval_prices_series.reindex(target_index, method="ffill")
 
-    # If there are still NaNs at the beginning (e.g. prediction starts before price data),
-    # we bfill them.
+    # If there are still NaNs at the beginning, we bfill them.
     aligned_series = aligned_series.bfill()
 
     return aligned_series.values
@@ -109,11 +83,11 @@ def fetch_market_prices(prediction_timestamps):
     best_fallback_sensor = None
 
     for sensor in candidate_sensors:
-        state = get_ha_state(sensor)
-        if not state:
+        state_data = get_ha_state(sensor)
+        if not state_data:
             continue
 
-        attrs = state.get("attributes", {})
+        attrs = state_data.get("attributes", {})
         # Check multiple possible attribute names for price lists
         raw_today = attrs.get("raw_today") or attrs.get("today") or []
 
@@ -132,7 +106,7 @@ def fetch_market_prices(prediction_timestamps):
         # If we haven't found a list yet, keep track of the first available single state
         if best_fallback is None:
             try:
-                base_price = float(state.get("state"))
+                base_price = float(state_data.get("state"))
                 if np.isfinite(base_price):
                     best_fallback = np.full(len(prediction_timestamps), base_price, dtype=float)
                     best_fallback_sensor = sensor
@@ -175,7 +149,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     round_trip_eff = charge_eff * discharge_eff
 
     min_soc_kwh = capacity_kwh * max(min_soc_pct, reserve_soc_pct) / 100.0
-    max_soc_kwh = capacity_kwh * max_soc_pct / 100.0
+    max_soc_kwh = capacity_kwh * max(max_soc_pct, 0.0) / 100.0
     soc_kwh = min(max(capacity_kwh * initial_soc_pct / 100.0, min_soc_kwh), max_soc_kwh)
 
     horizon = len(predictions)
@@ -318,7 +292,6 @@ def optimize():
     heating_plan = [1 if p <= price_threshold else 0 for p in effective_prices]
 
     # Convert Power (kW) to Energy (kWh) for the battery dispatch logic
-    # kWh = kW * interval_hours
     predictions_kwh = predictions * PLAN_INTERVAL_HOURS
     solar_kwh = solar_array * PLAN_INTERVAL_HOURS
 

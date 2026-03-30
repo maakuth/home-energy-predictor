@@ -3,33 +3,14 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 import json
-import requests
 import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from utils.ha_utils import get_ha_state
 
 load_dotenv(override=True)
 
 PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
-
-def get_ha_state(entity_id):
-    host = os.getenv('HA_HOST')
-    token = os.getenv('HA_TOKEN')
-    if host and not host.startswith(('http://', 'https://')):
-        host = f'http://{host}'
-    
-    url = f'{host}/api/states/{entity_id}'
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'content-type': 'application/json',
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f'⚠️ Error fetching {entity_id}: {e}')
-    return None
 
 def predict():
     print('Syncing with Home Assistant...')
