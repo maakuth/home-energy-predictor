@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
+from utils.price_utils import fetch_market_prices, align_interval_prices
 
 load_dotenv(override=True)
 
@@ -42,65 +43,6 @@ def load_predictions(file_path='future_predictions.json'):
     prediction_solar = np.array([p['solar_forecast'] for p in predictions_data], dtype=float)
 
     return predictions_data, predictions, prediction_timestamps, prediction_solar
-
-
-def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps):
-    all_raw = raw_today + raw_tomorrow
-    if not all_raw:
-        return None
-
-    # Handle if raw_today is a list of floats (like in your nordpool_total.yaml 'today' attribute)
-    if all_raw and not isinstance(all_raw[0], dict):
-        # We assume these are hourly prices starting from today at 00:00
-        start_date = pd.to_datetime(datetime.now().date(), utc=True)
-        all_raw = [{"start": start_date + timedelta(hours=i), "value": v} for i, v in enumerate(all_raw)]
-
-    df_prices = pd.DataFrame(all_raw)
-    if "start" not in df_prices.columns or "value" not in df_prices.columns:
-        return None
-
-    # Convert to datetime and ensure it's timezone-aware (matching prediction_timestamps)
-    df_prices["start"] = pd.to_datetime(df_prices["start"], utc=True)
-    df_prices = df_prices.drop_duplicates(subset="start").set_index("start").sort_index()
-
-    # Resample to the target interval.
-    interval_prices_series = df_prices["value"].resample(f"{get_plan_interval_minutes()}min").ffill()
-
-    # Reindex to match prediction_timestamps exactly.
-    target_index = pd.to_datetime(prediction_timestamps, utc=True)
-    aligned_series = interval_prices_series.reindex(target_index, method="ffill")
-
-    # If there are still NaNs at the beginning, we bfill them.
-    aligned_series = aligned_series.bfill()
-
-    return aligned_series.values
-
-
-def fetch_market_prices(prediction_timestamps):
-    candidate_sensors = [
-        "sensor.current_electricity_market_price",
-        "sensor.nordpool_kwh_fi_eur_3_10_0",
-        "sensor.nordpool_total",
-    ]
-
-    for sensor in candidate_sensors:
-        state_data = get_ha_state(sensor)
-        if not state_data:
-            continue
-
-        attrs = state_data.get("attributes", {})
-        raw_today = attrs.get("raw_today") or attrs.get("today") or []
-        tomorrow_valid = attrs.get("tomorrow_valid", False)
-        raw_tomorrow = []
-        if tomorrow_valid:
-            raw_tomorrow = attrs.get("raw_tomorrow") or attrs.get("tomorrow") or []
-
-        if isinstance(raw_today, list) and len(raw_today) > 0:
-            aligned = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps)
-            if aligned is not None:
-                return aligned, sensor
-
-    return None, None
 
 
 def build_tariff_prices(market_prices):
@@ -383,7 +325,7 @@ def optimize():
         return
 
     print('Fetching market prices...')
-    market_prices, price_source = fetch_market_prices(prediction_timestamps)
+    market_prices, is_fallback_price, price_source = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
     if market_prices is None:
         print('Error: Could not fetch market prices from Home Assistant sensors.')
         return
@@ -478,6 +420,7 @@ def optimize():
             'market_base_price': float(p_market),
             'import_unit_price': float(p_import),
             'export_unit_price': float(p_export),
+            'is_fallback_price': int(is_fallback_price[i]),
             'solar_forecast_kw': float(p_solar_kw),
             'solar_forecast_kwh': float(solar_kwh[i]),
             'ev_charge': bool(ev_plan[i]),

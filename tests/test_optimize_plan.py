@@ -63,11 +63,12 @@ class OptimizePlanTests(unittest.TestCase):
         ]
         
         with patched_env({"PLAN_INTERVAL_MINUTES": "15"}):
-            aligned = align_interval_prices(raw_today, [], prediction_timestamps)
+            aligned, is_fallback = align_interval_prices(raw_today, [], prediction_timestamps)
         
         # All 00:xx should be 0.10, 01:00 should be 0.20
         expected = [0.10, 0.10, 0.10, 0.10, 0.20]
         np.testing.assert_allclose(aligned, expected)
+        self.assertFalse(any(is_fallback))
 
     def test_align_interval_prices_handles_float_list(self):
         # List of floats (assuming hourly from midnight)
@@ -78,10 +79,27 @@ class OptimizePlanTests(unittest.TestCase):
             pd.to_datetime(now_date, utc=True) + timedelta(hours=1),
         ]
         
-        aligned = align_interval_prices(raw_today, [], prediction_timestamps)
+        aligned, is_fallback = align_interval_prices(raw_today, [], prediction_timestamps)
         self.assertEqual(len(aligned), 2)
         self.assertEqual(aligned[0], 0.10)
         self.assertEqual(aligned[1], 0.20)
+
+    def test_align_interval_prices_24h_fallback(self):
+        # Data for today 08:00
+        raw_today = [
+            {"start": "2026-03-26T08:00:00+00:00", "value": 0.15},
+        ]
+        # Prediction for tomorrow 08:00
+        prediction_timestamps = [
+            datetime(2026, 3, 27, 8, 0, tzinfo=timezone.utc),
+        ]
+        
+        aligned, is_fallback = align_interval_prices(raw_today, [], prediction_timestamps, interval_minutes=60)
+        
+        # Should fallback to 0.15 from 24h ago
+        self.assertEqual(aligned[0], 0.15)
+        # Should be flagged as fallback
+        self.assertTrue(is_fallback[0])
 
     def test_solar_surplus_charges_battery_as_charge_solar(self):
         with patched_env(

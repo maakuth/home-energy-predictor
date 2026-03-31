@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
+from utils.price_utils import fetch_market_prices
 
 load_dotenv(override=True)
 
@@ -151,6 +152,14 @@ def predict():
     # Model output is average Power (kW) for the interval
     results = []
     generated_at = datetime.now().astimezone().isoformat()
+    
+    # Fetch market prices to identify fallbacks
+    print('Fetching market prices for fallback detection...')
+    prediction_timestamps_dt = [datetime.fromisoformat(ts) for ts in timestamps]
+    market_prices, is_fallback_price, _ = fetch_market_prices(prediction_timestamps_dt, PREDICTION_INTERVAL_MINUTES)
+    if is_fallback_price is None:
+        is_fallback_price = [0] * len(predictions)
+
     for i, p in enumerate(predictions):
         p_kw = float(p)
         results.append({
@@ -159,7 +168,8 @@ def predict():
             'predicted_usage': p_kw,        # backward compatibility
             'solar_forecast': float(inference_data[i]['solar_forecast']),
             'outside_temp': float(inference_data[i]['outside_temp']),
-            'is_sauna_active': int(inference_data[i].get('is_sauna_active', 0))
+            'is_sauna_active': int(inference_data[i].get('is_sauna_active', 0)),
+            'is_fallback_price': int(is_fallback_price[i])
         })
         
     print(f'\nGenerated {len(results)} predictions at {interval}-minute resolution.')
@@ -183,15 +193,22 @@ def predict():
             )
         ''')
         
+        # Schema migration: add is_fallback_price if missing
+        cur.execute("PRAGMA table_info(predictions)")
+        columns = [c[1] for c in cur.fetchall()]
+        if 'is_fallback_price' not in columns:
+            print("Adding is_fallback_price column to predictions table...")
+            cur.execute("ALTER TABLE predictions ADD COLUMN is_fallback_price INTEGER DEFAULT 0")
+
         # Insert predictions.
         data_to_insert = [
-            (res['timestamp'], generated_at, res['predicted_usage'], res['solar_forecast'])
+            (res['timestamp'], generated_at, res['predicted_usage'], res['solar_forecast'], res['is_fallback_price'])
             for res in results
         ]
         cur.executemany('''
             INSERT OR REPLACE INTO predictions 
-            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw)
-            VALUES (?, ?, ?, ?)
+            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price)
+            VALUES (?, ?, ?, ?, ?)
         ''', data_to_insert)
         
         conn.commit()

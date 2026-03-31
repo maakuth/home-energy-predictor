@@ -58,9 +58,17 @@ def analyze():
     print("Loading prediction history from SQLite...")
     try:
         conn = sqlite3.connect(db_file)
+        # Check if column exists
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(predictions)")
+        cols = [c[1] for c in cur.fetchall()]
+        has_fallback_col = 'is_fallback_price' in cols
+        
+        fallback_select = ", is_fallback_price" if has_fallback_col else ", 0 as is_fallback_price"
+
         # We want the MOST RECENT prediction for each target timestamp
-        query = """
-            SELECT target_timestamp, predicted_usage_kw as predicted_usage
+        query = f"""
+            SELECT target_timestamp, predicted_usage_kw as predicted_usage {fallback_select}
             FROM (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
                 FROM predictions
@@ -88,8 +96,11 @@ def analyze():
         print("No overlapping data between history and actuals.")
         return
     
+    # Filter out fallback prices for interval analysis
+    comparison_clean = comparison[comparison['is_fallback_price'] == 0]
+    
     # --- 3-Hour Analysis (Average Power kW) ---
-    comparison_resampled_3h = comparison.resample('3h').mean().dropna()
+    comparison_resampled_3h = comparison_clean.resample('3h').mean().dropna()
     if not comparison_resampled_3h.empty:
         comparison_resampled_3h['error'] = comparison_resampled_3h['predicted_usage'] - comparison_resampled_3h['actual_usage']
         comparison_resampled_3h['abs_error'] = comparison_resampled_3h['error'].abs()
@@ -117,10 +128,13 @@ def analyze():
     comparison_kwh['actual_usage'] *= 0.25
     
     # Aggregating to 24-hour blocks (sum of kWh)
+    # We only want to include days that have ZERO fallback intervals to avoid partial sums
+    daily_fallback_max = comparison['is_fallback_price'].resample('24h').max()
     comparison_resampled_24h = comparison_kwh.resample('24h').sum().dropna()
-    # Filter out partial days (at least 90 out of 96 intervals)
+    
+    # Filter by fallback and also ensure we have enough data points for a full day (at least 90 out of 96 intervals)
     counts = comparison_kwh.resample('24h').count()
-    comparison_resampled_24h = comparison_resampled_24h[counts['actual_usage'] >= 90]
+    comparison_resampled_24h = comparison_resampled_24h[(daily_fallback_max == 0) & (counts['actual_usage'] >= 90)]
 
     if not comparison_resampled_24h.empty:
         comparison_resampled_24h['error'] = comparison_resampled_24h['predicted_usage'] - comparison_resampled_24h['actual_usage']
