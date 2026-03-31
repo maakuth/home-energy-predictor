@@ -196,6 +196,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
         p_min = p_max = get_env_float('GSHP_ELECTRIC_POWER_KW', 4.0)
 
     cop = get_env_float('GSHP_COP', 3.5)
+    heating_efficiency = get_env_float('GSHP_HEATING_EFFICIENCY', 1.0)
     reservoir_l = get_env_float('GSHP_RESERVOIR_LITERS', 500)
     kwh_per_degree = (reservoir_l * 4.18) / 3600.0 
     
@@ -316,7 +317,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
             current_electric_kw = 0
             current_heat_kw = 0
 
-        net_heat_kw = current_heat_kw - demand_kw
+        net_heat_kw = (current_heat_kw * heating_efficiency) - demand_kw
         temp_delta = (net_heat_kw * interval_h) / kwh_per_degree
         
         new_temp = current_temp + temp_delta

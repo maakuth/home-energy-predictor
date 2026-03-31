@@ -390,6 +390,32 @@ class GSHPPlanTests(unittest.TestCase):
         # Should NOT stop because sauna is soon, even if price is high
         self.assertEqual(plan[0]['gshp_intent'], "START")
 
+    def test_gshp_heating_efficiency_impact(self):
+        # 4kW * 3.5 COP = 14kW heat. 
+        # 14kW * 0.25h = 3.5kWh.
+        # 500L => 0.58 kwh/C. 
+        # 3.5 / 0.58 = ~6.03C gain.
+        # With efficiency 0.4: 6.03 * 0.4 = ~2.41C gain.
+        prediction_timestamps = [datetime.now(timezone.utc)] * 2
+        outside_temps = [20.0] * 2 # No loss
+        import_prices = [0.01] * 2 # Force start
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "45.0",
+            "GSHP_MIN_TEMP": "40.0",
+            "GSHP_MAX_TEMP": "60.0",
+            "GSHP_IS_RUNNING": "true",
+            "GSHP_ELECTRIC_POWER_KW": "4.0",
+            "GSHP_COP": "3.5",
+            "GSHP_HEATING_EFFICIENCY": "0.4",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            is_sauna_active = [0] * 2
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            
+        # Expected temp: 45.0 + ~2.41 = 47.41
+        self.assertAlmostEqual(plan[0]["gshp_temp_sim"], 47.41, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()
