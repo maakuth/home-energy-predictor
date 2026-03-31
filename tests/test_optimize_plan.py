@@ -300,6 +300,34 @@ class GSHPPlanTests(unittest.TestCase):
         # Should start immediately or very soon to reach 55 before sauna starts
         self.assertEqual(plan[0]["gshp_intent"], "START")
 
+    def test_gshp_power_ramp(self):
+        # Verify that power increases as temp increases
+        prediction_timestamps = [datetime.now() + timedelta(minutes=15*i) for i in range(20)]
+        outside_temps = [20.0] * 20 # No heat loss
+        import_prices = [0.01] * 20 # Force start
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "42.0",
+            "GSHP_MIN_TEMP": "42.0",
+            "GSHP_MAX_TEMP": "55.0",
+            "GSHP_POWER_MIN_KW": "3.4",
+            "GSHP_POWER_MAX_KW": "4.2",
+            "GSHP_IS_RUNNING": "true",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            is_sauna_active = [0] * len(prediction_timestamps)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            
+        # First interval should be near 3.4kW (at 42C)
+        self.assertAlmostEqual(plan[0]["gshp_electric_kw"], 3.4)
+        
+        # Power should increase in subsequent intervals as temp rises
+        for i in range(1, len(plan)):
+            if plan[i]["gshp_intent"] == "START" and plan[i-1]["gshp_intent"] == "START":
+                # Only check if it didn't hit max_temp in this interval (which would drop actual power)
+                if plan[i]["gshp_temp_sim"] < 55.0:
+                    self.assertGreaterEqual(plan[i]["gshp_electric_kw"], plan[i-1]["gshp_electric_kw"])
+
 
 if __name__ == "__main__":
     unittest.main()

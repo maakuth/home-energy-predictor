@@ -247,9 +247,13 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
 def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices):
     # Constants/Defaults (can be overridden by .env)
-    electric_power_kw = get_env_float('GSHP_ELECTRIC_POWER_KW', 4.0)
+    p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
+    p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)
+    # Maintain fallback for GSHP_ELECTRIC_POWER_KW if both are equal (no ramp)
+    if 'GSHP_ELECTRIC_POWER_KW' in os.environ and 'GSHP_POWER_MIN_KW' not in os.environ and 'GSHP_POWER_MAX_KW' not in os.environ:
+        p_min = p_max = get_env_float('GSHP_ELECTRIC_POWER_KW', 4.0)
+
     cop = get_env_float('GSHP_COP', 3.5)
-    heat_power_kw = electric_power_kw * cop
     reservoir_l = get_env_float('GSHP_RESERVOIR_LITERS', 500)
     kwh_per_degree = (reservoir_l * 4.18) / 3600.0 
     
@@ -328,19 +332,33 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
                 current_temp -= layering_drop
 
         # Update temperature with hardware-limit awareness
-        net_heat_kw = (heat_power_kw if is_hp_running else 0) - demand_kw
+        if is_hp_running:
+            # Calculate current electric power based on temperature ramp
+            # Linear ramp from p_min at min_temp to p_max at max_temp
+            if max_temp > min_temp:
+                clamped_temp = max(min_temp, min(max_temp, current_temp))
+                current_electric_kw = p_min + (p_max - p_min) * (clamped_temp - min_temp) / (max_temp - min_temp)
+            else:
+                current_electric_kw = p_max
+            
+            current_heat_kw = current_electric_kw * cop
+        else:
+            current_electric_kw = 0
+            current_heat_kw = 0
+
+        net_heat_kw = current_heat_kw - demand_kw
         temp_delta = (net_heat_kw * interval_h) / kwh_per_degree
         
         new_temp = current_temp + temp_delta
         
         # Hardware Auto-Stop Logic
-        actual_electric_kw = electric_power_kw if is_hp_running else 0
+        actual_electric_kw = current_electric_kw if is_hp_running else 0
         if is_hp_running and new_temp > max_temp:
             temp_gain_needed = max_temp - current_temp
             total_potential_gain = new_temp - current_temp
             if total_potential_gain > 0:
                 fraction_run = max(0, min(1, temp_gain_needed / total_potential_gain))
-                actual_electric_kw = electric_power_kw * fraction_run
+                actual_electric_kw = current_electric_kw * fraction_run
             
             new_temp = max_temp
             is_hp_running = False
