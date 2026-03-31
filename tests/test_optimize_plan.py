@@ -346,6 +346,50 @@ class GSHPPlanTests(unittest.TestCase):
                 if plan[i]["gshp_temp_sim"] < 55.0:
                     self.assertGreaterEqual(plan[i]["gshp_electric_kw"], plan[i-1]["gshp_electric_kw"])
 
+    def test_gshp_strategic_stop_before_max_temp(self):
+        # Current temp is 51C (Safe, min is 42C, max 55C).
+        # Price now is high (0.25), but drops to 0.15 in 1 hour.
+        prediction_timestamps = [datetime.now(timezone.utc) + timedelta(minutes=15*i) for i in range(20)]
+        outside_temps = [0.0] * 20
+        # Price: 0.25 for 4 intervals (1h), then 0.15
+        import_prices = [0.25] * 4 + [0.15] * 16
+        is_sauna_active = [0] * 20
+
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "51.0",
+            "GSHP_MIN_TEMP": "42.0",
+            "GSHP_MAX_TEMP": "55.0",
+            "GSHP_IS_RUNNING": "true",
+            "GSHP_COP": "3.5",
+            "GSHP_ELECTRIC_POWER_KW": "4.0",
+            "GSHP_HEAT_LOSS_K": "0.1",
+            "PLAN_INTERVAL_MINUTES": "15",
+            "GSHP_STRATEGIC_STOP_DIFF_EUR": "0.05"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+
+        # Should STOP at index 0 because 0.25 is >= 0.15 + 0.05
+        self.assertEqual(plan[0]['gshp_intent'], "STOP")
+
+    def test_gshp_does_not_strategic_stop_when_sauna_soon(self):
+        prediction_timestamps = [datetime.now(timezone.utc) + timedelta(minutes=15*i) for i in range(20)]
+        outside_temps = [0.0] * 20
+        import_prices = [0.25] * 4 + [0.15] * 16
+        # Sauna starts in 2 hours (index 8)
+        is_sauna_active = [0] * 8 + [1] * 4 + [0] * 8
+
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "51.0",
+            "GSHP_MIN_TEMP": "42.0",
+            "GSHP_MAX_TEMP": "55.0",
+            "GSHP_IS_RUNNING": "true",
+            "GSHP_STRATEGIC_STOP_DIFF_EUR": "0.05"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+
+        # Should NOT stop because sauna is soon, even if price is high
+        self.assertEqual(plan[0]['gshp_intent'], "START")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -207,12 +207,17 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
     initial_temp = get_env_float('GSHP_INITIAL_TEMP', 50.0)
     is_hp_running = get_env_bool('GSHP_IS_RUNNING', False)
     layering_drop = get_env_float('GSHP_INITIAL_TEMP_DROP', 3.0)
-    
+
+    # Strategic stop parameters
+    stop_diff_threshold = get_env_float('GSHP_STRATEGIC_STOP_DIFF_EUR', 0.02)
+    # Don't strategically stop if we are too close to min_temp
+    stop_temp_buffer = 2.0 
+
     horizon = len(prediction_timestamps)
     interval_h = get_plan_interval_hours()
     current_temp = initial_temp
     gshp_plan = []
-    
+
     # 8-hour lookahead for optimization
     lookahead_intervals = int(8.0 / interval_h)
 
@@ -220,24 +225,47 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
         price = import_prices[i]
         o_temp = outside_temps[i]
         is_sauna = is_sauna_active[i]
-        
+
         # Calculate base heat demand (house loss)
         demand_kw = max(0, (20.0 - o_temp) * heat_loss_k)
         # Add sauna-induced hot water demand
         if is_sauna:
             demand_kw += sauna_demand_kw
-        
+
         # Decide if we should START/STAY ON
         if is_hp_running:
-            # STOP if we hit max_temp
+            # 1. Hardware Stop
             if current_temp >= max_temp:
                 is_hp_running = False
             else:
-                is_hp_running = True
-        else:
+                # 2. Strategic Stop Lookahead
+                # If we are safely above min_temp, check if we should stop to wait for cheaper price
+                if current_temp > (min_temp + stop_temp_buffer):
+                    # Check if a sauna is soon - if so, don't strategically stop
+                    sauna_soon = any(is_sauna_active[i : i + int(6.0/interval_h)])
+                    if not sauna_soon:
+                        # Find cheapest price before we WOULD HAVE to restart if we stopped now
+                        temp_sim = current_temp
+                        intervals_to_min = horizon - i
+                        for j in range(i, min(i + lookahead_intervals, horizon)):
+                            o_j = outside_temps[j]
+                            d_j = max(0, (20.0 - o_j) * heat_loss_k)
+                            if is_sauna_active[j]:
+                                d_j += sauna_demand_kw
+                            temp_sim -= (d_j * interval_h) / kwh_per_degree
+                            if temp_sim <= min_temp:
+                                intervals_to_min = j - i
+                                break
+
+                        if intervals_to_min > 1: # Only stop if we can actually wait a bit
+                            window_prices = import_prices[i : i + intervals_to_min + 1]
+                            min_price_in_window = np.min(window_prices)
+                            if price >= (min_price_in_window + stop_diff_threshold):
+                                is_hp_running = False
+
+        if not is_hp_running:
             # Check if we MUST start because we are at min_temp
             should_start = (current_temp <= min_temp)
-            
             # Strategic Buffer/Pre-heating
             if not should_start and current_temp < (max_temp - 2.0):
                 # 1. Check if sauna is starting soon (within 6 hours)
