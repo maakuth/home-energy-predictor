@@ -211,7 +211,8 @@ class GSHPPlanTests(unittest.TestCase):
             "GSHP_HEAT_LOSS_K": "0.1",
             "PLAN_INTERVAL_MINUTES": "15"
         }):
-            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            is_sauna_active = [0] * len(prediction_timestamps)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
             
         # Should stay STOP for the first several intervals
         self.assertEqual(plan[0]["gshp_intent"], "STOP")
@@ -231,7 +232,8 @@ class GSHPPlanTests(unittest.TestCase):
             "GSHP_HEAT_LOSS_K": "0.1",
             "PLAN_INTERVAL_MINUTES": "15"
         }):
-            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            is_sauna_active = [0] * len(prediction_timestamps)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
             
         # Should start immediately to take advantage of the 0.05 price
         self.assertEqual(plan[0]["gshp_intent"], "START")
@@ -249,7 +251,8 @@ class GSHPPlanTests(unittest.TestCase):
             "GSHP_COP": "3.5",
             "PLAN_INTERVAL_MINUTES": "15"
         }):
-            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            is_sauna_active = [0] * len(prediction_timestamps)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
             
         # First interval it's already running and stays running until it crosses 55
         self.assertEqual(plan[0]["gshp_intent"], "START")
@@ -267,7 +270,8 @@ class GSHPPlanTests(unittest.TestCase):
             "GSHP_IS_RUNNING": "false",
             "PLAN_INTERVAL_MINUTES": "15"
         }):
-            plan = plan_gshp_dispatch(prediction_timestamps, outside_temps, import_prices)
+            is_sauna_active = [0] * len(prediction_timestamps)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
             
         # Initial temp 50. After start, sim_temp should include the -3.0 drop
         # plus the heat gain from the interval. 
@@ -275,6 +279,26 @@ class GSHPPlanTests(unittest.TestCase):
         # Net: 50 - 3 + 6 = 53.
         self.assertLess(plan[0]["gshp_temp_sim"], 55.0)
         self.assertGreater(plan[0]["gshp_temp_sim"], 51.0) # 50 - 3 + some gain
+
+    def test_gshp_preheats_before_sauna(self):
+        # Temp is 50C. Sauna starts in 3 hours.
+        # Even if prices are constant, we should start to buffer.
+        prediction_timestamps = [datetime.now() + timedelta(minutes=15*i) for i in range(24)]
+        outside_temps = [0.0] * 24
+        import_prices = [0.20] * 24
+        
+        # Sauna starts at index 12 (3 hours)
+        is_sauna_active = [0] * 12 + [1] * 4 + [0] * 8
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "50.0",
+            "GSHP_IS_RUNNING": "false",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            
+        # Should start immediately or very soon to reach 55 before sauna starts
+        self.assertEqual(plan[0]["gshp_intent"], "START")
 
 
 if __name__ == "__main__":

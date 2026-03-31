@@ -20,7 +20,8 @@ ENTITIES = {
     'device_tracker.xpz_491_position': 'ev_position',
     'sensor.sahkokauppa_nyt': 'total_power',
     'sensor.solcast_pv_forecast_forecast_tomorrow': 'solar_forecast',
-    'sensor.solarh_63038_real_power_kw': 'solar_actual'
+    'sensor.solarh_63038_real_power_kw': 'solar_actual',
+    'sensor.sauna_temperature_2': 'sauna_temp'
 }
 
 def get_metadata_ids(cur):

@@ -55,6 +55,9 @@ def process_data():
         df['outside_temp'] = df['outside_temp'].ffill().clip(lower=-50, upper=50)
     if 'accumulator_temp' in df.columns:
         df['accumulator_temp'] = df['accumulator_temp'].ffill().clip(lower=0, upper=100)
+    if 'sauna_temp' in df.columns:
+        df['sauna_temp'] = df['sauna_temp'].ffill().clip(lower=0, upper=120)
+        df['is_sauna_active'] = (df['sauna_temp'] > 30).astype(int)
 
     print('Applying fireplace logic...')
     if 'accumulator_temp' in df.columns:

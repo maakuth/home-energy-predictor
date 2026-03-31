@@ -56,6 +56,15 @@ def predict():
     except (ValueError, TypeError, AttributeError):
         acc_val = 45.0
 
+    sauna_temp = get_ha_state('sensor.sauna_temperature_2')
+    try:
+        s_temp_val = float(sauna_temp.get('state')) if sauna_temp and sauna_temp.get('state') not in ['unknown', 'unavailable'] else 20.0
+    except (ValueError, TypeError, AttributeError):
+        s_temp_val = 20.0
+    
+    # Is sauna currently heating up?
+    is_sauna_detected = s_temp_val > 30.0
+
     ev_soc = get_ha_state('sensor.xpz_491_battery_level')
     try:
         soc_val = float(ev_soc.get('state')) if ev_soc and ev_soc.get('state') not in ['unknown', 'unavailable'] else 80.0
@@ -98,6 +107,25 @@ def predict():
         except Exception:
             solar_val = 0.0
             
+        # Sauna Heuristic Projection
+        # 1. Real-time detection (4-hour window from now if already hot)
+        is_sauna_proj = 0
+        if is_sauna_detected and current_ts < (now + timedelta(hours=4)):
+            is_sauna_proj = 1
+        
+        # 2. Schedule Heuristic (Sept-May)
+        month = current_ts.month
+        if month in [9,10,11,12,1,2,3,4,5]:
+            is_weekend = current_ts.weekday() >= 5
+            hour = current_ts.hour
+            # Weekend evenings: 18-22
+            if is_weekend and 18 <= hour <= 21:
+                is_sauna_proj = 1
+            # Weekday heuristic: every second evening? 
+            # Simplified: Assume even days are sauna days for now
+            elif not is_weekend and 18 <= hour <= 21 and (current_ts.day % 2 == 0):
+                is_sauna_proj = 1
+
         row = {
             'outside_temp': temp_val,
             'solar_forecast': solar_val,
@@ -108,7 +136,8 @@ def predict():
             'hour': current_ts.hour,
             'quarter_hour': current_ts.minute // 15,
             'day_of_week': current_ts.weekday(),
-            'month': current_ts.month
+            'month': current_ts.month,
+            'is_sauna_active': is_sauna_proj
         }
         inference_data.append(row)
         timestamps.append(current_ts.isoformat())
@@ -129,7 +158,8 @@ def predict():
             'predicted_baseload': p_kw,     # house usage without GSHP (kW)
             'predicted_usage': p_kw,        # backward compatibility
             'solar_forecast': float(inference_data[i]['solar_forecast']),
-            'outside_temp': float(inference_data[i]['outside_temp'])
+            'outside_temp': float(inference_data[i]['outside_temp']),
+            'is_sauna_active': int(inference_data[i].get('is_sauna_active', 0))
         })
         
     print(f'\nGenerated {len(results)} predictions at {interval}-minute resolution.')
