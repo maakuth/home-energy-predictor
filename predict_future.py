@@ -4,6 +4,7 @@ import numpy as np
 import xgboost as xgb
 import json
 import sqlite3
+import psycopg2
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
@@ -12,6 +13,41 @@ from utils.price_utils import fetch_market_prices
 load_dotenv(override=True)
 
 PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
+
+def fetch_sensor_history(entity_id, hours=1):
+    """Fetch recent history for an entity from PostgreSQL."""
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            connect_timeout=5
+        )
+        cur = conn.cursor()
+        
+        # Get metadata_id
+        cur.execute("SELECT metadata_id FROM states_meta WHERE entity_id = %s", (entity_id,))
+        row = cur.fetchone()
+        if not row:
+            return pd.DataFrame()
+        metadata_id = row[0]
+        
+        start_ts = (datetime.now() - timedelta(hours=hours)).timestamp()
+        cur.execute("SELECT last_updated_ts, state FROM states WHERE metadata_id = %s AND last_updated_ts > %s", (metadata_id, start_ts))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        df = pd.DataFrame(rows, columns=['ts', 'state'])
+        df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+        df['state'] = pd.to_numeric(df['state'], errors='coerce')
+        return df.dropna().sort_values('timestamp')
+    except Exception as e:
+        print(f"⚠️ Could not fetch history for {entity_id}: {e}")
+        return pd.DataFrame()
+
 
 def predict():
     print('Syncing with Home Assistant...')
@@ -63,8 +99,39 @@ def predict():
     except (ValueError, TypeError, AttributeError):
         s_temp_val = 20.0
     
-    # Is sauna currently heating up?
-    is_sauna_detected = s_temp_val > 30.0
+    # Is sauna currently heating up? (Rising temperature check)
+    is_sauna_detected = False
+    if s_temp_val > 30.0:
+        # Fetch last 30 mins to see if it's rising
+        s_history = fetch_sensor_history('sensor.sauna_temperature_2', hours=0.5)
+        if not s_history.empty and len(s_history) > 1:
+            # Check if current is higher than 30 mins ago
+            first_val = s_history.iloc[0]['state']
+            if s_temp_val > (first_val + 1.0):
+                is_sauna_detected = True
+                print(f"🔥 Sauna heating detected: {first_val:.1f}C -> {s_temp_val:.1f}C")
+            else:
+                print(f"♨️ Sauna is warm but not rising: {s_temp_val:.1f}C (steady or cooling)")
+
+    # Heuristic for tomorrow's sauna: Was it warm yesterday evening?
+    # Check history from yesterday 18:00 to 22:00
+    now_local = datetime.now()
+    yesterday_evening_start = (now_local - timedelta(days=1)).replace(hour=18, minute=0, second=0)
+    # We need to fetch enough history to cover that period
+    hours_to_fetch = (now_local - yesterday_evening_start).total_seconds() / 3600.0 + 4.0
+    s_yesterday = fetch_sensor_history('sensor.sauna_temperature_2', hours=hours_to_fetch)
+    
+    was_warm_yesterday = False
+    if not s_yesterday.empty:
+        # Filter to 18-22 window
+        s_y_window = s_yesterday[
+            (s_yesterday['timestamp'].dt.hour >= 18) & 
+            (s_yesterday['timestamp'].dt.hour <= 22) &
+            (s_yesterday['timestamp'].dt.day == yesterday_evening_start.day)
+        ]
+        if not s_y_window.empty and s_y_window['state'].max() > 50.0:
+            was_warm_yesterday = True
+            print("📅 Sauna was used yesterday evening.")
 
     ev_soc = get_ha_state('sensor.xpz_491_battery_level')
     try:
@@ -122,9 +189,8 @@ def predict():
             # Weekend evenings: 18-22
             if is_weekend and 18 <= hour <= 21:
                 is_sauna_proj = 1
-            # Weekday heuristic: every second evening? 
-            # Simplified: Assume even days are sauna days for now
-            elif not is_weekend and 18 <= hour <= 21 and (current_ts.day % 2 == 0):
+            # Weekday heuristic: If it WASN'T warm yesterday, assume it might be today
+            elif not is_weekend and 18 <= hour <= 21 and not was_warm_yesterday:
                 is_sauna_proj = 1
 
         row = {
