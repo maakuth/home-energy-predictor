@@ -4,50 +4,15 @@ import numpy as np
 import xgboost as xgb
 import json
 import sqlite3
-import psycopg2
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
 from utils.price_utils import fetch_market_prices
+from utils.db_utils import fetch_states_history
 
 load_dotenv(override=True)
 
 PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
-
-def fetch_sensor_history(entity_id, hours=1):
-    """Fetch recent history for an entity from PostgreSQL."""
-    try:
-        conn = psycopg2.connect(
-            host=os.getenv("DB_HOST"),
-            port=os.getenv("DB_PORT"),
-            database=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD"),
-            connect_timeout=5
-        )
-        cur = conn.cursor()
-        
-        # Get metadata_id
-        cur.execute("SELECT metadata_id FROM states_meta WHERE entity_id = %s", (entity_id,))
-        row = cur.fetchone()
-        if not row:
-            return pd.DataFrame()
-        metadata_id = row[0]
-        
-        start_ts = (datetime.now() - timedelta(hours=hours)).timestamp()
-        cur.execute("SELECT last_updated_ts, state FROM states WHERE metadata_id = %s AND last_updated_ts > %s", (metadata_id, start_ts))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        df = pd.DataFrame(rows, columns=['ts', 'state'])
-        df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
-        df['state'] = pd.to_numeric(df['state'], errors='coerce')
-        return df.dropna().sort_values('timestamp')
-    except Exception as e:
-        print(f"⚠️ Could not fetch history for {entity_id}: {e}")
-        return pd.DataFrame()
-
 
 def predict():
     print('Syncing with Home Assistant...')
@@ -103,7 +68,8 @@ def predict():
     is_sauna_detected = False
     if s_temp_val > 30.0:
         # Fetch last 30 mins to see if it's rising
-        s_history = fetch_sensor_history('sensor.sauna_temperature_2', hours=0.5)
+        s_history_dict = fetch_states_history('sensor.sauna_temperature_2', hours=0.5)
+        s_history = s_history_dict.get('sensor.sauna_temperature_2', pd.DataFrame())
         if not s_history.empty and len(s_history) > 1:
             # Check if current is higher than 30 mins ago
             first_val = s_history.iloc[0]['state']
@@ -119,7 +85,8 @@ def predict():
     yesterday_evening_start = (now_local - timedelta(days=1)).replace(hour=18, minute=0, second=0)
     # We need to fetch enough history to cover that period
     hours_to_fetch = (now_local - yesterday_evening_start).total_seconds() / 3600.0 + 4.0
-    s_yesterday = fetch_sensor_history('sensor.sauna_temperature_2', hours=hours_to_fetch)
+    s_yesterday_dict = fetch_states_history('sensor.sauna_temperature_2', hours=hours_to_fetch)
+    s_yesterday = s_yesterday_dict.get('sensor.sauna_temperature_2', pd.DataFrame())
     
     was_warm_yesterday = False
     if not s_yesterday.empty:

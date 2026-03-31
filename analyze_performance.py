@@ -1,52 +1,37 @@
 import os
 import pandas as pd
 import numpy as np
-import psycopg2
 import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
+from utils.db_utils import fetch_states_history
 
 load_dotenv(override=True)
 
 def fetch_actuals(days=2):
     print(f"Fetching actuals for last {days} days from PostgreSQL...")
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
-    cur = conn.cursor()
-    
     entities = {
         'sensor.sahkokauppa_nyt': 'total_power',
         'sensor.solarh_63038_real_power_kw': 'solar_actual'
     }
     
-    query = "SELECT metadata_id, entity_id FROM states_meta WHERE entity_id IN %s"
-    cur.execute(query, (tuple(entities.keys()),))
-    meta = {row[1]: row[0] for row in cur.fetchall()}
+    # Use central utility
+    hist_data = fetch_states_history(list(entities.keys()), hours=days*24)
     
-    start_ts = (datetime.now() - timedelta(days=days)).timestamp()
-    all_data = []
+    all_resampled = []
+    for eid, col_name in entities.items():
+        df = hist_data.get(eid)
+        if df is not None and not df.empty:
+            df = df.rename(columns={'state': col_name})
+            all_resampled.append(df.set_index('timestamp').resample('15min').mean())
     
-    for entity_id, col_name in entities.items():
-        if entity_id not in meta: continue
-        cur.execute("SELECT last_updated_ts, state FROM states WHERE metadata_id = %s AND last_updated_ts > %s", (meta[entity_id], start_ts))
-        rows = cur.fetchall()
-        df = pd.DataFrame(rows, columns=['ts', col_name])
-        df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
-        df = df.set_index('timestamp').drop(columns=['ts'])
-        df[col_name] = pd.to_numeric(df[col_name], errors='coerce')
-        all_data.append(df.resample('15min').mean())
-    
-    cur.close()
-    conn.close()
-    
-    df_actual = pd.concat(all_data, axis=1).fillna(0)
-    df_actual['actual_usage'] = df_actual['total_power'] + df_actual['solar_actual']
+    if not all_resampled:
+        print("⚠️ No data fetched from PostgreSQL.")
+        return pd.DataFrame(columns=['actual_usage'])
+
+    df_actual = pd.concat(all_resampled, axis=1).fillna(0)
+    df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0)
     return df_actual[['actual_usage']]
 
 def analyze():
