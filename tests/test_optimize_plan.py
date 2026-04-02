@@ -299,24 +299,27 @@ class GSHPPlanTests(unittest.TestCase):
         self.assertGreater(plan[0]["gshp_temp_sim"], 51.0) # 50 - 3 + some gain
 
     def test_gshp_preheats_before_sauna(self):
-        # Temp is 50C. Sauna starts in 3 hours.
-        # Even if prices are constant, we should start to buffer.
+        # Temp is high (54C). Sauna starts in 3 hours.
+        # Price is high now (0.30), but drops later (0.10).
+        # Normal arbitrage would wait. Aggressive sauna logic would have started.
         prediction_timestamps = [datetime.now() + timedelta(minutes=15*i) for i in range(24)]
         outside_temps = [0.0] * 24
-        import_prices = [0.20] * 24
+        import_prices = [0.30] * 12 + [0.10] * 12
         
         # Sauna starts at index 12 (3 hours)
         is_sauna_active = [0] * 12 + [1] * 4 + [0] * 8
         
         with patched_env({
-            "GSHP_INITIAL_TEMP": "50.0",
+            "GSHP_INITIAL_TEMP": "54.0",
             "GSHP_IS_RUNNING": "false",
-            "PLAN_INTERVAL_MINUTES": "15"
+            "PLAN_INTERVAL_MINUTES": "15",
+            "GSHP_MIN_TEMP": "42.0",
+            "GSHP_MAX_TEMP": "55.0"
         }):
             plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
             
-        # Should start immediately or very soon to reach 55 before sauna starts
-        self.assertEqual(plan[0]["gshp_intent"], "START")
+        # Should NOT start immediately anymore (no aggressive pre-heat, waiting for 0.10 price)
+        self.assertEqual(plan[0]["gshp_intent"], "STOP")
 
     def test_gshp_power_ramp(self):
         # Verify that power increases as temp increases
@@ -387,8 +390,8 @@ class GSHPPlanTests(unittest.TestCase):
         }):
             plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
 
-        # Should NOT stop because sauna is soon, even if price is high
-        self.assertEqual(plan[0]['gshp_intent'], "START")
+        # Now it SHOULD stop because sauna is no longer protected from strategic stops
+        self.assertEqual(plan[0]['gshp_intent'], "STOP")
 
     def test_gshp_heating_efficiency_impact(self):
         # 4kW * 3.5 COP = 14kW heat. 
