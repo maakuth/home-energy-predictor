@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
+import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
@@ -449,6 +450,55 @@ def optimize():
     with open('optimization_plan.json', 'w') as f:
         json.dump(final_plan, f, indent=2)
     print('\n✅ Plan saved to optimization_plan.json')
+
+    # Archive the TOTAL planned usage to hepo.db for accuracy tracking
+    # This ensures analyze_performance.py compares actuals against Baseload + Planned GSHP
+    db_file = 'hepo.db'
+    generated_at = datetime.now().astimezone().isoformat()
+    try:
+        conn = sqlite3.connect(db_file)
+        cur = conn.cursor()
+        
+        # Ensure table exists (re-using logic from predict_future.py)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS predictions (
+                target_timestamp TEXT,
+                generated_at TEXT,
+                predicted_usage_kw REAL,
+                solar_forecast_kw REAL,
+                PRIMARY KEY (target_timestamp, generated_at)
+            )
+        ''')
+        
+        # Schema migration: add is_fallback_price if missing
+        cur.execute("PRAGMA table_info(predictions)")
+        columns = [c[1] for c in cur.fetchall()]
+        if 'is_fallback_price' not in columns:
+            cur.execute("ALTER TABLE predictions ADD COLUMN is_fallback_price INTEGER DEFAULT 0")
+
+        # We reuse the same table schema as predict_future.py
+        data_to_insert = [
+            (
+                item['timestamp'], 
+                generated_at, 
+                item['predicted_usage_kw'], 
+                item['solar_forecast_kw'], 
+                item['is_fallback_price']
+            )
+            for item in final_plan
+        ]
+        
+        cur.executemany('''
+            INSERT OR REPLACE INTO predictions 
+            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price)
+            VALUES (?, ?, ?, ?, ?)
+        ''', data_to_insert)
+        
+        conn.commit()
+        conn.close()
+        print(f'✅ Archived {len(final_plan)} optimized points to {db_file}')
+    except Exception as e:
+        print(f'⚠️ Error archiving optimized plan to SQLite: {e}')
 
 if __name__ == '__main__':
     optimize()

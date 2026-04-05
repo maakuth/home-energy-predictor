@@ -6,7 +6,65 @@ from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 
-from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices, plan_gshp_dispatch
+from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices, plan_gshp_dispatch, optimize
+import sqlite3
+import os
+import json
+from unittest.mock import patch, MagicMock
+
+class OptimizeArchivingTests(unittest.TestCase):
+    def setUp(self):
+        self.db_file = 'hepo.db'
+        if os.path.exists(self.db_file):
+            os.remove(self.db_file)
+        
+        # Setup dummy predictions
+        self.predictions_data = [
+            {
+                "timestamp": "2026-04-05T13:15:00+03:00",
+                "predicted_baseload": 2.0,
+                "solar_forecast": 0.5,
+                "outside_temp": 5.0,
+                "is_sauna_active": 0,
+                "is_fallback_price": 0
+            }
+        ]
+        with open('future_predictions.json', 'w') as f:
+            json.dump(self.predictions_data, f)
+
+    def tearDown(self):
+        if os.path.exists(self.db_file):
+            os.remove(self.db_file)
+        if os.path.exists('future_predictions.json'):
+            os.remove('future_predictions.json')
+        if os.path.exists('optimization_plan.json'):
+            os.remove('optimization_plan.json')
+
+    @patch('optimize_plan.get_ha_state')
+    @patch('optimize_plan.fetch_market_prices')
+    def test_optimize_archives_to_db(self, mock_prices, mock_ha):
+        # Mocking external calls
+        mock_prices.return_value = ([0.1], [0], "Nordpool")
+        mock_ha.return_value = {"state": "50.0"} # acc_temp
+        
+        # Run optimize
+        # We need to ensure we don't crash on other HA calls
+        mock_ha.side_effect = lambda x: {"state": "0"} if x == "sensor.mlp_teho" else {"state": "50.0"}
+
+        optimize()
+        
+        # Verify DB
+        self.assertTrue(os.path.exists(self.db_file))
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        cur.execute("SELECT predicted_usage_kw FROM predictions LIMIT 1")
+        row = cur.fetchone()
+        conn.close()
+        
+        self.assertIsNotNone(row)
+        # Predicted usage should be at least baseload (2.0)
+        # GSHP might be 0 or more depending on prices/temp
+        self.assertGreaterEqual(row[0], 2.0)
 
 
 @contextmanager
