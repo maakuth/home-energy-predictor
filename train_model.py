@@ -23,14 +23,21 @@ def train():
         'outside_temp', 'solar_forecast', 
         'accumulator_temp', 'acc_roc', 'is_fireplace_lag1', 
         'ev_soc', 'ev_position',
+        'is_extended_complex',
         'hour', 'minute', 'quarter_hour', 'day_of_week', 'month'
     ]
     
     X = df[features]
     y = df[target]
+
+    # Calculate weights: Give more weight to recent data (last 6 months)
+    # This helps the model anchor to the new building's consumption levels.
+    weights = np.where(df['is_extended_complex'] == 1, 3.0, 1.0)
     
     print(f'Training with features: {features}')
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test, w_train, w_test = train_test_split(
+        X, y, weights, test_size=0.2, random_state=42
+    )
     
     # Model Specification
     model = xgb.XGBRegressor(
@@ -44,7 +51,9 @@ def train():
     print('Fitting model...')
     model.fit(
         X_train, y_train,
+        sample_weight=w_train,
         eval_set=[(X_test, y_test)],
+        sample_weight_eval=[w_test],
         verbose=False
     )
     

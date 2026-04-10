@@ -411,8 +411,8 @@ def optimize():
     print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {'RUNNING' if is_hp_currently_running else 'STOPPED'}")
     
     final_plan = []
-    print('Time | Baseload | GSHP kW | Market | Import | Solar | SOC% | Intent | Acc Sim')
-    print('-----|----------|---------|--------|--------|-------|------|--------|--------')
+    print('Time        | Baseload | GSHP kW | Market | Import | Solar | SOC% | Intent | Acc Sim')
+    print('------------|----------|---------|--------|--------|-------|------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
         p_baseload_kw = float(predictions[i])
         p_gshp_kw = float(planned_gshp_kw[i])

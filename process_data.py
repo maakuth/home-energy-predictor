@@ -69,6 +69,11 @@ def process_data():
         df['is_fireplace_active'] = ((df['acc_roc'] > 0.3) & (df['total_hp_power'] < 0.5)).astype(int)
         df['is_fireplace_lag1'] = df['is_fireplace_active'].shift(1).fillna(0)
     
+    print('Adding structural change features...')
+    # New building added roughly Oct 1st 2025
+    structural_change_date = pd.to_datetime('2025-10-01', utc=True)
+    df['is_extended_complex'] = (df.index >= structural_change_date).astype(int)
+
     print('Adding temporal features...')
     df['hour'] = df.index.hour
     df['minute'] = df.index.minute

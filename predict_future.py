@@ -168,6 +168,7 @@ def predict():
             'is_fireplace_lag1': 0,
             'ev_soc': soc_val,
             'ev_position': 1, # Assume home
+            'is_extended_complex': 1,
             'hour': current_ts.hour,
             'minute': current_ts.minute,
             'quarter_hour': current_ts.minute // 15,
