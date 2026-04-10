@@ -24,7 +24,7 @@ def process_data():
         df['ev_position'] = df['ev_position'].ffill().fillna(False).astype(int)
 
     numeric_cols = df.select_dtypes(include=[np.number]).columns
-    rolled = df[numeric_cols].rolling(window=3, center=True).median()
+    rolled = df[numeric_cols].rolling(window=15, center=True).median()
     df[numeric_cols] = rolled.fillna(df[numeric_cols])
     
     # Compute total home consumption BEFORE clipping, because total_power (grid meter)
@@ -71,6 +71,7 @@ def process_data():
     
     print('Adding temporal features...')
     df['hour'] = df.index.hour
+    df['minute'] = df.index.minute
     df['quarter_hour'] = df.index.minute // 15
     df['day_of_week'] = df.index.dayofweek
     df['month'] = df.index.month

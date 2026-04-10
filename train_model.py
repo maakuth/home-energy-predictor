@@ -21,9 +21,9 @@ def train():
     # Temporal: hour, quarter_hour, day_of_week, month
     features = [
         'outside_temp', 'solar_forecast', 
-        'accumulator_temp', 'is_fireplace_lag1', 
+        'accumulator_temp', 'acc_roc', 'is_fireplace_lag1', 
         'ev_soc', 'ev_position',
-        'hour', 'quarter_hour', 'day_of_week', 'month'
+        'hour', 'minute', 'quarter_hour', 'day_of_week', 'month'
     ]
     
     X = df[features]

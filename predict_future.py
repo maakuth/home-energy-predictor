@@ -12,7 +12,7 @@ from utils.db_utils import fetch_states_history
 
 load_dotenv(override=True)
 
-PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
+PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '1'))
 
 def predict():
     print('Syncing with Home Assistant...')
@@ -164,10 +164,12 @@ def predict():
             'outside_temp': temp_val,
             'solar_forecast': solar_val,
             'accumulator_temp': acc_val,
+            'acc_roc': 0, # Placeholder for future prediction
             'is_fireplace_lag1': 0,
             'ev_soc': soc_val,
             'ev_position': 1, # Assume home
             'hour': current_ts.hour,
+            'minute': current_ts.minute,
             'quarter_hour': current_ts.minute // 15,
             'day_of_week': current_ts.weekday(),
             'month': current_ts.month,
