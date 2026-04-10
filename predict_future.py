@@ -12,7 +12,7 @@ from utils.db_utils import fetch_states_history
 
 load_dotenv(override=True)
 
-PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '1'))
+PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
 
 def predict():
     print('Syncing with Home Assistant...')
