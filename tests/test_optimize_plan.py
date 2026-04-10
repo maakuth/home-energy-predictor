@@ -453,6 +453,48 @@ class GSHPPlanTests(unittest.TestCase):
         # Expected temp: 45.0 + ~2.41 = 47.41
         self.assertAlmostEqual(plan[0]["gshp_temp_sim"], 47.41, places=2)
 
+    def test_gshp_strategic_stop_for_single_interval(self):
+        # Current temp is 43.1C (Min 42.0 + buffer 1.0). 
+        # Price now is 0.15, price in next interval is 0.10.
+        # It will hit min_temp in next interval, so intervals_to_min = 1.
+        prediction_timestamps = [datetime.now(timezone.utc) + timedelta(minutes=15*i) for i in range(4)]
+        outside_temps = [10.0] * 4
+        import_prices = [0.15, 0.10, 0.10, 0.10]
+        solar_forecast_kw = [0.0] * 4
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "43.1",
+            "GSHP_MIN_TEMP": "42.0",
+            "GSHP_IS_RUNNING": "true",
+            "GSHP_STRATEGIC_STOP_DIFF_EUR": "0.02"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, [0]*4, outside_temps, import_prices, import_prices, solar_forecast_kw)
+            
+        # SHOULD stop at index 0 because 0.15 >= 0.10 + 0.02
+        self.assertEqual(plan[0]['gshp_intent'], "STOP")
+
+    def test_gshp_preheats_more_with_solar(self):
+        # Temp is 54.0C (Max 55.0). 
+        # Import price 0.20, Export price 0.10.
+        # Now we have solar (10kW), so effective price is 0.10.
+        prediction_timestamps = [datetime.now(timezone.utc) + timedelta(minutes=15*i) for i in range(4)]
+        outside_temps = [10.0] * 4
+        import_prices = [0.20] * 4
+        export_prices = [0.10] * 4
+        solar_forecast_kw = [10.0] * 4
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "54.0",
+            "GSHP_MIN_TEMP": "42.0",
+            "GSHP_MAX_TEMP": "55.0",
+            "GSHP_IS_RUNNING": "false"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, [0]*4, outside_temps, import_prices, export_prices, solar_forecast_kw)
+            
+        # SHOULD start pre-heating because buffer_margin is 0.0 for solar, 
+        # so 54.0 < (55.0 - 0.0) is true.
+        self.assertEqual(plan[0]['gshp_intent'], "START")
+
 
 if __name__ == "__main__":
     unittest.main()
