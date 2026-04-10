@@ -188,7 +188,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     return battery_plan
 
 
-def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices):
+def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, export_prices=None, solar_forecast_kw=None):
     # Constants/Defaults (can be overridden by .env)
     p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
     p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)
@@ -220,11 +220,30 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
     current_temp = initial_temp
     gshp_plan = []
 
+    # Solar-aware pricing for decisions: 
+    # The cost of using solar is the opportunity cost (lost export revenue)
+    if solar_forecast_kw is not None and export_prices is not None:
+        effective_prices = []
+        for i in range(horizon):
+            solar_kw = solar_forecast_kw[i]
+            if solar_kw >= p_max:
+                # Fully covered by solar. Cost = export price (opportunity cost)
+                effective_prices.append(export_prices[i])
+            elif solar_kw > 0:
+                # Partially covered. Weighted average of export and import prices
+                cost = (solar_kw * export_prices[i] + (p_max - solar_kw) * import_prices[i]) / p_max
+                effective_prices.append(max(0.0, cost))
+            else:
+                effective_prices.append(import_prices[i])
+        effective_prices = np.array(effective_prices)
+    else:
+        effective_prices = np.array(import_prices)
+
     # 8-hour lookahead for optimization
     lookahead_intervals = int(8.0 / interval_h)
 
     for i in range(horizon):
-        price = import_prices[i]
+        price = effective_prices[i]
         o_temp = outside_temps[i]
         is_sauna = is_sauna_active[i]
 
@@ -257,7 +276,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
                             break
 
                     if intervals_to_min > 1: # Only stop if we can actually wait a bit
-                        window_prices = import_prices[i : i + intervals_to_min + 1]
+                        window_prices = effective_prices[i : i + intervals_to_min + 1]
                         min_price_in_window = np.min(window_prices)
                         if price >= (min_price_in_window + stop_diff_threshold):
                             is_hp_running = False
@@ -266,7 +285,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
             # Check if we MUST start because we are at min_temp
             should_start = (current_temp <= min_temp)
             # Strategic Buffer/Pre-heating
-            if not should_start and current_temp < (max_temp - 2.0):
+            if not should_start and current_temp < (max_temp - 1.5):
                 # General Arbitrage Lookahead
                 temp_sim = current_temp
                 intervals_to_min = horizon - i
@@ -281,7 +300,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
                         break
                 
                 if intervals_to_min < lookahead_intervals:
-                    window_prices = import_prices[i : i + intervals_to_min + 1]
+                    window_prices = effective_prices[i : i + intervals_to_min + 1]
                     cheapest_in_window = np.min(window_prices)
                     if price <= cheapest_in_window:
                         should_start = True
@@ -372,7 +391,7 @@ def optimize():
 
     outside_temps = [p.get('outside_temp', 5.0) for p in predictions_data]
     is_sauna_active = [p.get('is_sauna_active', 0) for p in predictions_data]
-    gshp_plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+    gshp_plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, export_prices, solar_array)
 
     # Combine Baseload + Planned GSHP for Battery optimization
     planned_gshp_kw = np.array([g['gshp_electric_kw'] for g in gshp_plan])

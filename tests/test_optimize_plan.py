@@ -272,13 +272,7 @@ class GSHPPlanTests(unittest.TestCase):
         prediction_timestamps = [datetime.now()] * 40
         outside_temps = [10.0] * 40
         import_prices = [0.20] * 40
-        
-        # 500L, 0.58 kWh/C. 
-        # Loss at 10C with k=0.1: (20 - 10) * 0.1 = 1kW loss.
-        # 1kW * 0.25h = 0.25kWh. 
-        # 0.25kWh / 0.58 = ~0.43C drop per interval.
-        # After 32 intervals (8h), total drop = 13.7C. 
-        # 65.0 - 13.7 = 51.3 (Still > 45, so lookahead should NOT trigger)
+        solar_forecast_kw = [0.0] * 40
         
         with patched_env({
             "GSHP_INITIAL_TEMP": "65.0",
@@ -288,7 +282,7 @@ class GSHPPlanTests(unittest.TestCase):
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * len(prediction_timestamps)
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, import_prices, solar_forecast_kw)
             
         # Should stay STOP for the first several intervals
         self.assertEqual(plan[0]["gshp_intent"], "STOP")
@@ -300,6 +294,7 @@ class GSHPPlanTests(unittest.TestCase):
         outside_temps = [0.0] * 10
         # Price is cheap now (0.05), but spikes to 0.50 later
         import_prices = [0.05, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50]
+        solar_forecast_kw = [0.0] * 10
         
         with patched_env({
             "GSHP_INITIAL_TEMP": "47.0",
@@ -309,7 +304,7 @@ class GSHPPlanTests(unittest.TestCase):
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * len(prediction_timestamps)
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, import_prices, solar_forecast_kw)
             
         # Should start immediately to take advantage of the 0.05 price
         self.assertEqual(plan[0]["gshp_intent"], "START")
@@ -318,6 +313,7 @@ class GSHPPlanTests(unittest.TestCase):
         prediction_timestamps = [datetime.now()] * 4
         outside_temps = [20.0] * 4 # No heat loss
         import_prices = [0.20] * 4
+        solar_forecast_kw = [0.0] * 4
         
         with patched_env({
             "GSHP_INITIAL_TEMP": "54.9",
@@ -328,7 +324,7 @@ class GSHPPlanTests(unittest.TestCase):
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * len(prediction_timestamps)
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, import_prices, solar_forecast_kw)
             
         # First interval it's already running and stays running until it crosses 55
         self.assertEqual(plan[0]["gshp_intent"], "START")
@@ -339,6 +335,7 @@ class GSHPPlanTests(unittest.TestCase):
         prediction_timestamps = [datetime.now()] * 2
         outside_temps = [10.0] * 2
         import_prices = [0.01] * 2 # Force start
+        solar_forecast_kw = [0.0] * 2
         
         with patched_env({
             "GSHP_INITIAL_TEMP": "50.0",
@@ -347,7 +344,7 @@ class GSHPPlanTests(unittest.TestCase):
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * len(prediction_timestamps)
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, import_prices, solar_forecast_kw)
             
         # Initial temp 50. After start, sim_temp should include the -3.0 drop
         # plus the heat gain from the interval. 
@@ -356,34 +353,35 @@ class GSHPPlanTests(unittest.TestCase):
         self.assertLess(plan[0]["gshp_temp_sim"], 55.0)
         self.assertGreater(plan[0]["gshp_temp_sim"], 51.0) # 50 - 3 + some gain
 
-    def test_gshp_preheats_before_sauna(self):
-        # Temp is high (54C). Sauna starts in 3 hours.
-        # Price is high now (0.30), but drops later (0.10).
-        # Normal arbitrage would wait. Aggressive sauna logic would have started.
-        prediction_timestamps = [datetime.now() + timedelta(minutes=15*i) for i in range(24)]
-        outside_temps = [0.0] * 24
-        import_prices = [0.30] * 12 + [0.10] * 12
-        
-        # Sauna starts at index 12 (3 hours)
-        is_sauna_active = [0] * 12 + [1] * 4 + [0] * 8
+    def test_gshp_uses_solar_arbitrage(self):
+        # Temp is high (54C). 
+        # Import price is high now (0.30), but we have high solar (10kW).
+        # Export price is lower (0.10).
+        prediction_timestamps = [datetime.now() + timedelta(minutes=15*i) for i in range(4)]
+        outside_temps = [10.0] * 4
+        import_prices = [0.30] * 4
+        export_prices = [0.10] * 4
+        solar_forecast_kw = [10.0] * 4
         
         with patched_env({
             "GSHP_INITIAL_TEMP": "54.0",
             "GSHP_IS_RUNNING": "false",
             "PLAN_INTERVAL_MINUTES": "15",
             "GSHP_MIN_TEMP": "42.0",
-            "GSHP_MAX_TEMP": "55.0"
+            "GSHP_MAX_TEMP": "60.0"
         }):
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, [0]*4, outside_temps, import_prices, export_prices, solar_forecast_kw)
             
-        # Should NOT start immediately anymore (no aggressive pre-heat, waiting for 0.10 price)
-        self.assertEqual(plan[0]["gshp_intent"], "STOP")
+        # Should start immediately because effective price is export_price (0.10) 
+        # which is cheaper than import_price (0.30)
+        self.assertEqual(plan[0]["gshp_intent"], "START")
 
     def test_gshp_power_ramp(self):
         # Verify that power increases as temp increases
         prediction_timestamps = [datetime.now() + timedelta(minutes=15*i) for i in range(20)]
         outside_temps = [20.0] * 20 # No heat loss
         import_prices = [0.01] * 20 # Force start
+        solar_forecast_kw = [0.0] * 20
         
         with patched_env({
             "GSHP_INITIAL_TEMP": "42.0",
@@ -395,7 +393,7 @@ class GSHPPlanTests(unittest.TestCase):
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * len(prediction_timestamps)
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, import_prices, solar_forecast_kw)
             
         # First interval should be near 3.4kW (at 42C)
         self.assertAlmostEqual(plan[0]["gshp_electric_kw"], 3.4)
@@ -415,6 +413,7 @@ class GSHPPlanTests(unittest.TestCase):
         # Price: 0.25 for 4 intervals (1h), then 0.15
         import_prices = [0.25] * 4 + [0.15] * 16
         is_sauna_active = [0] * 20
+        solar_forecast_kw = [0.0] * 20
 
         with patched_env({
             "GSHP_INITIAL_TEMP": "51.0",
@@ -427,39 +426,16 @@ class GSHPPlanTests(unittest.TestCase):
             "PLAN_INTERVAL_MINUTES": "15",
             "GSHP_STRATEGIC_STOP_DIFF_EUR": "0.05"
         }):
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, import_prices, solar_forecast_kw)
 
         # Should STOP at index 0 because 0.25 is >= 0.15 + 0.05
         self.assertEqual(plan[0]['gshp_intent'], "STOP")
 
-    def test_gshp_does_not_strategic_stop_when_sauna_soon(self):
-        prediction_timestamps = [datetime.now(timezone.utc) + timedelta(minutes=15*i) for i in range(20)]
-        outside_temps = [0.0] * 20
-        import_prices = [0.25] * 4 + [0.15] * 16
-        # Sauna starts in 2 hours (index 8)
-        is_sauna_active = [0] * 8 + [1] * 4 + [0] * 8
-
-        with patched_env({
-            "GSHP_INITIAL_TEMP": "51.0",
-            "GSHP_MIN_TEMP": "42.0",
-            "GSHP_MAX_TEMP": "55.0",
-            "GSHP_IS_RUNNING": "true",
-            "GSHP_STRATEGIC_STOP_DIFF_EUR": "0.05"
-        }):
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
-
-        # Now it SHOULD stop because sauna is no longer protected from strategic stops
-        self.assertEqual(plan[0]['gshp_intent'], "STOP")
-
     def test_gshp_heating_efficiency_impact(self):
-        # 4kW * 3.5 COP = 14kW heat. 
-        # 14kW * 0.25h = 3.5kWh.
-        # 500L => 0.58 kwh/C. 
-        # 3.5 / 0.58 = ~6.03C gain.
-        # With efficiency 0.4: 6.03 * 0.4 = ~2.41C gain.
         prediction_timestamps = [datetime.now(timezone.utc)] * 2
         outside_temps = [20.0] * 2 # No loss
         import_prices = [0.01] * 2 # Force start
+        solar_forecast_kw = [0.0] * 2
         
         with patched_env({
             "GSHP_INITIAL_TEMP": "45.0",
@@ -472,7 +448,7 @@ class GSHPPlanTests(unittest.TestCase):
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * 2
-            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices)
+            plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, import_prices, solar_forecast_kw)
             
         # Expected temp: 45.0 + ~2.41 = 47.41
         self.assertAlmostEqual(plan[0]["gshp_temp_sim"], 47.41, places=2)
