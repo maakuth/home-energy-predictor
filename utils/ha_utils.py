@@ -28,6 +28,19 @@ def get_ha_state(entity_id):
         print(f'⚠️ Error fetching {entity_id}: {e}')
     return None
 
+def call_ha_service(domain, service, service_data=None):
+    """Call a Home Assistant service."""
+    url = f'{HA_HOST}/api/services/{domain}/{service}'
+    try:
+        response = requests.post(url, headers=HEADERS, json=service_data or {}, timeout=15)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f'❌ Error calling service {domain}.{service}: {response.status_code} - {response.text}')
+    except Exception as e:
+        print(f'❌ Service call failed for {domain}.{service}: {e}')
+    return None
+
 def push_ha_state(entity_id, state, attributes=None):
     """Push a state and attributes to a Home Assistant sensor."""
     url = f'{HA_HOST}/api/states/{entity_id}'

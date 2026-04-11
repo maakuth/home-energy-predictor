@@ -6,7 +6,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from utils.ha_utils import get_ha_state
+from utils.ha_utils import get_ha_state, call_ha_service
 from utils.price_utils import fetch_market_prices
 from utils.db_utils import fetch_states_history
 
@@ -20,6 +20,18 @@ def predict():
     # fetch solar data
     solar_today_state = get_ha_state('sensor.solcast_pv_forecast_forecast_today')
     solar_tomorrow_state = get_ha_state('sensor.solcast_pv_forecast_forecast_tomorrow')
+    
+    # fetch weather forecast (hourly)
+    print('Fetching weather forecast...')
+    weather_forecast_data = call_ha_service('weather', 'get_forecasts', {'entity_id': 'weather.home', 'type': 'hourly'})
+    df_weather = pd.DataFrame()
+    if weather_forecast_data and 'weather.home' in weather_forecast_data:
+        raw_forecast = weather_forecast_data['weather.home'].get('forecast', [])
+        if raw_forecast:
+            df_weather = pd.DataFrame(raw_forecast)
+            df_weather['datetime'] = pd.to_datetime(df_weather['datetime'], utc=True)
+            df_weather = df_weather.sort_values('datetime').set_index('datetime')
+            print(f"✅ Fetched {len(df_weather)} hourly weather forecast points.")
     
     # Combine solar forecasts
     solar_data = []
@@ -142,6 +154,20 @@ def predict():
         except Exception:
             solar_val = 0.0
             
+        # Get nearest weather forecast estimate.
+        try:
+            if not df_weather.empty:
+                w_idx = df_weather.index.get_indexer([current_ts], method='nearest')[0]
+                # Check if it is within 2 hours
+                if abs((df_weather.index[w_idx] - current_ts).total_seconds()) < 7200:
+                    forecast_temp = float(df_weather.iloc[w_idx]['temperature'])
+                else:
+                    forecast_temp = temp_val
+            else:
+                forecast_temp = temp_val
+        except Exception:
+            forecast_temp = temp_val
+
         # Sauna Heuristic Projection
         # 1. Real-time detection (4-hour window from now if already hot)
         is_sauna_proj = 0
@@ -161,7 +187,7 @@ def predict():
                 is_sauna_proj = 1
 
         row = {
-            'outside_temp': temp_val,
+            'outside_temp': forecast_temp,
             'solar_forecast': solar_val,
             'accumulator_temp': acc_val,
             'acc_roc': 0, # Placeholder for future prediction
