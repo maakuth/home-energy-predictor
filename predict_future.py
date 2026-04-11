@@ -4,7 +4,7 @@ import numpy as np
 import xgboost as xgb
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, call_ha_service
 from utils.price_utils import fetch_market_prices
@@ -13,6 +13,86 @@ from utils.db_utils import fetch_states_history
 load_dotenv(override=True)
 
 PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
+
+def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df_weather, current_states, sauna_states):
+    """
+    Generate inference data rows for the model.
+    Extracted for testability.
+    """
+    inference_data = []
+    timestamps = []
+    current_ts = start_time
+    
+    temp_val = current_states.get('temp_val', 5.0)
+    acc_val = current_states.get('acc_val', 45.0)
+    soc_val = current_states.get('soc_val', 80.0)
+    
+    is_sauna_detected = sauna_states.get('is_sauna_detected', False)
+    was_warm_yesterday = sauna_states.get('was_warm_yesterday', False)
+    now = sauna_states.get('now', datetime.now().astimezone())
+
+    while current_ts <= end_time:
+        # Get nearest solar estimate
+        try:
+            idx = df_solar.index.get_indexer([current_ts], method='nearest')[0]
+            solar_val = df_solar.iloc[idx]['pv_estimate']
+        except Exception:
+            solar_val = 0.0
+            
+        # Get nearest weather forecast estimate
+        try:
+            if not df_weather.empty:
+                w_idx = df_weather.index.get_indexer([current_ts], method='nearest')[0]
+                forecast_dt = df_weather.index[w_idx]
+                
+                # Force both to UTC for comparison to avoid offset-naive vs offset-aware issues
+                ts_utc = current_ts.astimezone(timezone.utc) if current_ts.tzinfo else current_ts.replace(tzinfo=timezone.utc)
+                f_utc = forecast_dt.astimezone(timezone.utc) if forecast_dt.tzinfo else forecast_dt.replace(tzinfo=timezone.utc)
+                
+                if abs((f_utc - ts_utc).total_seconds()) < 7200:
+                    forecast_temp = float(df_weather.iloc[w_idx]['temperature'])
+                else:
+                    forecast_temp = temp_val
+            else:
+                forecast_temp = temp_val
+        except Exception:
+            forecast_temp = temp_val
+
+        # Sauna Heuristic Projection
+        is_sauna_proj = 0
+        if is_sauna_detected and current_ts < (now + timedelta(hours=4)):
+            is_sauna_proj = 1
+        
+        month = current_ts.month
+        if month in [9,10,11,12,1,2,3,4,5]:
+            is_weekend = current_ts.weekday() >= 5
+            hour = current_ts.hour
+            if is_weekend and 18 <= hour <= 21:
+                is_sauna_proj = 1
+            elif not is_weekend and 18 <= hour <= 21 and not was_warm_yesterday:
+                is_sauna_proj = 1
+
+        row = {
+            'outside_temp': forecast_temp,
+            'solar_forecast': solar_val,
+            'accumulator_temp': acc_val,
+            'acc_roc': 0,
+            'is_fireplace_lag1': 0,
+            'ev_soc': soc_val,
+            'ev_position': 1,
+            'is_extended_complex': 1,
+            'hour': current_ts.hour,
+            'minute': current_ts.minute,
+            'quarter_hour': current_ts.minute // 15,
+            'day_of_week': current_ts.weekday(),
+            'month': current_ts.month,
+            'is_sauna_active': is_sauna_proj
+        }
+        inference_data.append(row)
+        timestamps.append(current_ts.isoformat())
+        current_ts += timedelta(minutes=interval_minutes)
+        
+    return inference_data, timestamps
 
 def predict():
     print('Syncing with Home Assistant...')
@@ -142,70 +222,12 @@ def predict():
     
     print(f'Predicting from {start_time} to {end_time}')
     
-    inference_data = []
-    timestamps = []
+    current_states = {'temp_val': temp_val, 'acc_val': acc_val, 'soc_val': soc_val}
+    sauna_states = {'is_sauna_detected': is_sauna_detected, 'was_warm_yesterday': was_warm_yesterday, 'now': now}
     
-    current_ts = start_time
-    while current_ts <= end_time:
-        # Get nearest solar estimate for this interval.
-        try:
-            idx = df_solar.index.get_indexer([current_ts], method='nearest')[0]
-            solar_val = df_solar.iloc[idx]['pv_estimate']
-        except Exception:
-            solar_val = 0.0
-            
-        # Get nearest weather forecast estimate.
-        try:
-            if not df_weather.empty:
-                w_idx = df_weather.index.get_indexer([current_ts], method='nearest')[0]
-                # Check if it is within 2 hours
-                if abs((df_weather.index[w_idx] - current_ts).total_seconds()) < 7200:
-                    forecast_temp = float(df_weather.iloc[w_idx]['temperature'])
-                else:
-                    forecast_temp = temp_val
-            else:
-                forecast_temp = temp_val
-        except Exception:
-            forecast_temp = temp_val
-
-        # Sauna Heuristic Projection
-        # 1. Real-time detection (4-hour window from now if already hot)
-        is_sauna_proj = 0
-        if is_sauna_detected and current_ts < (now + timedelta(hours=4)):
-            is_sauna_proj = 1
-        
-        # 2. Schedule Heuristic (Sept-May)
-        month = current_ts.month
-        if month in [9,10,11,12,1,2,3,4,5]:
-            is_weekend = current_ts.weekday() >= 5
-            hour = current_ts.hour
-            # Weekend evenings: 18-22
-            if is_weekend and 18 <= hour <= 21:
-                is_sauna_proj = 1
-            # Weekday heuristic: If it WASN'T warm yesterday, assume it might be today
-            elif not is_weekend and 18 <= hour <= 21 and not was_warm_yesterday:
-                is_sauna_proj = 1
-
-        row = {
-            'outside_temp': forecast_temp,
-            'solar_forecast': solar_val,
-            'accumulator_temp': acc_val,
-            'acc_roc': 0, # Placeholder for future prediction
-            'is_fireplace_lag1': 0,
-            'ev_soc': soc_val,
-            'ev_position': 1, # Assume home
-            'is_extended_complex': 1,
-            'hour': current_ts.hour,
-            'minute': current_ts.minute,
-            'quarter_hour': current_ts.minute // 15,
-            'day_of_week': current_ts.weekday(),
-            'month': current_ts.month,
-            'is_sauna_active': is_sauna_proj
-        }
-        inference_data.append(row)
-        timestamps.append(current_ts.isoformat())
-        
-        current_ts += timedelta(minutes=interval)
+    inference_data, timestamps = generate_inference_data(
+        start_time, end_time, interval, df_solar, df_weather, current_states, sauna_states
+    )
         
     X_inference = pd.DataFrame(inference_data)[features]
     predictions = model.predict(X_inference)
