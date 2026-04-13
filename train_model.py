@@ -59,7 +59,7 @@ def train():
         X_train, y_train,
         sample_weight=w_train,
         eval_set=[(X_test, y_test)],
-        sample_weight_eval=[w_test],
+        sample_weight_eval_set=[w_test],
         verbose=False
     )
     

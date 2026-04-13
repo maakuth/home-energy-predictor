@@ -124,7 +124,7 @@ def main():
     conn.close()
     
     print("Merging data...")
-    final_df = pd.concat(all_dfs, axis=1)
+    final_df = pd.concat(all_dfs, axis=1, sort=False)
     
     # Convert cumulative energy delta to average power over each interval.
     # kW = delta_kWh / delta_hours.
