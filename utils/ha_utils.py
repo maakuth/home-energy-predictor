@@ -28,9 +28,11 @@ def get_ha_state(entity_id):
         print(f'⚠️ Error fetching {entity_id}: {e}')
     return None
 
-def call_ha_service(domain, service, service_data=None):
+def call_ha_service(domain, service, service_data=None, return_response=True):
     """Call a Home Assistant service."""
-    url = f'{HA_HOST}/api/services/{domain}/{service}'
+    # Add ?return_response to allow receiving data back from modern HA service calls if requested
+    query = '?return_response' if return_response else ''
+    url = f'{HA_HOST}/api/services/{domain}/{service}{query}'
     try:
         response = requests.post(url, headers=HEADERS, json=service_data or {}, timeout=15)
         if response.status_code == 200:

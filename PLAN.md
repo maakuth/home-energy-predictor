@@ -1,75 +1,72 @@
 # Technical Specification: Home Energy Prediction & Optimization (HEPO)
 
 ## 1. System Overview
-The goal is to predict the next 24 hours of household power consumption (with a focus on heating and EV charging) to optimize usage against tomorrow's electricity spot prices. The system will run on a local PC with access to a Home Assistant (PostgreSQL) database.
+HEPO (Home Energy Prediction & Optimization) is an ML-powered system designed to predict household energy consumption and optimize the operation of a Ground Source Heat Pump (GSHP) and a home battery system. It uses a **Model Predictive Control (MPC)** approach with a 15-minute rolling horizon to minimize electricity costs against volatile spot prices (e.g., Nordpool).
 
-## 2. Data Engineering & Cleaning
+## 2. Data Engineering & Pipeline
 
 ### Input Entities (from Home Assistant PostgreSQL)
 - **Environment:** `sensor.outside_temperature`
-- **Ground Source Heat Pump (GSHP) Power:** `sensor.mlp_teho`
-- **Air-to-Air Heat Pump (AAHP) Power:**
-  - `sensor.saikaan_olohuone_current_power`
-  - `sensor.mokkimokin_ilp_power`
-  - `sensor.mummun_energy` (**Derived Power:** Calculated as the delta of energy total between state updates, $\Delta \text{kWh} / \Delta t$).
-- **Thermal Storage:** `sensor.mlp_varaajan_lampotila` (Accumulator top temperature)
-- **EV State:**
-  - `sensor.xpz_491_battery_level` (SOC)
-  - `device_tracker.xpz_491_position` (Is Home?)
-- **Total Household Power:** `sensor.sahkokauppa_nyt`
-- **Solar Forecast:** `sensor.solcast_pv_forecast_forecast_tomorrow` (Solcast API integration in HA).
+- **GSHP Power:** `sensor.mlp_teho` (Watts)
+- **AAHP Power:** `sensor.saikaan_olohuone_current_power`, `sensor.mokkimokin_ilp_power`
+- **Thermal Storage:** `sensor.mlp_varaajan_lampotila` (500L Accumulator)
+- **Sauna:** `sensor.sauna_kiuas_lampotila` (Used to infer sauna activity)
+- **EV State:** `sensor.xpz_491_battery_level` (SOC), `device_tracker.xpz_491_position` (Home/Away)
+- **Grid Power:** `sensor.sahkokauppa_nyt` (Bidirectional grid meter)
+- **Solar Production:** `sensor.solcast_pv_forecast_actual_power` (Actual) and `sensor.solcast_pv_forecast_forecast_tomorrow` (Forecast).
 
 ### Pipeline Steps
-1. **Extraction:** SQL query to pull the last 365 days of state history for the above entities.
-2. **Denoising:** 
-   - Apply a Rolling Median Filter (window=3) to remove "insane" spikes.
-   - Clip values based on physical limits (e.g., Power > 0, Temp < 50°C).
-3. **Resampling:** Aggregate all data to 1-hour intervals.
-   - **Continuous values (Temp/Power):** `mean()`
-   - **State values (EV Home):** `max()` (If home at any point in the hour, consider home).
-4. **Gap Filling:** Linear interpolation for gaps < 2 hours; drop/ignore larger gaps to avoid synthetic bias.
+1. **Extraction (`extract_data.py`):** Fetches historical state history. Supports fast 3-day sync or full 365-day extraction.
+2. **Denoising (`process_data.py`):** Applies a 15-point Rolling Median Filter to remove sensor spikes.
+3. **Resampling:** Aggregates data to 15-minute intervals.
+4. **Calculations:** 
+   - `total_home_power = grid_power + solar_actual`
+   - `baseload_power = total_home_power - (gshp_power / 1000)` (Target for the ML model)
 
-## 3. Feature Engineering: The Fireplace Logic
-To isolate the heating system's relationship with outside temperature, the agent must infer "Fireplace Assistance."
-- **Logic:** $\text{RoC} = \Delta T_{acc}(t) - T_{acc}(t-1)$.
-- **Identify "Fireplace Hours":** If $\text{RoC} > 0.3^\circ\text{C/hr}$ AND $(\text{GSHP\_Power} + \text{AAHP\_Power}) < \text{Threshold}$, then `is_fireplace_active = True`.
-- **Heating Demand Factor:** Create a feature `Pheat_norm` which represents the power used when the fireplace is off. This helps the model learn the true heat-loss coefficient of the building.
+## 3. Machine Learning & Feature Engineering
 
-## 4. Model Specification
-Implement a Gradient Boosted Regressor (XGBoost or LightGBM) for its ability to handle non-linear efficiencies (COP) of heat pumps.
+### Model Specification (`train_model.py`)
+- **Algorithm:** XGBoost Regressor.
+- **Target (Y):** `baseload_power` (kW).
+- **Weighting:** Data after Oct 1, 2025 (structural expansion) is weighted 3x to prioritize recent building performance.
 
-### Model Features (X)
-- **Weather:** `outside_temp`, `sensor.solcast_pv_forecast_forecast_tomorrow`.
-- **Thermal State:** `accumulator_temp`, `is_fireplace_active` (lagged).
-- **EV State:** `is_home`, `soc_needed` (Target SOC - Current SOC).
-- **Temporal:** `hour_of_day`, `day_of_week`, `month` (to proxy ground temp for GSHP).
+### Features (X)
+- **Weather:** `outside_temp`, `solar_forecast`.
+- **Thermal State:** `accumulator_temp`, `acc_roc` (Rate of Change), `is_fireplace_lag1` (Fireplace inference).
+- **EV State:** `ev_soc`, `ev_position`.
+- **Temporal:** `hour`, `quarter_hour`, `day_of_week`, `month`.
+- **Context:** `is_extended_complex` (Boolean flag for building expansion), `is_sauna_active`.
 
-### Target (Y)
-- `total_power_usage_kwh` (hourly).
+### Fireplace & Sauna Logic
+- **Fireplace:** Inferred if `acc_roc > 0.3°C/hr` while heat pump power is low.
+- **Sauna:** Inferred from sauna temperature sensor. If inactive, a **Sauna Heuristic** projects potential usage during typical weekend/evening windows.
 
-## 5. Deployment & Execution Loop
-The CLI agent will orchestrate the following script cycle at 18:00 daily.
+## 4. Rolling Horizon Optimization (MPC)
 
-### Step 1: Data Refresh
-Sync the latest 24 hours of HA data and the 24-hour solar/weather forecast.
+The system executes a 24-48 hour optimization plan every 15-60 minutes (`predict_future.py` + `optimize_plan.py`).
 
-### Step 2: Inference
-Generate a 24-hour vector $[P_1, P_2, \dots, P_{24}]$ representing predicted power usage for tomorrow.
+### Battery Dispatch Strategy
+- **CHARGE_SOLAR:** Priority 1; capture excess PV generation.
+- **CHARGE_GRID:** Charge during cheap price windows if the "round-trip" profit (future_price * efficiency > current_price) is positive.
+- **DISCHARGE_LOAD:** Offset house consumption during high-price peaks.
+- **DISCHARGE_EXPORT:** Sell energy back to the grid during extreme price spikes (if `BATTERY_ALLOW_EXPORT` is enabled).
 
-### Step 3: Optimization Logic
-Compare prediction against tomorrow’s spot prices (€/kWh):
-- **EV Strategy:** Identify the $N$ cheapest hours while `ev_is_home == True` to reach target SOC.
-- **Thermal Strategy:** If spot price is in the bottom 20th percentile, increase GSHP setpoint by $2^\circ\text{C}$ to charge the 500L accumulator (thermal buffering).
+### GSHP (Heat Pump) Dispatch Strategy
+- **Thermal Buffering:** Increases setpoint/runs the pump when prices are in the bottom 30th percentile or when solar surplus is available.
+- **Strategic Stop:** Pauses heating during price peaks if the accumulator temperature allows, considering a 2-8 hour lookahead.
+- **Heat Loss Modeling:** Uses a cooling coefficient (`GSHP_HEAT_LOSS_K`) and outdoor temperature to model the reservoir's thermal decay.
 
-### Step 4: HA Integration
-Push the "Optimization Plan" back to Home Assistant via REST API or MQTT to trigger automations.
+## 5. Deployment & Integration
 
-## 6. Feedback & Retraining
-- **Accuracy Check:** Every day at 17:55, calculate the Mean Absolute Error (MAE) of the previous day's forecast.
-- **Automatic Retraining:** If the 7-day rolling MAE increases by $>20\%$, trigger a full model retrain on the most recent 90 days of data.
+### Execution Loop
+- **Frequent (`run_frequent.sh`):** Runs every 30 mins. Performs fast extraction, generates fresh predictions, and updates the MPC plan.
+- **Daily (`run_daily.sh`):** Runs once a day. Performs full extraction and retrains the XGBoost model.
 
-## Implementation Stack
-- **Language:** Python 3.10+
-- **DB Connector:** `psycopg2` or `SQLAlchemy`
-- **ML Libraries:** `scikit-learn`, `xgboost`, `pandas`
-- **API:** Home Assistant REST API
+### Home Assistant Integration
+- **Optimization Plan:** Pushed to `sensor.hepo_optimization_plan` as a JSON attribute, containing 15-minute resolution actions for the inverter and GSHP.
+- **Accuracy Tracking:** `sensor.hepo_accuracy` reports 3-hour windowed MAE and Bias from `analyze_performance.py`.
+
+## 6. Technical Stack
+- **Core:** Python 3.10+, Pandas, XGBoost.
+- **Database:** PostgreSQL (Source), SQLite (Performance Archiving), CSV (Intermediate).
+- **Config:** Environment variables (.env) for hardware constraints (battery capacity, efficiencies, COP).
