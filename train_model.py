@@ -10,6 +10,7 @@ def train(holdout_days=0):
     print('Loading processed data...')
     df = pd.read_csv('processed_data.csv', index_col=0)
     df.index = pd.to_datetime(df.index, utc=True)
+    print(f"  - Raw rows: {len(df)}")
     
     # Target (Y): baseload = total home power - gshp_power
     target = 'baseload_power'
@@ -26,14 +27,18 @@ def train(holdout_days=0):
 
     # Drop rows where critical new features are missing
     df = df.dropna(subset=['baseload_lag_1h', 'baseload_lag_24h'])
+    print(f"  - Rows after dropna: {len(df)}")
 
     # --- TRUE BACKTEST LOGIC ---
-    # If holdout_days > 0, we drop the MOST RECENT N days before splitting.
-    # This allows analyze_performance.py to test on data the model NEVER saw.
     if holdout_days > 0:
         cutoff = df.index.max() - pd.Timedelta(days=holdout_days)
-        print(f'Excluding everything after {cutoff} for a true hold-out test.')
+        print(f'  - Excluding everything after {cutoff} for a true hold-out test.')
         df = df[df.index <= cutoff]
+        print(f"  - Rows after holdout: {len(df)}")
+
+    if len(df) < 10:
+        print("❌ Error: Not enough data points to train a model.")
+        return
 
     X = df[features]
     y = df[target]
@@ -41,18 +46,24 @@ def train(holdout_days=0):
     # Weights: Give more weight to recent data (last 6 months)
     weights = np.where(df['is_extended_complex'] == 1, 3.0, 1.0)
     
-    print(f'Training with features: {features}')
-    
     # Temporal Split: No random shuffling for time-series!
     split_idx = int(len(df) * 0.8)
     
-    X_train = X.iloc[:split_idx]
-    X_test = X.iloc[split_idx:]
-    y_train = y.iloc[:split_idx]
-    y_test = y.iloc[split_idx:]
-    w_train = weights[:split_idx]
-    w_test = weights[split_idx:]
+    if split_idx == 0 or split_idx == len(df):
+        print("⚠️ Warning: Dataset too small for 80/20 split. Using all data for training/testing.")
+        X_train = X_test = X
+        y_train = y_test = y
+        w_train = w_test = weights
+    else:
+        X_train = X.iloc[:split_idx]
+        X_test = X.iloc[split_idx:]
+        y_train = y.iloc[:split_idx]
+        y_test = y.iloc[split_idx:]
+        w_train = weights[:split_idx]
+        w_test = weights[split_idx:]
     
+    print(f"  - Training on {len(X_train)} rows, Testing on {len(X_test)} rows.")
+
     # Model Specification
     model = xgb.XGBRegressor(
         n_estimators=1000,
@@ -71,10 +82,13 @@ def train(holdout_days=0):
         verbose=False
     )
     
-    # Evaluation (on the 20% test set, which is chronologically after the train set)
+    # Evaluation
     predictions = model.predict(X_test)
-    mae = mean_absolute_error(y_test, predictions)
-    print(f'✅ Model Training Complete. Test Set MAE: {mae:.4f}')
+    if len(y_test) > 0:
+        mae = mean_absolute_error(y_test, predictions)
+        print(f'✅ Model Training Complete. Test Set MAE: {mae:.4f}')
+    else:
+        print('✅ Model Training Complete (Evaluation skipped due to empty test set).')
     
     # Save model
     model.save_model('energy_model.json')
