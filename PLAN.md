@@ -31,9 +31,10 @@ HEPO (Home Energy Prediction & Optimization) is an ML-powered system designed to
 - **Weighting:** Data after Oct 1, 2025 (structural expansion) is weighted 3x to prioritize recent building performance.
 
 ### Features (X)
-- **Weather:** `outside_temp`, `solar_forecast`.
+- **Weather:** `outside_temp`, `wind_speed`, `solar_forecast`.
 - **Thermal State:** `accumulator_temp`, `acc_roc` (Rate of Change), `is_fireplace_lag1` (Fireplace inference).
 - **EV State:** `ev_soc`, `ev_position`.
+- **Anchors:** `baseload_lag_1h`, `baseload_lag_24h` (Lagged baseload for autocorrelation).
 - **Temporal:** `hour`, `quarter_hour`, `day_of_week`, `month`.
 - **Context:** `is_extended_complex` (Boolean flag for building expansion), `is_sauna_active`.
 

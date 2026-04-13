@@ -53,11 +53,20 @@ def process_data():
     
     if 'outside_temp' in df.columns:
         df['outside_temp'] = df['outside_temp'].ffill().clip(lower=-50, upper=50)
+    if 'wind_speed' in df.columns:
+        df['wind_speed'] = df['wind_speed'].ffill().clip(lower=0, upper=100)
     if 'accumulator_temp' in df.columns:
         df['accumulator_temp'] = df['accumulator_temp'].ffill().clip(lower=0, upper=100)
     if 'sauna_temp' in df.columns:
         df['sauna_temp'] = df['sauna_temp'].ffill().clip(lower=0, upper=120)
         df['is_sauna_active'] = (df['sauna_temp'] > 30).astype(int)
+
+    print('Adding lagged features...')
+    if 'baseload_power' in df.columns:
+        # Lag 1h (4 * 15min)
+        df['baseload_lag_1h'] = df['baseload_power'].shift(4).ffill()
+        # Lag 24h (96 * 15min)
+        df['baseload_lag_24h'] = df['baseload_power'].shift(96).ffill()
 
     print('Applying fireplace logic...')
     if 'accumulator_temp' in df.columns:

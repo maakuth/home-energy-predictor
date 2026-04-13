@@ -24,8 +24,11 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
     current_ts = start_time
     
     temp_val = current_states.get('temp_val', 5.0)
+    wind_val = current_states.get('wind_val', 0.0)
     acc_val = current_states.get('acc_val', 45.0)
     soc_val = current_states.get('soc_val', 80.0)
+    lag1h_val = current_states.get('lag1h_val', 1.0)
+    lag24h_val = current_states.get('lag24h_val', 1.0)
     
     is_sauna_detected = sauna_states.get('is_sauna_detected', False)
     was_warm_yesterday = sauna_states.get('was_warm_yesterday', False)
@@ -40,6 +43,8 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
             solar_val = 0.0
             
         # Get nearest weather forecast estimate
+        forecast_temp = temp_val
+        forecast_wind = wind_val
         try:
             if not df_weather.empty:
                 w_idx = df_weather.index.get_indexer([current_ts], method='nearest')[0]
@@ -50,13 +55,10 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
                 f_utc = forecast_dt.astimezone(timezone.utc) if forecast_dt.tzinfo else forecast_dt.replace(tzinfo=timezone.utc)
                 
                 if abs((f_utc - ts_utc).total_seconds()) < 7200:
-                    forecast_temp = float(df_weather.iloc[w_idx]['temperature'])
-                else:
-                    forecast_temp = temp_val
-            else:
-                forecast_temp = temp_val
+                    forecast_temp = float(df_weather.iloc[w_idx].get('temperature', temp_val))
+                    forecast_wind = float(df_weather.iloc[w_idx].get('wind_speed', wind_val))
         except Exception:
-            forecast_temp = temp_val
+            pass
 
         # Sauna Heuristic Projection
         is_sauna_proj = 0
@@ -74,12 +76,15 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
 
         row = {
             'outside_temp': forecast_temp,
+            'wind_speed': forecast_wind,
             'solar_forecast': solar_val,
             'accumulator_temp': acc_val,
             'acc_roc': 0,
             'is_fireplace_lag1': 0,
             'ev_soc': soc_val,
             'ev_position': 1,
+            'baseload_lag_1h': lag1h_val,
+            'baseload_lag_24h': lag24h_val,
             'is_extended_complex': 1,
             'hour': current_ts.hour,
             'minute': current_ts.minute,
@@ -143,6 +148,43 @@ def predict():
         temp_val = float(current_temp.get('state')) if current_temp and current_temp.get('state') not in ['unknown', 'unavailable'] else 5.0
     except (ValueError, TypeError, AttributeError):
         temp_val = 5.0
+
+    current_wind = get_ha_state('sensor.outside_wind_speed')
+    try:
+        wind_val = float(current_wind.get('state')) if current_wind and current_wind.get('state') not in ['unknown', 'unavailable'] else 0.0
+    except (ValueError, TypeError, AttributeError):
+        wind_val = 0.0
+
+    # Anchors: Fetch historical baseload for lags
+    # Fetch last 25 hours to cover both 1h and 24h lags
+    print('Fetching historical data for anchors...')
+    anchor_data = fetch_states_history(['sensor.sahkokauppa_nyt', 'sensor.solarh_63038_real_power_kw', 'sensor.mlp_teho'], hours=25)
+    
+    def get_baseload_at_lag(hours_back):
+        target_ts = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+        try:
+            total_df = anchor_data.get('sensor.sahkokauppa_nyt')
+            solar_df = anchor_data.get('sensor.solarh_63038_real_power_kw')
+            gshp_df = anchor_data.get('sensor.mlp_teho')
+            
+            # Find nearest values
+            def get_nearest(df, ts):
+                if df is None or df.empty: return 0.0
+                idx = df['timestamp'].get_indexer([ts], method='nearest')[0]
+                return float(df.iloc[idx]['state'])
+
+            total = get_nearest(total_df, target_ts)
+            solar = get_nearest(solar_df, target_ts)
+            gshp = get_nearest(gshp_df, target_ts) / 1000.0 # W to kW
+            
+            return max(0.0, total + solar - gshp)
+        except Exception as e:
+            print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
+            return 1.0 # Fallback
+
+    lag1h_val = get_baseload_at_lag(1)
+    lag24h_val = get_baseload_at_lag(24)
+    print(f"⚓ Anchors - 1h: {lag1h_val:.2f}kW, 24h: {lag24h_val:.2f}kW")
         
     acc_temp = get_ha_state('sensor.mlp_varaajan_lampotila')
     try:
@@ -222,7 +264,14 @@ def predict():
     
     print(f'Predicting from {start_time} to {end_time}')
     
-    current_states = {'temp_val': temp_val, 'acc_val': acc_val, 'soc_val': soc_val}
+    current_states = {
+        'temp_val': temp_val, 
+        'wind_val': wind_val,
+        'acc_val': acc_val, 
+        'soc_val': soc_val,
+        'lag1h_val': lag1h_val,
+        'lag24h_val': lag24h_val
+    }
     sauna_states = {'is_sauna_detected': is_sauna_detected, 'was_warm_yesterday': was_warm_yesterday, 'now': now}
     
     inference_data, timestamps = generate_inference_data(

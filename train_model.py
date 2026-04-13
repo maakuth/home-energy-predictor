@@ -15,20 +15,26 @@ def train():
     
     # Features (X)
     # Features mentioned in PLAN.md:
-    # Weather: outside_temp, solar_forecast
-    # Thermal State: accumulator_temp, is_fireplace_active (lagged)
-    # EV State: ev_soc, ev_is_home (proxied by ev_position)
+    # Weather: outside_temp, wind_speed, solar_forecast
+    # Thermal State: accumulator_temp, acc_roc, is_fireplace_lag1
+    # EV State: ev_soc, ev_position
     # Temporal: hour, quarter_hour, day_of_week, month
+    # Anchors: baseload_lag_1h, baseload_lag_24h
     features = [
-        'outside_temp', 'solar_forecast', 
+        'outside_temp', 'wind_speed', 'solar_forecast', 
         'accumulator_temp', 'acc_roc', 'is_fireplace_lag1', 
         'ev_soc', 'ev_position',
+        'baseload_lag_1h', 'baseload_lag_24h',
         'is_extended_complex',
         'hour', 'minute', 'quarter_hour', 'day_of_week', 'month'
     ]
-    
+
+    # Drop rows where critical new features are missing (e.g. at the start of history)
+    df = df.dropna(subset=['baseload_lag_1h', 'baseload_lag_24h'])
+
     X = df[features]
     y = df[target]
+
 
     # Calculate weights: Give more weight to recent data (last 6 months)
     # This helps the model anchor to the new building's consumption levels.
