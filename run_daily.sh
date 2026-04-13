@@ -35,6 +35,10 @@ source venv/bin/activate
   python optimize_plan.py
   python push_to_ha.py
 
+  # 6. Performance Analysis
+  echo "[6/6] Analyzing Performance (Last 7 Days)..."
+  python analyze_performance.py --days 7 --backtest
+
   echo "=== Pipeline Complete: $(date) ==="
 
 ) 200>/tmp/hepo.lock

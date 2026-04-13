@@ -1,22 +1,25 @@
 import os
+import json
 import pandas as pd
 import numpy as np
 import sqlite3
-from datetime import datetime, timedelta
+import argparse
+import xgboost as xgb
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
 
 load_dotenv(override=True)
 
-def fetch_actuals(days=2):
+def fetch_actuals(days=7):
+    """Fetch actual grid meter and solar data from HA/PostgreSQL."""
     print(f"Fetching actuals for last {days} days from PostgreSQL...")
     entities = {
         'sensor.sahkokauppa_nyt': 'total_power',
         'sensor.solarh_63038_real_power_kw': 'solar_actual'
     }
     
-    # Use central utility
     hist_data = fetch_states_history(list(entities.keys()), hours=days*24)
     
     all_resampled = []
@@ -31,119 +34,151 @@ def fetch_actuals(days=2):
         return pd.DataFrame(columns=['actual_usage'])
 
     df_actual = pd.concat(all_resampled, axis=1).fillna(0)
+    # Total home power is grid_meter + solar_production
     df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0)
     return df_actual[['actual_usage']]
 
-def analyze():
+def get_archived_predictions():
+    """Load predictions that were actually made in real-time from the SQLite DB."""
     db_file = 'hepo.db'
     if not os.path.exists(db_file):
-        print("No prediction history (hepo.db) found.")
-        return
+        return pd.DataFrame()
 
-    print("Loading prediction history from SQLite...")
     try:
         conn = sqlite3.connect(db_file)
-        # Check if column exists
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(predictions)")
-        cols = [c[1] for c in cur.fetchall()]
-        has_fallback_col = 'is_fallback_price' in cols
-        
-        fallback_select = ", is_fallback_price" if has_fallback_col else ", 0 as is_fallback_price"
-
-        # We want the MOST RECENT prediction for each target timestamp
-        query = f"""
-            SELECT target_timestamp, predicted_usage_kw as predicted_usage {fallback_select}
+        # Partition by target_timestamp to get the most recent prediction made for that point in time
+        query = """
+            SELECT target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price
             FROM (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
                 FROM predictions
             )
             WHERE rn = 1
         """
-        df_history = pd.read_sql_query(query, conn)
+        df = pd.read_sql_query(query, conn)
         conn.close()
+        df['target_timestamp'] = pd.to_datetime(df['target_timestamp'], utc=True)
+        return df.set_index('target_timestamp')
     except Exception as e:
-        print(f"Error reading SQLite: {e}")
+        print(f"Error reading archived predictions: {e}")
+        return pd.DataFrame()
+
+def backtest_current_model(df_actual):
+    """
+    Run a 'hindsight' prediction using the CURRENT model on PAST features.
+    This tells us if the NEW model is better at predicting the past than the OLD model was.
+    """
+    model_path = 'energy_model.json'
+    features_path = 'model_features.json'
+    processed_path = 'processed_data.csv'
+
+    if not all(os.path.exists(p) for p in [model_path, features_path, processed_path]):
+        print("⚠️ Model files or processed_data.csv not found. Skipping hindsight backtest.")
+        return pd.DataFrame()
+
+    try:
+        # Load model and features
+        model = xgb.XGBRegressor()
+        model.load_model(model_path)
+        with open(features_path, 'r') as f:
+            features = json.load(f)
+
+        # Load processed features
+        df_proc = pd.read_csv(processed_path, index_col=0)
+        df_proc.index = pd.to_datetime(df_proc.index, utc=True)
+        
+        # Only predict for timestamps we have actuals for
+        common_idx = df_proc.index.intersection(df_actual.index)
+        if common_idx.empty:
+            return pd.DataFrame()
+            
+        X = df_proc.loc[common_idx, features]
+        # In HEPO, the model predicts Baseload (Power - GSHP). 
+        # But analyze_performance compares against Total Power.
+        # So we must add the GSHP power back if we want to compare against the 'total actual'.
+        # However, for pure model accuracy backtesting, it's cleaner to just compare Baseload vs Baseload.
+        # But hepo.db stores the *entire planned usage* (baseload + gshp).
+        # Let's stick to comparing what was ARCHIVED in hepo.db vs what the NEW model would ARCHIVE.
+        
+        preds = model.predict(X)
+        
+        # For simplicity, we assume GSHP usage was exactly as it happened in history
+        # (Since we're evaluating the ML model, not the optimization strategy here)
+        gshp_col = 'gshp_power'
+        gshp_val = (df_proc.loc[common_idx, gshp_col] / 1000.0) if gshp_col in df_proc.columns else 0.0
+        
+        df_hindsight = pd.DataFrame({
+            'hindsight_usage': preds + gshp_val
+        }, index=common_idx)
+        
+        return df_hindsight
+    except Exception as e:
+        print(f"Error during hindsight backtest: {e}")
+        return pd.DataFrame()
+
+def analyze(days=2, do_backtest=False):
+    print(f"=== Starting Performance Analysis (Window: {days} days) ===")
+    
+    df_actual = fetch_actuals(days=days)
+    if df_actual.empty:
         return
 
-    if df_history.empty:
-        print("Prediction history is empty.")
-        return
-
-    df_history['target_timestamp'] = pd.to_datetime(df_history['target_timestamp'], utc=True)
-    df_history = df_history.set_index('target_timestamp')
+    df_archived = get_archived_predictions()
     
-    df_actual = fetch_actuals()
+    # 1. Real-time Analysis (What actually happened)
+    comparison = df_archived.join(df_actual, how='inner')
     
-    # Merge
-    comparison = df_history.join(df_actual[['actual_usage']], how='inner')
     if comparison.empty:
-        print("No overlapping data between history and actuals.")
-        return
-    
-    # Filter out fallback prices for interval analysis
-    comparison_clean = comparison[comparison['is_fallback_price'] == 0]
-    
-    # --- 3-Hour Analysis (Average Power kW) ---
-    comparison_resampled_3h = comparison_clean.resample('3h').mean().dropna()
-    if not comparison_resampled_3h.empty:
-        comparison_resampled_3h['error'] = comparison_resampled_3h['predicted_usage'] - comparison_resampled_3h['actual_usage']
-        comparison_resampled_3h['abs_error'] = comparison_resampled_3h['error'].abs()
-        mae_3h = comparison_resampled_3h['abs_error'].mean()
-        bias_3h = comparison_resampled_3h['error'].mean()
-        rmse_3h = np.sqrt((comparison_resampled_3h['error']**2).mean())
-        print(f"Analysis Results (3-Hour Power, N={len(comparison_resampled_3h)}):")
-        print(f"  MAE: {mae_3h:.3f} kW, Bias: {bias_3h:.3f} kW")
+        print("No overlapping data found between archived predictions and actuals.")
+    else:
+        # Filter out fallback prices
+        comparison_clean = comparison[comparison.get('is_fallback_price', 0) == 0]
         
-        # Push 3h metrics
-        attributes_3h = {
-            'friendly_name': 'HEPO Prediction Accuracy (3h Power)',
-            'unit_of_measurement': 'kW',
-            'bias': float(bias_3h),
-            'rmse': float(rmse_3h),
-            'sample_count': len(comparison_resampled_3h),
-            'window_size': '3h'
-        }
-        push_ha_state('sensor.hepo_accuracy', f"{mae_3h:.3f}", attributes_3h)
+        # 3-Hour Analysis
+        res_3h = comparison_clean.resample('3h').mean().dropna()
+        if not res_3h.empty:
+            res_3h['error'] = res_3h['predicted_usage'] - res_3h['actual_usage']
+            mae = res_3h['error'].abs().mean()
+            bias = res_3h['error'].mean()
+            print(f"\nREAL-TIME ARCHIVED PERFORMANCE (3-Hour Avg):")
+            print(f"  MAE:  {mae:.3f} kW")
+            print(f"  Bias: {bias:+.3f} kW (Positive means over-predicting)")
+            
+            # Push to HA
+            push_ha_state('sensor.hepo_accuracy', f"{mae:.3f}", {
+                'friendly_name': 'HEPO Real-time MAE (3h)',
+                'unit_of_measurement': 'kW',
+                'bias': float(bias),
+                'sample_count': len(res_3h)
+            })
 
-    # --- 24-Hour Analysis (Total Energy kWh) ---
-    # Convert kW to kWh per 15-min interval (kW * 0.25h)
-    comparison_kwh = comparison.copy()
-    comparison_kwh['predicted_usage'] *= 0.25
-    comparison_kwh['actual_usage'] *= 0.25
-    
-    # Aggregating to 24-hour blocks (sum of kWh)
-    # We only want to include days that have ZERO fallback intervals to avoid partial sums
-    daily_fallback_max = comparison['is_fallback_price'].resample('24h').max()
-    comparison_resampled_24h = comparison_kwh.resample('24h').sum().dropna()
-    
-    # Filter by fallback and also ensure we have enough data points for a full day (at least 90 out of 96 intervals)
-    counts = comparison_kwh.resample('24h').count()
-    comparison_resampled_24h = comparison_resampled_24h[(daily_fallback_max == 0) & (counts['actual_usage'] >= 90)]
+    # 2. Hindsight Backtest (How would the current model have done?)
+    if do_backtest:
+        df_hindsight = backtest_current_model(df_actual)
+        if not df_hindsight.empty:
+            # Join hindsight with actuals
+            hindsight_comp = df_hindsight.join(df_actual, how='inner')
+            h_res_3h = hindsight_comp.resample('3h').mean().dropna()
+            
+            if not h_res_3h.empty:
+                h_res_3h['error'] = h_res_3h['hindsight_usage'] - h_res_3h['actual_usage']
+                h_mae = h_res_3h['error'].abs().mean()
+                h_bias = h_res_3h['error'].mean()
+                
+                print(f"\nHINDSIGHT PERFORMANCE (Current Model on same history):")
+                print(f"  MAE:  {h_mae:.3f} kW")
+                print(f"  Bias: {h_bias:+.3f} kW")
+                
+                if not comparison.empty and not res_3h.empty:
+                    improvement = ((mae - h_mae) / mae) * 100 if mae > 0 else 0
+                    print(f"  Improvement vs Real-time: {improvement:+.1f}%")
 
-    if not comparison_resampled_24h.empty:
-        comparison_resampled_24h['error'] = comparison_resampled_24h['predicted_usage'] - comparison_resampled_24h['actual_usage']
-        comparison_resampled_24h['abs_error'] = comparison_resampled_24h['error'].abs()
-        
-        mae_24h = comparison_resampled_24h['abs_error'].mean()
-        bias_24h = comparison_resampled_24h['error'].mean()
-        rmse_24h = np.sqrt((comparison_resampled_24h['error']**2).mean())
-        
-        print(f"Analysis Results (24-Hour Energy, N={len(comparison_resampled_24h)}):")
-        print(f"  MAE: {mae_24h:.3f} kWh, Bias: {bias_24h:.3f} kWh")
-        
-        # Push 24h metrics
-        attributes_24h = {
-            'friendly_name': 'HEPO Prediction Accuracy (24h Energy)',
-            'unit_of_measurement': 'kWh',
-            'bias': float(bias_24h),
-            'rmse': float(rmse_24h),
-            'sample_count': len(comparison_resampled_24h),
-            'window_size': '24h'
-        }
-        push_ha_state('sensor.hepo_accuracy_24h', f"{mae_24h:.3f}", attributes_24h)
-        
-    print("✅ Accuracy metrics pushed to Home Assistant.")
+    print("\n✅ Analysis complete.")
 
 if __name__ == "__main__":
-    analyze()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--days', type=int, default=2, help='Number of days to look back')
+    parser.add_argument('--backtest', action='store_true', help='Compare with currently trained model in hindsight')
+    args = parser.parse_args()
+    
+    analyze(days=args.days, do_backtest=args.backtest)
