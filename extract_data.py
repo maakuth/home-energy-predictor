@@ -22,7 +22,7 @@ ENTITIES = {
     'sensor.solcast_pv_forecast_forecast_tomorrow': 'solar_forecast',
     'sensor.solarh_63038_real_power_kw': 'solar_actual',
     'sensor.sauna_temperature_2': 'sauna_temp',
-    'sensor.outside_wind_speed': 'wind_speed'
+    'weather.home': 'wind_speed' # Special handling for attribute
 }
 
 def get_metadata_ids(cur):
@@ -40,6 +40,31 @@ def extract_states(cur, metadata_id, days=365):
     """
     cur.execute(query, (metadata_id, start_ts))
     return cur.fetchall()
+
+def extract_attribute(cur, metadata_id, attr_name, days=365):
+    """Extract a specific attribute from JSON for entities like weather.home."""
+    start_ts = (datetime.now() - timedelta(days=days)).timestamp()
+    # Try the modern schema (post 2023.4)
+    try:
+        query = """
+            SELECT s.last_updated_ts, sa.shared_attrs::json->>%s
+            FROM states s
+            JOIN state_attributes sa ON s.attributes_id = sa.attributes_id
+            WHERE s.metadata_id = %s AND s.last_updated_ts > %s
+            ORDER BY s.last_updated_ts ASC
+        """
+        cur.execute(query, (attr_name, metadata_id, start_ts))
+        return cur.fetchall()
+    except Exception:
+        # Fallback to older schema if needed
+        query = """
+            SELECT last_updated_ts, attributes::json->>%s
+            FROM states 
+            WHERE metadata_id = %s AND last_updated_ts > %s
+            ORDER BY last_updated_ts ASC
+        """
+        cur.execute(query, (attr_name, metadata_id, start_ts))
+        return cur.fetchall()
 
 def main():
     parser = argparse.ArgumentParser(description='Extract historical data from Home Assistant DB.')
@@ -64,7 +89,13 @@ def main():
             continue
             
         print(f"Extracting {entity_id} (last {args.days} days)...")
-        rows = extract_states(cur, metadata_map[entity_id], days=args.days)
+        
+        if entity_id == 'weather.home':
+            # Extract wind_speed attribute
+            rows = extract_attribute(cur, metadata_map[entity_id], 'wind_speed', days=args.days)
+        else:
+            rows = extract_states(cur, metadata_map[entity_id], days=args.days)
+            
         if not rows:
             print(f"No data for {entity_id}")
             continue
