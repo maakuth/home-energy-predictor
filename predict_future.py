@@ -159,7 +159,13 @@ def predict():
     # Anchors: Fetch historical baseload for lags
     # Fetch last 25 hours to cover both 1h and 24h lags
     print('Fetching historical data for anchors...')
-    anchor_data = fetch_states_history(['sensor.sahkokauppa_nyt', 'sensor.solarh_63038_real_power_kw', 'sensor.mlp_teho'], hours=25)
+    anchor_entities = [
+        'sensor.sahkokauppa_nyt', 
+        'sensor.solarh_63038_real_power_kw', 
+        'sensor.mlp_teho',
+        'sensor.tasmota_energy_power_3'
+    ]
+    anchor_data = fetch_states_history(anchor_entities, hours=25)
     
     def get_baseload_at_lag(hours_back):
         target_ts = datetime.now(timezone.utc) - timedelta(hours=hours_back)
@@ -167,18 +173,27 @@ def predict():
             total_df = anchor_data.get('sensor.sahkokauppa_nyt')
             solar_df = anchor_data.get('sensor.solarh_63038_real_power_kw')
             gshp_df = anchor_data.get('sensor.mlp_teho')
+            leaf_df = anchor_data.get('sensor.tasmota_energy_power_3')
             
             # Find nearest values
             def get_nearest(df, ts):
                 if df is None or df.empty: return 0.0
-                idx = df['timestamp'].get_indexer([ts], method='nearest')[0]
-                return float(df.iloc[idx]['state'])
+                # Ensure we use a DatetimeIndex for get_indexer
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    temp_df = df.set_index('timestamp')
+                else:
+                    temp_df = df
+                
+                idx = temp_df.index.get_indexer([ts], method='nearest')[0]
+                if idx == -1: return 0.0
+                return float(temp_df.iloc[idx]['state'])
 
             total = get_nearest(total_df, target_ts)
             solar = get_nearest(solar_df, target_ts)
             gshp = get_nearest(gshp_df, target_ts) / 1000.0 # W to kW
+            leaf = get_nearest(leaf_df, target_ts) / 1000.0 # W to kW
             
-            return max(0.0, total + solar - gshp)
+            return max(0.0, total + solar - gshp - leaf)
         except Exception as e:
             print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
             return 1.0 # Fallback
