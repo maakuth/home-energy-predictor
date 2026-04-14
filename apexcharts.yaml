@@ -2,6 +2,7 @@ type: custom:apexcharts-card
 header:
   show: true
   show_states: true
+stacked: true
 all_series_config:
   stroke_width: 2
 span:
@@ -9,7 +10,7 @@ span:
 graph_span: 12h
 series:
   - entity: sensor.hepo_optimization_plan
-    name: Kulutusennuste nyt
+    name: Pohjakuorma
     type: area
     color: olive
     unit: kW
@@ -17,7 +18,20 @@ series:
       const plan = entity.attributes.plan;
       if (!plan) return [];
       return plan.map((entry) => {
-        return [new Date(entry.timestamp).getTime(), entry.predicted_usage_kw];
+        return [new Date(entry.timestamp).getTime(), entry.predicted_baseload_kw];
+      });
+    show:
+      in_header: false
+  - entity: sensor.hepo_optimization_plan
+    name: Maalämpöpumppu
+    type: area
+    color: blue
+    unit: kW
+    data_generator: |
+      const plan = entity.attributes.plan;
+      if (!plan) return [];
+      return plan.map((entry) => {
+        return [new Date(entry.timestamp).getTime(), entry.planned_gshp_kw];
       });
     show:
       in_header: false
@@ -38,4 +52,3 @@ series:
       legend_value: true
       in_header: true
       in_chart: false
-

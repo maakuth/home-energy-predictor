@@ -39,7 +39,7 @@ def fetch_actuals(days=7):
     df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0)
     return df_actual[['actual_usage']]
 
-def get_archived_predictions():
+def get_archived_predictions(version=None):
     """Load predictions that were actually made in real-time from the SQLite DB."""
     db_file = 'hepo.db'
     if not os.path.exists(db_file):
@@ -47,12 +47,14 @@ def get_archived_predictions():
 
     try:
         conn = sqlite3.connect(db_file)
-        # Partition by target_timestamp to get the most recent prediction made for that point in time
-        query = """
+        # Filter by version first to get the latest prediction made BY THIS VERSION
+        where_clause = f"WHERE version = '{version}'" if version else ""
+        query = f"""
             SELECT target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price, version
             FROM (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
                 FROM predictions
+                {where_clause}
             )
             WHERE rn = 1
         """
@@ -124,21 +126,16 @@ def analyze(days=2, do_backtest=False):
     if df_actual.empty:
         return
 
-    df_archived = get_archived_predictions()
     current_version = get_git_version()
+    df_archived = get_archived_predictions(version=current_version)
     
     # 1. Real-time Analysis (What actually happened)
-    # Scope to current model version if possible
-    if not df_archived.empty and 'version' in df_archived.columns:
-        df_versioned = df_archived[df_archived['version'] == current_version]
-        if df_versioned.empty:
-            print(f"⚠️ No archived predictions found for current version ({current_version}) in the last {days} days.")
-            # We don't want to report accuracy for other versions if the user wants it scoped.
-            comparison = pd.DataFrame() 
-        else:
-            comparison = df_versioned.join(df_actual, how='inner')
+    # Scope to current model version
+    if not df_archived.empty:
+        comparison = df_archived.join(df_actual, how='inner')
     else:
-        comparison = df_archived.join(df_actual, how='inner') if not df_archived.empty else pd.DataFrame()
+        print(f"⚠️ No archived predictions found for current version ({current_version}) in the last {days} days.")
+        comparison = pd.DataFrame()
     
     if comparison.empty:
         print("No overlapping data found between archived predictions (current version) and actuals.")
