@@ -36,7 +36,7 @@ series:
     show:
       in_header: false
   - entity: sensor.hepo_optimization_plan
-    name: Sähköauto
+    name: Sähköauto (XPZ)
     type: area
     color: purple
     unit: kW
@@ -45,6 +45,19 @@ series:
       if (!plan) return [];
       return plan.map((entry) => {
         return [new Date(entry.timestamp).getTime(), entry.planned_ev_kw || 0];
+      });
+    show:
+      in_header: false
+  - entity: sensor.hepo_optimization_plan
+    name: Sähköauto (Leaf)
+    type: area
+    color: green
+    unit: kW
+    data_generator: |
+      const plan = entity.attributes.plan;
+      if (!plan) return [];
+      return plan.map((entry) => {
+        return [new Date(entry.timestamp).getTime(), entry.planned_leaf_kw || 0];
       });
     show:
       in_header: false

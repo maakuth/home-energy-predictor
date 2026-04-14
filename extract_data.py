@@ -18,6 +18,7 @@ ENTITIES = {
     'sensor.mlp_varaajan_lampotila': 'accumulator_temp',
     'sensor.xpz_491_battery_level': 'ev_soc',
     'device_tracker.xpz_491_position': 'ev_position',
+    'sensor.tasmota_energy_power_3': 'leaf_power',
     'sensor.sahkokauppa_nyt': 'total_power',
     'sensor.solcast_pv_forecast_forecast_tomorrow': 'solar_forecast',
     'sensor.solarh_63038_real_power_kw': 'solar_actual',

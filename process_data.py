@@ -13,7 +13,7 @@ def process_data():
     df.index = pd.to_datetime(df.index, utc=True)
     
     print('Denoising and filling gaps...')
-    fill_zero_cols = ['gshp_power', 'aahp_living_power', 'aahp_cabin_power', 'mummun_power', 'solar_forecast', 'solar_actual']
+    fill_zero_cols = ['gshp_power', 'aahp_living_power', 'aahp_cabin_power', 'mummun_power', 'solar_forecast', 'solar_actual', 'leaf_power']
     for col in fill_zero_cols:
         if col in df.columns:
             df[col] = df[col].fillna(0)
@@ -35,14 +35,16 @@ def process_data():
     elif 'total_power' in df.columns:
         df['total_home_power'] = df['total_power']
 
-    # Baseload: House consumption excluding the GSHP
-    # Note: gshp_power sensor (mlp_teho) is in Watts, total_home_power is in kW.
-    if 'total_home_power' in df.columns and 'gshp_power' in df.columns:
-        df['baseload_power'] = df['total_home_power'] - (df['gshp_power'] / 1000.0)
+    # Baseload: House consumption excluding the GSHP and other known high-power loads we want to plan separately
+    # Note: gshp_power (mlp_teho) and leaf_power (tasmota) are in Watts, total_home_power is in kW.
+    if 'total_home_power' in df.columns:
+        gshp_kw = (df['gshp_power'] / 1000.0) if 'gshp_power' in df.columns else 0.0
+        leaf_kw = (df['leaf_power'] / 1000.0) if 'leaf_power' in df.columns else 0.0
+        df['baseload_power'] = df['total_home_power'] - gshp_kw - leaf_kw
         # Ensure baseload isn't negative due to sensor noise, but keep it realistic
         df['baseload_power'] = df['baseload_power'].clip(lower=0)
     else:
-        df['baseload_power'] = df.get('total_home_power', 0)
+        df['baseload_power'] = 0.0
 
     # Clip component power meters (not the bidirectional grid meter total_power)
     power_cols = [c for c in df.columns if 'power' in c or 'teho' in c or 'energy' in c]

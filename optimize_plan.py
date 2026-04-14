@@ -389,7 +389,7 @@ def optimize():
     is_sauna_active = [p.get('is_sauna_active', 0) for p in predictions_data]
     gshp_plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, export_prices, solar_array)
 
-    # Combine Baseload + Planned GSHP + Planned EV for Battery optimization
+    # Combine Baseload + Planned GSHP + Planned EV (XPZ) for Battery optimization
     planned_gshp_kw = np.array([g['gshp_electric_kw'] for g in gshp_plan])
     
     ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
@@ -399,13 +399,37 @@ def optimize():
 
     ev_load_kw = 7.0 # Assume 7kW charging
     planned_ev_kw = np.array([ev_load_kw if ev else 0.0 for ev in ev_plan])
-    total_planned_load_kw = predictions + planned_gshp_kw + planned_ev_kw
+
+    # Leaf Strategy: Charge if very cheap or solar surplus
+    leaf_price_threshold_night = np.percentile(import_prices, 20)
+    leaf_price_threshold_day = np.percentile(import_prices, 35)
+    
+    planned_leaf_kw = []
+    leaf_intents = []
+    for i, ts in enumerate(prediction_timestamps):
+        is_day = 6 <= ts.hour < 18
+        price = import_prices[i]
+        solar = solar_array[i]
+        
+        intent = 'OFF'
+        if is_day:
+            if price <= leaf_price_threshold_day or solar >= 2.0:
+                intent = 'ON'
+        else:
+            if price <= leaf_price_threshold_night:
+                intent = 'ON'
+        
+        leaf_intents.append(intent)
+        planned_leaf_kw.append(3.6 if intent == 'ON' else 0.0)
+    
+    planned_leaf_kw = np.array(planned_leaf_kw)
+    total_planned_load_kw = predictions + planned_gshp_kw + planned_ev_kw + planned_leaf_kw
 
     effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)
     price_threshold = np.percentile(effective_prices, 20)
     heating_plan = [1 if p <= price_threshold else 0 for p in effective_prices]
 
-    # Battery Dispatch uses Total = Baseload + GSHP + EV
+    # Battery Dispatch uses Total = Baseload + GSHP + EV + Leaf
     predictions_kwh = total_planned_load_kw * get_plan_interval_hours()
     solar_kwh = solar_array * get_plan_interval_hours()
     battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
@@ -415,12 +439,13 @@ def optimize():
     print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {'RUNNING' if is_hp_currently_running else 'STOPPED'}")
     
     final_plan = []
-    print('Time        | Baseload | GSHP kW | EV kW | Market | Import | Solar | SOC% | Intent | Acc Sim')
-    print('------------|----------|---------|-------|--------|--------|-------|------|--------|--------')
+    print('Time        | Baseload | GSHP kW | EV kW | Leaf kW | Market | Import | Solar | SOC% | Intent | Acc Sim')
+    print('------------|----------|---------|-------|---------|--------|--------|-------|------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
         p_baseload_kw = float(predictions[i])
         p_gshp_kw = float(planned_gshp_kw[i])
         p_ev_kw = float(planned_ev_kw[i])
+        p_leaf_kw = float(planned_leaf_kw[i])
         p_market = float(market_prices[i])
         p_import = float(import_prices[i])
         p_export = float(export_prices[i])
@@ -431,6 +456,8 @@ def optimize():
         actions = []
         if ev_plan[i]:
             actions.append('EV_CHARGE')
+        if leaf_intents[i] == 'ON':
+            actions.append('LEAF_CHARGE')
         if heating_plan[i]:
             actions.append('HEAT_BOOST')
         if p_solar_kw > 0.5:
@@ -442,7 +469,7 @@ def optimize():
         action_str = ' '.join(actions)
         
         print(
-            f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_ev_kw:5.1f} | {p_market:6.3f} | {p_import:6.3f} | "
+            f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_ev_kw:5.1f} | {p_leaf_kw:7.1f} | {p_market:6.3f} | {p_import:6.3f} | "
             f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
         )
         
@@ -451,6 +478,8 @@ def optimize():
             'predicted_baseload_kw': p_baseload_kw,
             'planned_gshp_kw': p_gshp_kw,
             'planned_ev_kw': p_ev_kw,
+            'planned_leaf_kw': p_leaf_kw,
+            'leaf_intent': leaf_intents[i],
             'predicted_usage_kw': float(total_planned_load_kw[i]),
             'predicted_usage_kwh': float(predictions_kwh[i]),
             'spot_price': float(p_market),
