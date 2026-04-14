@@ -422,8 +422,8 @@ def optimize():
         leaf_intents.append(intent)
         planned_leaf_kw.append(3.0 if intent == 'ON' else 0.0)
 
-        planned_leaf_kw = np.array(planned_leaf_kw)
-        total_planned_load_kw = predictions + planned_gshp_kw + planned_ev_kw + planned_leaf_kw
+    planned_leaf_kw = np.array(planned_leaf_kw)
+    total_planned_load_kw = predictions + planned_gshp_kw + planned_ev_kw + planned_leaf_kw
 
     effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)
     price_threshold = np.percentile(effective_prices, 20)
