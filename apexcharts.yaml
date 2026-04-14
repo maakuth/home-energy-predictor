@@ -1,0 +1,41 @@
+type: custom:apexcharts-card
+header:
+  show: true
+  show_states: true
+all_series_config:
+  stroke_width: 2
+span:
+  start: hour
+graph_span: 12h
+series:
+  - entity: sensor.hepo_optimization_plan
+    name: Kulutusennuste nyt
+    type: area
+    color: olive
+    unit: kW
+    data_generator: |
+      const plan = entity.attributes.plan;
+      if (!plan) return [];
+      return plan.map((entry) => {
+        return [new Date(entry.timestamp).getTime(), entry.predicted_usage_kw];
+      });
+    show:
+      in_header: false
+  - entity: sensor.hepo_accuracy
+    yaxis_id: header_only
+    name: Virhe 3h jaksoissa
+    color: Grey
+    unit: kW
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
+  - entity: sensor.hepo_predicted_24h_usage
+    yaxis_id: header_only
+    name: 24h ennuste
+    color: Grey
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
+
