@@ -35,6 +35,19 @@ series:
       });
     show:
       in_header: false
+  - entity: sensor.hepo_optimization_plan
+    name: Sähköauto
+    type: area
+    color: purple
+    unit: kW
+    data_generator: |
+      const plan = entity.attributes.plan;
+      if (!plan) return [];
+      return plan.map((entry) => {
+        return [new Date(entry.timestamp).getTime(), entry.planned_ev_kw || 0];
+      });
+    show:
+      in_header: false
   - entity: sensor.hepo_accuracy
     yaxis_id: header_only
     name: Virhe 3h jaksoissa
