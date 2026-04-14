@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
 from utils.price_utils import fetch_market_prices, align_interval_prices
+from utils.git_utils import get_git_version
 
 load_dotenv(override=True)
 
@@ -469,10 +470,11 @@ def optimize():
     # This ensures analyze_performance.py compares actuals against Baseload + Planned GSHP
     db_file = 'hepo.db'
     generated_at = datetime.now().astimezone().isoformat()
+    git_version = get_git_version()
     try:
         conn = sqlite3.connect(db_file)
         cur = conn.cursor()
-        
+
         # Ensure table exists (re-using logic from predict_future.py)
         cur.execute('''
             CREATE TABLE IF NOT EXISTS predictions (
@@ -480,15 +482,18 @@ def optimize():
                 generated_at TEXT,
                 predicted_usage_kw REAL,
                 solar_forecast_kw REAL,
+                version TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
-        
+
         # Schema migration: add is_fallback_price if missing
         cur.execute("PRAGMA table_info(predictions)")
         columns = [c[1] for c in cur.fetchall()]
         if 'is_fallback_price' not in columns:
             cur.execute("ALTER TABLE predictions ADD COLUMN is_fallback_price INTEGER DEFAULT 0")
+        if 'version' not in columns:
+            cur.execute("ALTER TABLE predictions ADD COLUMN version TEXT DEFAULT 'unknown'")
 
         # We reuse the same table schema as predict_future.py
         data_to_insert = [
@@ -497,16 +502,17 @@ def optimize():
                 generated_at, 
                 item['predicted_usage_kw'], 
                 item['solar_forecast_kw'], 
-                item['is_fallback_price']
+                item['is_fallback_price'],
+                git_version
             )
             for item in final_plan
         ]
-        
         cur.executemany('''
             INSERT OR REPLACE INTO predictions 
-            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price)
-            VALUES (?, ?, ?, ?, ?)
+            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price, version)
+            VALUES (?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
+
         
         conn.commit()
         conn.close()

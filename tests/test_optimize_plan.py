@@ -57,7 +57,13 @@ class OptimizeArchivingTests(unittest.TestCase):
         self.assertTrue(os.path.exists(self.db_file))
         conn = sqlite3.connect(self.db_file)
         cur = conn.cursor()
-        cur.execute("SELECT predicted_usage_kw FROM predictions LIMIT 1")
+        
+        # Check if version column exists and is not 'unknown' (assuming git is available in test env)
+        cur.execute("PRAGMA table_info(predictions)")
+        columns = [c[1] for c in cur.fetchall()]
+        self.assertIn('version', columns)
+
+        cur.execute("SELECT predicted_usage_kw, version FROM predictions LIMIT 1")
         row = cur.fetchone()
         conn.close()
         
@@ -65,6 +71,7 @@ class OptimizeArchivingTests(unittest.TestCase):
         # Predicted usage should be at least baseload (2.0)
         # GSHP might be 0 or more depending on prices/temp
         self.assertGreaterEqual(row[0], 2.0)
+        self.assertNotEqual(row[1], "")
 
 
 @contextmanager

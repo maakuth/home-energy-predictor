@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
+from utils.git_utils import get_git_version
 
 load_dotenv(override=True)
 
@@ -48,7 +49,7 @@ def get_archived_predictions():
         conn = sqlite3.connect(db_file)
         # Partition by target_timestamp to get the most recent prediction made for that point in time
         query = """
-            SELECT target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price
+            SELECT target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price, version
             FROM (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
                 FROM predictions
@@ -124,12 +125,23 @@ def analyze(days=2, do_backtest=False):
         return
 
     df_archived = get_archived_predictions()
+    current_version = get_git_version()
     
     # 1. Real-time Analysis (What actually happened)
-    comparison = df_archived.join(df_actual, how='inner')
+    # Scope to current model version if possible
+    if not df_archived.empty and 'version' in df_archived.columns:
+        df_versioned = df_archived[df_archived['version'] == current_version]
+        if df_versioned.empty:
+            print(f"⚠️ No archived predictions found for current version ({current_version}) in the last {days} days.")
+            # We don't want to report accuracy for other versions if the user wants it scoped.
+            comparison = pd.DataFrame() 
+        else:
+            comparison = df_versioned.join(df_actual, how='inner')
+    else:
+        comparison = df_archived.join(df_actual, how='inner') if not df_archived.empty else pd.DataFrame()
     
     if comparison.empty:
-        print("No overlapping data found between archived predictions and actuals.")
+        print("No overlapping data found between archived predictions (current version) and actuals.")
     else:
         # Filter out fallback prices
         comparison_clean = comparison[comparison.get('is_fallback_price', 0) == 0]
@@ -140,7 +152,7 @@ def analyze(days=2, do_backtest=False):
             res_3h['error'] = res_3h['predicted_usage'] - res_3h['actual_usage']
             mae = res_3h['error'].abs().mean()
             bias = res_3h['error'].mean()
-            print(f"\nREAL-TIME ARCHIVED PERFORMANCE (3-Hour Avg):")
+            print(f"\nREAL-TIME ARCHIVED PERFORMANCE (3-Hour Avg, Version: {current_version}):")
             print(f"  MAE:  {mae:.3f} kW")
             print(f"  Bias: {bias:+.3f} kW (Positive means over-predicting)")
             
@@ -149,7 +161,8 @@ def analyze(days=2, do_backtest=False):
                 'friendly_name': 'HEPO Real-time MAE (3h)',
                 'unit_of_measurement': 'kW',
                 'bias': float(bias),
-                'sample_count': len(res_3h)
+                'sample_count': len(res_3h),
+                'model_version': current_version
             })
 
     # 2. Hindsight Backtest (How would the current model have done?)

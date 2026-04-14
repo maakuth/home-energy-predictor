@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, call_ha_service
 from utils.price_utils import fetch_market_prices
 from utils.db_utils import fetch_states_history
+from utils.git_utils import get_git_version
 
 load_dotenv(override=True)
 
@@ -313,6 +314,7 @@ def predict():
 
     # Archive predictions for feedback loop using SQLite
     db_file = 'hepo.db'
+    git_version = get_git_version()
     try:
         conn = sqlite3.connect(db_file)
         cur = conn.cursor()
@@ -322,6 +324,7 @@ def predict():
                 generated_at TEXT,
                 predicted_usage_kw REAL,
                 solar_forecast_kw REAL,
+                version TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
@@ -332,16 +335,19 @@ def predict():
         if 'is_fallback_price' not in columns:
             print("Adding is_fallback_price column to predictions table...")
             cur.execute("ALTER TABLE predictions ADD COLUMN is_fallback_price INTEGER DEFAULT 0")
+        if 'version' not in columns:
+            print("Adding version column to predictions table...")
+            cur.execute("ALTER TABLE predictions ADD COLUMN version TEXT DEFAULT 'unknown'")
 
         # Insert predictions.
         data_to_insert = [
-            (res['timestamp'], generated_at, res['predicted_usage'], res['solar_forecast'], res['is_fallback_price'])
+            (res['timestamp'], generated_at, res['predicted_usage'], res['solar_forecast'], res['is_fallback_price'], git_version)
             for res in results
         ]
         cur.executemany('''
             INSERT OR REPLACE INTO predictions 
-            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price)
-            VALUES (?, ?, ?, ?, ?)
+            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price, version)
+            VALUES (?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
         
         conn.commit()
