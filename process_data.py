@@ -5,7 +5,7 @@ import numpy as np
 def process_data():
     print('Loading raw data...')
     try:
-        df = pd.read_csv('raw_data.csv', index_col=0)
+        df = pd.read_csv('raw_data.csv', index_col=0, low_memory=False)
     except FileNotFoundError:
         print('Error: raw_data.csv not found.')
         return
