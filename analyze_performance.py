@@ -144,7 +144,7 @@ def analyze(days=2, do_backtest=False):
         comparison_clean = comparison[comparison.get('is_fallback_price', 0) == 0]
         
         # 3-Hour Analysis
-        res_3h = comparison_clean.resample('3h').mean().dropna()
+        res_3h = comparison_clean.resample('3h').mean(numeric_only=True).dropna()
         if not res_3h.empty:
             res_3h['error'] = res_3h['predicted_usage'] - res_3h['actual_usage']
             mae = res_3h['error'].abs().mean()
@@ -168,7 +168,7 @@ def analyze(days=2, do_backtest=False):
         if not df_hindsight.empty:
             # Join hindsight with actuals
             hindsight_comp = df_hindsight.join(df_actual, how='inner')
-            h_res_3h = hindsight_comp.resample('3h').mean().dropna()
+            h_res_3h = hindsight_comp.resample('3h').mean(numeric_only=True).dropna()
             
             if not h_res_3h.empty:
                 h_res_3h['error'] = h_res_3h['hindsight_usage'] - h_res_3h['actual_usage']
