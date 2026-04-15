@@ -93,6 +93,43 @@ def save_benchmark_results(sarimax_forecast, filename="sarimax_predictions.json"
     else:
         print("Warning: No predictions generated to save.")
 
+import sqlite3
+
+def archive_sarimax_predictions(sarimax_forecast, db_file='hepo.db'):
+    """Archiving SARIMA predictions to SQLite for later benchmarking."""
+    if sarimax_forecast is None:
+        return
+        
+    try:
+        conn = sqlite3.connect(db_file)
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS sarimax_predictions (
+                target_timestamp TEXT,
+                generated_at TEXT,
+                predicted_baseload_kw REAL,
+                PRIMARY KEY (target_timestamp, generated_at)
+            )
+        ''')
+        
+        generated_at = datetime.now(timezone.utc).isoformat()
+        data_to_insert = [
+            (ts.isoformat(), generated_at, float(val))
+            for ts, val in sarimax_forecast.items()
+        ]
+        
+        cur.executemany('''
+            INSERT OR REPLACE INTO sarimax_predictions 
+            (target_timestamp, generated_at, predicted_baseload_kw)
+            VALUES (?, ?, ?)
+        ''', data_to_insert)
+        
+        conn.commit()
+        conn.close()
+        print(f"✅ Archived {len(data_to_insert)} SARIMA points to {db_file}")
+    except Exception as e:
+        print(f"⚠️ Error archiving SARIMA to SQLite: {e}")
+
 def main():
     # 1. Load historical data
     ts_data = load_historical_data()
@@ -102,9 +139,10 @@ def main():
     # 2. Predict (Forecast for 24h = 96 steps of 15min)
     forecast = predict_sarimax(ts_data, forecast_steps=96)
     
-    # 3. Save
+    # 3. Save & Archive
     if forecast is not None:
         save_benchmark_results(forecast)
+        archive_sarimax_predictions(forecast)
 
 if __name__ == "__main__":
     main()
