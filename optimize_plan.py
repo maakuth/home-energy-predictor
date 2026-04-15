@@ -394,8 +394,19 @@ def optimize():
     
     ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
     intervals_to_charge = max(1, int(round(ev_charge_hours / get_plan_interval_hours())))
-    cheapest_indices = np.argsort(import_prices)[:intervals_to_charge]
-    ev_plan = [1 if i in cheapest_indices else 0 for i in range(len(import_prices))]
+    
+    # Filter indices where EV is at home
+    home_indices = [i for i, p in enumerate(predictions_data) if p.get('ev_position', 1) == 1]
+    
+    if not home_indices:
+        print("⚠️ Warning: EV (XPZ) not predicted to be home at any time in the plan window.")
+        ev_plan = [0] * len(import_prices)
+    else:
+        # Sort ONLY home intervals by price
+        home_prices = [(import_prices[i], i) for i in home_indices]
+        home_prices.sort()
+        cheapest_home_indices = [idx for price, idx in home_prices[:intervals_to_charge]]
+        ev_plan = [1 if i in cheapest_home_indices else 0 for i in range(len(import_prices))]
 
     ev_load_kw = 7.0 # Assume 7kW charging
     planned_ev_kw = np.array([ev_load_kw if ev else 0.0 for ev in ev_plan])

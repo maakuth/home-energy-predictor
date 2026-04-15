@@ -332,6 +332,7 @@ def predict():
             'predicted_usage': p_kw,        # backward compatibility
             'solar_forecast': float(inference_data[i]['solar_forecast']),
             'outside_temp': float(inference_data[i]['outside_temp']),
+            'ev_position': int(inference_data[i].get('ev_position', 1)),
             'is_sauna_active': int(inference_data[i].get('is_sauna_active', 0)),
             'is_fallback_price': int(is_fallback_price[i])
         })
