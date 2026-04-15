@@ -63,17 +63,27 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
 
         # Sauna Heuristic Projection
         is_sauna_proj = 0
+        is_weekend = current_ts.weekday() >= 5
+        hour = current_ts.hour
+
         if is_sauna_detected and current_ts < (now + timedelta(hours=4)):
             is_sauna_proj = 1
         
         month = current_ts.month
         if month in [9,10,11,12,1,2,3,4,5]:
-            is_weekend = current_ts.weekday() >= 5
-            hour = current_ts.hour
             if is_weekend and 18 <= hour <= 21:
                 is_sauna_proj = 1
             elif not is_weekend and 18 <= hour <= 21 and not was_warm_yesterday:
                 is_sauna_proj = 1
+
+        # EV Position Heuristic Projection: XPZ is rarely home during workdays (08:00-17:00)
+        ev_pos_proj = 1
+        if not is_weekend and 8 <= hour < 17:
+            ev_pos_proj = 0
+        
+        # Override with current state for the first 2 hours
+        if current_ts < (now + timedelta(hours=2)):
+            ev_pos_proj = current_states.get('ev_pos_val', ev_pos_proj)
 
         row = {
             'outside_temp': forecast_temp,
@@ -83,7 +93,7 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
             'acc_roc': 0,
             'is_fireplace_lag1': 0,
             'ev_soc': soc_val,
-            'ev_position': 1,
+            'ev_position': ev_pos_proj,
             'baseload_lag_1h': lag1h_val,
             'baseload_lag_24h': lag24h_val,
             'is_extended_complex': 1,
@@ -256,6 +266,10 @@ def predict():
     except (ValueError, TypeError, AttributeError):
         soc_val = 80.0
 
+    ev_pos = get_ha_state('device_tracker.xpz_491_position')
+    pos_val = 1 if ev_pos and ev_pos.get('state') == 'home' else 0
+    print(f"🚗 EV Status - SOC: {soc_val}%, Position: {'Home' if pos_val else 'Away'}")
+
     # Load model and features
     model = xgb.XGBRegressor()
     try:
@@ -285,6 +299,7 @@ def predict():
         'wind_val': wind_val,
         'acc_val': acc_val, 
         'soc_val': soc_val,
+        'ev_pos_val': pos_val,
         'lag1h_val': lag1h_val,
         'lag24h_val': lag24h_val
     }
