@@ -400,24 +400,37 @@ def optimize():
     ev_load_kw = 7.0 # Assume 7kW charging
     planned_ev_kw = np.array([ev_load_kw if ev else 0.0 for ev in ev_plan])
 
-    # Leaf Strategy: Charge if very cheap or solar surplus
-    leaf_price_threshold_night = np.percentile(import_prices, 20)
+    # Leaf Strategy:
+    # 1. Day Opportunity: Charge if solar surplus or price < 35th percentile
+    # 2. Night Backup: Charge for N cheapest hours between 22:00 and 07:00 to ensure morning charge.
+    leaf_backup_hours = get_env_float('LEAF_BACKUP_HOURS', 4.0)
+    leaf_intervals_backup = max(1, int(round(leaf_backup_hours / get_plan_interval_hours())))
+    
+    # Find indices in the night window (22:00 - 07:00)
+    night_window_indices = [
+        i for i, ts in enumerate(prediction_timestamps) 
+        if ts.hour >= 22 or ts.hour < 7
+    ]
+    
+    # Sort night window indices by price to find the cheapest ones for backup
+    night_prices = [(import_prices[i], i) for i in night_window_indices]
+    night_prices.sort()
+    leaf_backup_indices = [idx for price, idx in night_prices[:leaf_intervals_backup]]
+    
     leaf_price_threshold_day = np.percentile(import_prices, 35)
     
     planned_leaf_kw = []
     leaf_intents = []
     for i, ts in enumerate(prediction_timestamps):
-        is_day = 6 <= ts.hour < 18
         price = import_prices[i]
         solar = solar_array[i]
+        is_day = 7 <= ts.hour < 22 # Use slightly different "day" for opportunity logic
         
         intent = 'OFF'
-        if is_day:
-            if price <= leaf_price_threshold_day or solar >= 2.0:
-                intent = 'ON'
-        else:
-            if price <= leaf_price_threshold_night:
-                intent = 'ON'
+        if i in leaf_backup_indices:
+            intent = 'ON' # Night Backup (Forced)
+        elif is_day and (price <= leaf_price_threshold_day or solar >= 2.0):
+            intent = 'ON' # Day Opportunity
         
         leaf_intents.append(intent)
         planned_leaf_kw.append(3.0 if intent == 'ON' else 0.0)
