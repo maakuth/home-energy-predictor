@@ -536,8 +536,8 @@ def optimize():
         final_plan.append({
             'timestamp': ts.isoformat(),
             'predicted_baseload_kw': p_baseload_kw,
-            'sarima_lower_95': float(sarima_lower[i]) if not np.isnan(sarima_lower[i]) else None,
-            'sarima_upper_95': float(sarima_upper[i]) if not np.isnan(sarima_upper[i]) else None,
+            'sarima_lower_95': float(sarima_lower.iloc[i]) if not np.isnan(sarima_lower.iloc[i]) else None,
+            'sarima_upper_95': float(sarima_upper.iloc[i]) if not np.isnan(sarima_upper.iloc[i]) else None,
             'planned_gshp_kw': p_gshp_kw,
             'planned_ev_kw': p_ev_kw,
             'planned_leaf_kw': p_leaf_kw,
