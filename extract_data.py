@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 load_dotenv(override=True)
 
-RESAMPLE_INTERVAL = os.getenv('DATA_RESAMPLE_INTERVAL', '15min')
+RESAMPLE_INTERVAL = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
 
 ENTITIES = {
     'sensor.ulkona_temperature_2': 'outside_temp',
