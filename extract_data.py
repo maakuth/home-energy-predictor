@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 load_dotenv(override=True)
 
-RESAMPLE_INTERVAL = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
+RESAMPLE_INTERVAL = os.getenv('DATA_RESAMPLE_INTERVAL', '15min')
 
 ENTITIES = {
     'sensor.ulkona_temperature_2': 'outside_temp',
@@ -139,6 +139,10 @@ def main():
     # Only interpolate numeric columns
     numeric_cols = final_df.select_dtypes(include=['number']).columns
     final_df[numeric_cols] = final_df[numeric_cols].interpolate(method='linear', limit=15)
+    
+    # Final cleanup: sort and deduplicate
+    final_df = final_df.sort_index()
+    final_df = final_df[~final_df.index.duplicated(keep='first')]
     
     # Create final dataset
     final_df.to_csv('raw_data.csv')

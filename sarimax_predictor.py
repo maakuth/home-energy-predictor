@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 # SARIMA Predictor Module: sarimax_predictor.py
 # Module designed to predict future home energy load using SARIMA based on historical baseload.
 
-def load_historical_data(file_path='processed_data.csv', target_col='baseload_power', last_n_days=7):
+def load_historical_data(file_path='processed_data.csv', target_col='baseload_power', last_n_days=14):
     """
     Loads historical baseload data for training.
     """
@@ -52,13 +52,12 @@ def predict_sarimax(ts_data, forecast_steps=96):
         return None
 
     try:
-        print("Training SARIMA model (Daily seasonality, s=96)...")
-        # (1,1,1) x (1,1,1,96) is often slow. Let's start with a simpler (1,0,0) seasonal if it's too slow.
-        # But for benchmarking, let's try standard daily SARIMA.
+        print("Training SARIMA model (Daily seasonality, s=96, D=1)...")
+        # (1,1,1) x (1,1,0,96) is a robust baseline for daily seasonality.
         model = SARIMAX(
             ts_data, 
             order=(1, 1, 1), 
-            seasonal_order=(1, 0, 0, 96), 
+            seasonal_order=(1, 1, 0, 96), 
             enforce_stationarity=False, 
             enforce_invertibility=False
         )

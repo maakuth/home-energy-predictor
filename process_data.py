@@ -12,6 +12,10 @@ def process_data():
     
     df.index = pd.to_datetime(df.index, utc=True)
     
+    # Fundamental step: Sort and deduplicate
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep='first')]
+    
     print('Denoising and filling gaps...')
     fill_zero_cols = ['gshp_power', 'aahp_living_power', 'aahp_cabin_power', 'mummun_power', 'solar_forecast', 'solar_actual', 'leaf_power']
     for col in fill_zero_cols:
@@ -21,11 +25,30 @@ def process_data():
     if 'ev_soc' in df.columns:
         df['ev_soc'] = df['ev_soc'].ffill().fillna(0)
     if 'ev_position' in df.columns:
-        df['ev_position'] = df['ev_position'].ffill().fillna(False).astype(int)
+        # Assuming ev_position might be string 'home'/'away' in raw, but extract_data might have pre-converted.
+        # Let's be safe.
+        if df['ev_position'].dtype == object:
+            df['ev_position'] = (df['ev_position'] == 'home').astype(int)
+        df['ev_position'] = df['ev_position'].ffill().fillna(0).astype(int)
 
+    # Denoise on high resolution if available (e.g. 1-minute)
     numeric_cols = df.select_dtypes(include=[np.number]).columns
+    # 15-point median filter is ~15 mins if 1-min data.
     rolled = df[numeric_cols].rolling(window=15, center=True).median()
     df[numeric_cols] = rolled.fillna(df[numeric_cols])
+    
+    # --- RESAMPLE TO 15 MINUTES ---
+    print('Resampling to 15-minute intervals...')
+    resample_rules = {}
+    for col in df.columns:
+        if col == 'ev_position':
+            resample_rules[col] = 'max' # If home at any point in 15 mins, consider home
+        elif col in numeric_cols:
+            resample_rules[col] = 'mean'
+        else:
+            resample_rules[col] = 'first'
+            
+    df = df.resample('15min').agg(resample_rules).ffill()
     
     # Compute total home consumption BEFORE clipping, because total_power (grid meter)
     # is legitimately negative when solar export exceeds load.
@@ -63,7 +86,7 @@ def process_data():
         df['sauna_temp'] = df['sauna_temp'].ffill().clip(lower=0, upper=120)
         df['is_sauna_active'] = (df['sauna_temp'] > 30).astype(int)
 
-    print('Adding lagged features...')
+    print('Adding lagged features (now correctly at 15-min resolution)...')
     if 'baseload_power' in df.columns:
         # Lag 1h (4 * 15min)
         df['baseload_lag_1h'] = df['baseload_power'].shift(4).ffill()
