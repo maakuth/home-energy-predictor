@@ -61,6 +61,36 @@ series:
       });
     show:
       in_header: false
+  - entity: sensor.hepo_optimization_plan
+    name: "SARIMA Alaraja (95%)"
+    type: line
+    color: lightgrey
+    stroke_width: 1
+    unit: kW
+    data_generator: |
+      const plan = entity.attributes.plan;
+      if (!plan) return [];
+      return plan.filter(e => e.sarima_lower_95 !== null).map((entry) => {
+        return [new Date(entry.timestamp).getTime(), entry.sarima_lower_95];
+      });
+    show:
+      in_header: false
+      legend_value: false
+  - entity: sensor.hepo_optimization_plan
+    name: "SARIMA Yläraja (95%)"
+    type: line
+    color: lightgrey
+    stroke_width: 1
+    unit: kW
+    data_generator: |
+      const plan = entity.attributes.plan;
+      if (!plan) return [];
+      return plan.filter(e => e.sarima_upper_95 !== null).map((entry) => {
+        return [new Date(entry.timestamp).getTime(), entry.sarima_upper_95];
+      });
+    show:
+      in_header: false
+      legend_value: false
   - entity: sensor.hepo_accuracy
     yaxis_id: header_only
     name: Virhe 3h jaksoissa

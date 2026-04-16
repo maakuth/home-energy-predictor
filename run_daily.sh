@@ -23,20 +23,23 @@ source venv/bin/activate
   python process_data.py
 
   # 3. Retrain Model
-  echo "[3/5] Retraining Model..."
+  echo "[3/6] Retraining XGBoost Model..."
   python train_model.py
 
-  # 4. Predict Future
-  echo "[4/5] Predicting Future..."
+  echo "[4/6] Retraining SARIMA Model (60-day window)..."
+  python train_sarima.py
+
+  # 5. Predict Future
+  echo "[5/7] Predicting Future..."
   python predict_future.py
 
-  # 5. Optimize & Push
-  echo "[5/5] Optimizing & Pushing Plan..."
+  # 6. Optimize & Push
+  echo "[6/7] Optimizing & Pushing Plan..."
   python optimize_plan.py
   python push_to_ha.py
 
-  # 6. Performance Analysis
-  echo "[6/6] Analyzing Performance (Last 7 Days)..."
+  # 7. Performance Analysis
+  echo "[7/7] Analyzing Performance (Last 7 Days)..."
   python analyze_performance.py --days 7 --backtest
 
   echo "=== Pipeline Complete: $(date) ==="

@@ -35,16 +35,52 @@ def get_env_bool(name, default=False):
     return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
-def load_predictions(file_path='future_predictions.json'):
+def load_predictions(file_path='future_predictions.json', sarima_path='sarimax_predictions.json'):
     with open(file_path, 'r') as f:
-        predictions_data = json.load(f)
+        xgb_data = json.load(f)
 
-    # Use 'predicted_baseload' if available, fallback to 'predicted_usage'
-    predictions = np.array([p.get('predicted_baseload', p.get('predicted_usage', 0)) for p in predictions_data], dtype=float)
-    prediction_timestamps = [datetime.fromisoformat(p['timestamp']) for p in predictions_data]
-    prediction_solar = np.array([p['solar_forecast'] for p in predictions_data], dtype=float)
+    # Convert XGBoost data to DataFrame for easier alignment
+    df_xgb = pd.DataFrame(xgb_data)
+    df_xgb['timestamp'] = pd.to_datetime(df_xgb['timestamp'], utc=True)
+    df_xgb = df_xgb.set_index('timestamp')
 
-    return predictions_data, predictions, prediction_timestamps, prediction_solar
+    # Default to 100% XGBoost if SARIMA is missing
+    final_baseload = df_xgb['predicted_baseload'].copy()
+    sarima_lower = pd.Series(np.nan, index=df_xgb.index)
+    sarima_upper = pd.Series(np.nan, index=df_xgb.index)
+
+    if os.path.exists(sarima_path):
+        try:
+            with open(sarima_path, 'r') as f:
+                sarima_data = json.load(f)
+            
+            df_sarima = pd.DataFrame(sarima_data)
+            df_sarima['timestamp'] = pd.to_datetime(df_sarima['timestamp'], utc=True)
+            df_sarima = df_sarima.set_index('timestamp')
+            
+            # Align SARIMA (15min) to XGBoost (1min) using interpolation
+            # Only blend for the overlapping period
+            common_idx = df_xgb.index.union(df_sarima.index).sort_values()
+            df_sarima_resampled = df_sarima[['predicted_baseload', 'lower_95', 'upper_95']].reindex(common_idx).interpolate(method='time').reindex(df_xgb.index)
+            
+            # Weighting: 60% SARIMA, 40% XGBoost (SARIMA showed 0.67kW MAE vs XGBoost 0.88kW)
+            # This 'Ensemble' approach reduces sensitivity to single-model errors.
+            print(f"Blending XGBoost with SARIMA (60/40 weight)...")
+            final_baseload = (0.4 * df_xgb['predicted_baseload']) + (0.6 * df_sarima_resampled['predicted_baseload'])
+            # Fill any NaNs (if SARIMA horizon is shorter) with XGBoost
+            final_baseload = final_baseload.fillna(df_xgb['predicted_baseload'])
+            
+            sarima_lower = df_sarima_resampled['lower_95']
+            sarima_upper = df_sarima_resampled['upper_95']
+            
+        except Exception as e:
+            print(f"⚠️ Error blending SARIMA: {e}. Falling back to 100% XGBoost.")
+
+    predictions = final_baseload.values.astype(float)
+    prediction_timestamps = df_xgb.index.to_pydatetime()
+    prediction_solar = df_xgb['solar_forecast'].values.astype(float)
+
+    return xgb_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper
 
 
 def build_tariff_prices(market_prices):
@@ -351,7 +387,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
 def optimize():
     print('Loading predictions...')
     try:
-        predictions_data, predictions, prediction_timestamps, prediction_solar = load_predictions('future_predictions.json')
+        predictions_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper = load_predictions('future_predictions.json')
     except FileNotFoundError:
         print('Error: future_predictions.json not found. Run predict_future.py first.')
         return
@@ -500,6 +536,8 @@ def optimize():
         final_plan.append({
             'timestamp': ts.isoformat(),
             'predicted_baseload_kw': p_baseload_kw,
+            'sarima_lower_95': float(sarima_lower[i]) if not np.isnan(sarima_lower[i]) else None,
+            'sarima_upper_95': float(sarima_upper[i]) if not np.isnan(sarima_upper[i]) else None,
             'planned_gshp_kw': p_gshp_kw,
             'planned_ev_kw': p_ev_kw,
             'planned_leaf_kw': p_leaf_kw,
