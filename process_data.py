@@ -73,6 +73,17 @@ def process_data():
         df['wind_speed'] = df['wind_speed'].ffill().clip(lower=0, upper=100)
     if 'accumulator_temp' in df.columns:
         df['accumulator_temp'] = df['accumulator_temp'].ffill().clip(lower=0, upper=100)
+    
+    if 'gshp_pump_temp' in df.columns:
+        # User specified: if pump power < 100W, the sensor is invalid/weird.
+        # Set to NaN so XGBoost treats it as 'missing' or disregards it.
+        # This also naturally handles the pre-June 2025 missing data.
+        if 'gshp_power' in df.columns:
+            df['is_gshp_pump_running'] = (df['gshp_power'] >= 100).astype(int)
+            df.loc[df['is_gshp_pump_running'] == 0, 'gshp_pump_temp'] = np.nan
+        else:
+            df['is_gshp_pump_running'] = 0
+            
     if 'sauna_temp' in df.columns:
         df['sauna_temp'] = df['sauna_temp'].ffill().clip(lower=0, upper=120)
         df['is_sauna_active'] = (df['sauna_temp'] > 30).astype(int)

@@ -18,7 +18,7 @@ def train(holdout_days=0):
     # Features (X)
     features = [
         'outside_temp', 'wind_speed', 'solar_forecast', 
-        'accumulator_temp', 'acc_roc', 'is_fireplace_lag1', 
+        'accumulator_temp', 'gshp_pump_temp', 'is_gshp_pump_running', 'acc_roc', 'is_fireplace_lag1', 
         'ev_soc', 'ev_position',
         'baseload_lag_1h', 'baseload_lag_24h',
         'is_extended_complex',

@@ -27,6 +27,7 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
     temp_val = current_states.get('temp_val', 5.0)
     wind_val = current_states.get('wind_val', 0.0)
     acc_val = current_states.get('acc_val', 45.0)
+    p_temp_val = current_states.get('p_temp_val', np.nan)
     soc_val = current_states.get('soc_val', 80.0)
     lag1h_val = current_states.get('lag1h_val', 1.0)
     lag24h_val = current_states.get('lag24h_val', 1.0)
@@ -90,6 +91,8 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
             'wind_speed': forecast_wind,
             'solar_forecast': solar_val,
             'accumulator_temp': acc_val,
+            'gshp_pump_temp': p_temp_val,
+            'is_gshp_pump_running': 1 if not np.isnan(p_temp_val) else 0,
             'acc_roc': 0,
             'is_fireplace_lag1': 0,
             'ev_soc': soc_val,
@@ -218,6 +221,19 @@ def predict():
     except (ValueError, TypeError, AttributeError):
         acc_val = 45.0
 
+    # GSHP Pump Temperature logic
+    gshp_pump_temp_state = get_ha_state('sensor.mlp_pumpun_lampotla')
+    gshp_power_state = get_ha_state('sensor.mlp_teho')
+    try:
+        p_temp_val = float(gshp_pump_temp_state.get('state')) if gshp_pump_temp_state and gshp_pump_temp_state.get('state') not in ['unknown', 'unavailable'] else np.nan
+        p_power_val = float(gshp_power_state.get('state')) if gshp_power_state and gshp_power_state.get('state') not in ['unknown', 'unavailable'] else 0.0
+        
+        # User specified: if pump power < 100W, the sensor is invalid/weird.
+        if p_power_val < 100:
+            p_temp_val = np.nan
+    except (ValueError, TypeError, AttributeError):
+        p_temp_val = np.nan
+
     sauna_temp = get_ha_state('sensor.sauna_temperature_2')
     try:
         s_temp_val = float(sauna_temp.get('state')) if sauna_temp and sauna_temp.get('state') not in ['unknown', 'unavailable'] else 20.0
@@ -298,6 +314,7 @@ def predict():
         'temp_val': temp_val, 
         'wind_val': wind_val,
         'acc_val': acc_val, 
+        'p_temp_val': p_temp_val,
         'soc_val': soc_val,
         'ev_pos_val': pos_val,
         'lag1h_val': lag1h_val,
