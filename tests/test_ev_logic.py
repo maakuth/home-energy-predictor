@@ -75,5 +75,39 @@ class TestEVLogic(unittest.TestCase):
             
         self.assertTrue(all(p['planned_ev_kw'] == 0.0 for p in plan), "Should not charge if never home")
 
+    @patch('optimize_plan.get_ha_state')
+    @patch('optimize_plan.fetch_market_prices')
+    @patch('optimize_plan.build_tariff_prices')
+    def test_ev_charging_based_on_soc_deficit(self, mock_build_tariff, mock_fetch_prices, mock_ha):
+        # Setup: 4 intervals (1h total). Car at home all the time.
+        # Prices: [0.10, 0.05, 0.08, 0.20]. Cheapest are index 1, then 2, then 0.
+        # SoC: 20%. Target 80%. Deficit = 60% of 60kWh = 36kWh.
+        # Charger: 7kW * 0.25h = 1.75 kWh per slot.
+        # Slots needed: 36 / 1.75 = 20.5 -> 21 slots.
+        # Since we only have 4 intervals total, it should take ALL 4 intervals.
+        
+        for p in self.predictions_data:
+            p['ev_position'] = 1
+        with open(self.predictions_file, 'w') as f:
+            json.dump(self.predictions_data, f)
+
+        mock_build_tariff.return_value = (np.array([0.10, 0.05, 0.08, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
+        mock_fetch_prices.return_value = ([0.10, 0.05, 0.08, 0.20], [0,0,0,0], "Mock")
+        
+        mock_ha.return_value = {"state": "20"} # EV SoC = 20%
+        
+        with patch.dict(os.environ, {
+            "EV_TARGET_SOC_PCT": "80", 
+            "EV_CAPACITY_KWH": "60",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            optimize()
+            
+        with open(self.plan_file, 'r') as f:
+            plan = json.load(f)
+            
+        # Verify it charges in all 4 slots because deficit is massive
+        self.assertTrue(all(p['planned_ev_kw'] == 7.0 for p in plan), "Should charge in all 4 intervals to meet energy demand")
+
 if __name__ == '__main__':
     unittest.main()

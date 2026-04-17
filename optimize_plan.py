@@ -428,9 +428,22 @@ def optimize():
     # Combine Baseload + Planned GSHP + Planned EV (XPZ) for Battery optimization
     planned_gshp_kw = np.array([g['gshp_electric_kw'] for g in gshp_plan])
     
-    ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
-    intervals_to_charge = max(1, int(round(ev_charge_hours / get_plan_interval_hours())))
+    # EV Strategy:
+    # 1. Target SoC logic: Calculate kWh needed.
+    # 2. Fallback: Fixed EV_CHARGE_HOURS logic if SoC unavailable.
     
+    ev_target_soc = get_env_float('EV_TARGET_SOC_PCT', 80.0)
+    ev_capacity_kwh = get_env_float('EV_CAPACITY_KWH', 60.0)
+    
+    # Try to get current SoC from HA
+    ev_soc_state = get_ha_state('sensor.xpz_491_battery_level')
+    current_soc = None
+    if ev_soc_state and ev_soc_state.get('state') not in ['unknown', 'unavailable']:
+        try:
+            current_soc = float(ev_soc_state['state'])
+        except (ValueError, TypeError):
+            pass
+            
     # Filter indices where EV is at home
     home_indices = [i for i, p in enumerate(predictions_data) if p.get('ev_position', 1) == 1]
     
@@ -438,10 +451,24 @@ def optimize():
         print("⚠️ Warning: EV (XPZ) not predicted to be home at any time in the plan window.")
         ev_plan = [0] * len(import_prices)
     else:
-        # Sort ONLY home intervals by price
+        # Calculate needed slots
+        if current_soc is not None and current_soc < ev_target_soc:
+            deficit_kwh = (ev_target_soc - current_soc) / 100.0 * ev_capacity_kwh
+            ev_power_kw = 7.0 # Assuming 7kW charger
+            needed_slots = max(1, int(np.ceil(deficit_kwh / (ev_power_kw * get_plan_interval_hours()))))
+            print(f"EV SoC {current_soc}%: Need {needed_slots} slots to reach {ev_target_soc}%")
+        else:
+            # Fallback to fixed duration
+            ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
+            needed_slots = max(1, int(round(ev_charge_hours / get_plan_interval_hours())))
+            print(f"EV SoC unknown/full. Using fixed {ev_charge_hours}h duration.")
+
+        # Sort HOME intervals by price
         home_prices = [(import_prices[i], i) for i in home_indices]
         home_prices.sort()
-        cheapest_home_indices = [idx for price, idx in home_prices[:intervals_to_charge]]
+        
+        # Take N cheapest home slots
+        cheapest_home_indices = [idx for price, idx in home_prices[:needed_slots]]
         ev_plan = [1 if i in cheapest_home_indices else 0 for i in range(len(import_prices))]
 
     ev_load_kw = 7.0 # Assume 7kW charging
