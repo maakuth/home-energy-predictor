@@ -529,6 +529,12 @@ def optimize():
     print('Time        | Baseload | GSHP kW | EV kW | Leaf kW | Market | Import | Solar | SOC% | Intent | Acc Sim')
     print('------------|----------|---------|-------|---------|--------|--------|-------|------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
+        # Ensure ts is local-aware for consistent display
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc).astimezone()
+        else:
+            ts = ts.astimezone()
+            
         p_baseload_kw = float(predictions[i])
         p_gshp_kw = float(planned_gshp_kw[i])
         p_ev_kw = float(planned_ev_kw[i])
