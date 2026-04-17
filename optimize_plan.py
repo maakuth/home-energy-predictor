@@ -63,10 +63,10 @@ def load_predictions(file_path='future_predictions.json', sarima_path='sarimax_p
             common_idx = df_xgb.index.union(df_sarima.index).sort_values()
             df_sarima_resampled = df_sarima[['predicted_baseload', 'lower_95', 'upper_95']].reindex(common_idx).interpolate(method='time').reindex(df_xgb.index)
             
-            # Weighting: 60% SARIMA, 40% XGBoost (SARIMA showed 0.67kW MAE vs XGBoost 0.88kW)
-            # This 'Ensemble' approach reduces sensitivity to single-model errors.
-            print(f"Blending XGBoost with SARIMA (60/40 weight)...")
-            final_baseload = (0.4 * df_xgb['predicted_baseload']) + (0.6 * df_sarima_resampled['predicted_baseload'])
+            # Weighting: 50% SARIMA, 50% XGBoost
+            # Balanced approach for seasonal stability (SARIMA) and feature awareness (XGBoost)
+            print(f"Blending XGBoost with SARIMA (50/50 weight)...")
+            final_baseload = (0.5 * df_xgb['predicted_baseload']) + (0.5 * df_sarima_resampled['predicted_baseload'])
             # Fill any NaNs (if SARIMA horizon is shorter) with XGBoost
             final_baseload = final_baseload.fillna(df_xgb['predicted_baseload'])
             
