@@ -452,11 +452,11 @@ def optimize():
         ev_plan = [0] * len(import_prices)
     else:
         # Calculate needed slots
+        ev_power_kw = get_env_float('EV_CHARGE_POWER_KW', 3.5)
         if current_soc is not None and current_soc < ev_target_soc:
             deficit_kwh = (ev_target_soc - current_soc) / 100.0 * ev_capacity_kwh
-            ev_power_kw = 7.0 # Assuming 7kW charger
             needed_slots = max(1, int(np.ceil(deficit_kwh / (ev_power_kw * get_plan_interval_hours()))))
-            print(f"EV SoC {current_soc}%: Need {needed_slots} slots to reach {ev_target_soc}%")
+            print(f"EV SoC {current_soc}%: Need {needed_slots} slots to reach {ev_target_soc}% at {ev_power_kw}kW")
         else:
             # Fallback to fixed duration
             ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
@@ -471,8 +471,7 @@ def optimize():
         cheapest_home_indices = [idx for price, idx in home_prices[:needed_slots]]
         ev_plan = [1 if i in cheapest_home_indices else 0 for i in range(len(import_prices))]
 
-    ev_load_kw = 7.0 # Assume 7kW charging
-    planned_ev_kw = np.array([ev_load_kw if ev else 0.0 for ev in ev_plan])
+    planned_ev_kw = np.array([ev_power_kw if ev else 0.0 for ev in ev_plan])
 
     # Leaf Strategy:
     # 1. Day Opportunity: Charge if solar surplus or price < 35th percentile

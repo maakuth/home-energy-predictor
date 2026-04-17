@@ -48,7 +48,7 @@ class TestEVLogic(unittest.TestCase):
             
         # Car is home at index 1 and 3. Cheapest of those is index 1 (price 0.10 < 0.20).
         # Even though index 0 and 2 are cheaper, car is away there.
-        self.assertEqual(plan[1]['planned_ev_kw'], 7.0, "Should charge at index 1 (cheapest home interval)")
+        self.assertEqual(plan[1]['planned_ev_kw'], 3.5, "Should charge at index 1 (cheapest home interval)")
         self.assertEqual(plan[0]['planned_ev_kw'], 0.0, "Should NOT charge at index 0 (car away)")
         self.assertEqual(plan[2]['planned_ev_kw'], 0.0, "Should NOT charge at index 2 (car away)")
         self.assertEqual(plan[3]['planned_ev_kw'], 0.0, "Should NOT charge at index 3")
@@ -107,7 +107,7 @@ class TestEVLogic(unittest.TestCase):
             plan = json.load(f)
             
         # Verify it charges in all 4 slots because deficit is massive
-        self.assertTrue(all(p['planned_ev_kw'] == 7.0 for p in plan), "Should charge in all 4 intervals to meet energy demand")
+        self.assertTrue(all(p['planned_ev_kw'] == 3.5 for p in plan), "Should charge in all 4 intervals to meet energy demand")
 
 if __name__ == '__main__':
     unittest.main()
