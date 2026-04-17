@@ -453,15 +453,20 @@ def optimize():
     else:
         # Calculate needed slots
         ev_power_kw = get_env_float('EV_CHARGE_POWER_KW', 3.5)
-        if current_soc is not None and current_soc < ev_target_soc:
+        if current_soc is None:
+            # Fallback to fixed duration if we don't know the SoC
+            ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
+            needed_slots = max(1, int(round(ev_charge_hours / get_plan_interval_hours())))
+            print(f"EV SoC unknown. Falling back to fixed {ev_charge_hours}h duration.")
+        elif current_soc >= ev_target_soc:
+            # Battery is already at or above target
+            needed_slots = 0
+            print(f"EV SoC {current_soc}% is at or above target {ev_target_soc}%. No charging needed.")
+        else:
+            # Calculate deficit
             deficit_kwh = (ev_target_soc - current_soc) / 100.0 * ev_capacity_kwh
             needed_slots = max(1, int(np.ceil(deficit_kwh / (ev_power_kw * get_plan_interval_hours()))))
             print(f"EV SoC {current_soc}%: Need {needed_slots} slots to reach {ev_target_soc}% at {ev_power_kw}kW")
-        else:
-            # Fallback to fixed duration
-            ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)
-            needed_slots = max(1, int(round(ev_charge_hours / get_plan_interval_hours())))
-            print(f"EV SoC unknown/full. Using fixed {ev_charge_hours}h duration.")
 
         # Sort HOME intervals by price
         home_prices = [(import_prices[i], i) for i in home_indices]

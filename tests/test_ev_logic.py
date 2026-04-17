@@ -109,5 +109,28 @@ class TestEVLogic(unittest.TestCase):
         # Verify it charges in all 4 slots because deficit is massive
         self.assertTrue(all(p['planned_ev_kw'] == 3.5 for p in plan), "Should charge in all 4 intervals to meet energy demand")
 
+    @patch('optimize_plan.get_ha_state')
+    @patch('optimize_plan.fetch_market_prices')
+    @patch('optimize_plan.build_tariff_prices')
+    def test_ev_no_charging_when_at_target_soc(self, mock_build_tariff, mock_fetch_prices, mock_ha):
+        # Setup: Car home, SoC = 85%, Target = 80%.
+        for p in self.predictions_data:
+            p['ev_position'] = 1
+        with open(self.predictions_file, 'w') as f:
+            json.dump(self.predictions_data, f)
+
+        mock_build_tariff.return_value = (np.array([0.10, 0.05, 0.08, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
+        mock_fetch_prices.return_value = ([0.10, 0.05, 0.08, 0.20], [0,0,0,0], "Mock")
+        
+        mock_ha.return_value = {"state": "85"} # SoC already above target
+        
+        with patch.dict(os.environ, {"EV_TARGET_SOC_PCT": "80"}):
+            optimize()
+            
+        with open(self.plan_file, 'r') as f:
+            plan = json.load(f)
+            
+        self.assertTrue(all(p['planned_ev_kw'] == 0.0 for p in plan), "Should not plan any charging when SoC is above target")
+
 if __name__ == '__main__':
     unittest.main()
