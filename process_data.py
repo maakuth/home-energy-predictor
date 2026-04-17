@@ -125,6 +125,19 @@ def process_data():
     df['day_of_week'] = df.index.dayofweek
     df['month'] = df.index.month
     
+    # Cyclical Encoding (Trigonometric features)
+    # Hour of day (24h cycle)
+    df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+    df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+    
+    # Day of week (7d cycle)
+    df['day_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+    df['day_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+    
+    # Month of year (12m cycle)
+    df['month_sin'] = np.sin(2 * np.pi * (df['month']-1) / 12)
+    df['month_cos'] = np.cos(2 * np.pi * (df['month']-1) / 12)
+    
     critical_cols = ['total_home_power', 'outside_temp', 'accumulator_temp']
     df = df.dropna(subset=[c for c in critical_cols if c in df.columns])
     

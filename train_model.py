@@ -22,7 +22,8 @@ def train(holdout_days=0):
         'ev_soc', 'ev_position',
         'baseload_lag_1h', 'baseload_lag_24h',
         'is_extended_complex',
-        'hour', 'minute', 'quarter_hour', 'day_of_week', 'month'
+        'hour', 'minute', 'quarter_hour', 'day_of_week', 'month',
+        'hour_sin', 'hour_cos', 'day_sin', 'day_cos', 'month_sin', 'month_cos'
     ]
 
     # Drop rows where critical new features are missing
