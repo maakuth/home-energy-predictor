@@ -303,7 +303,7 @@ def predict():
         return
 
     # Determine prediction window: from next interval until end of available solar horizon.
-    now = datetime.now().astimezone() # Use aware datetime
+    now = datetime.now().astimezone() # Use aware datetime, local tz
     interval = max(PREDICTION_INTERVAL_MINUTES, 1)
     minutes_to_next = interval - (now.minute % interval)
     if minutes_to_next == interval and now.second == 0 and now.microsecond == 0:
@@ -313,6 +313,12 @@ def predict():
     # Find the latest timestamp in solar data (usually end of tomorrow)
     # If solar data is short, limit to what we have
     end_time = df_solar.index.max()
+    
+    # Ensure end_time matches the same timezone as start_time
+    if end_time.tzinfo is None:
+        end_time = end_time.tz_localize('UTC').astimezone(start_time.tzinfo)
+    else:
+        end_time = end_time.astimezone(start_time.tzinfo)
     
     print(f'Predicting from {start_time} to {end_time}')
     
