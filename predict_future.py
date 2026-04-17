@@ -105,6 +105,12 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
             'quarter_hour': current_ts.minute // 15,
             'day_of_week': current_ts.weekday(),
             'month': current_ts.month,
+            'hour_sin': np.sin(2 * np.pi * current_ts.hour / 24),
+            'hour_cos': np.cos(2 * np.pi * current_ts.hour / 24),
+            'day_sin': np.sin(2 * np.pi * current_ts.weekday() / 7),
+            'day_cos': np.cos(2 * np.pi * current_ts.weekday() / 7),
+            'month_sin': np.sin(2 * np.pi * (current_ts.month - 1) / 12),
+            'month_cos': np.cos(2 * np.pi * (current_ts.month - 1) / 12),
             'is_sauna_active': is_sauna_proj
         }
         inference_data.append(row)
