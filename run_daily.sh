@@ -26,7 +26,7 @@ source venv/bin/activate
   echo "[3/6] Retraining XGBoost Model..."
   python train_model.py
 
-  echo "[4/6] Retraining SARIMA Model (60-day window)..."
+  echo "[4/6] Retraining SARIMA Model (14-day window)..."
   python train_sarima.py
 
   # 5. Predict Future

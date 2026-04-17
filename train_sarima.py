@@ -2,13 +2,14 @@ import pandas as pd
 import numpy as np
 import os
 import pickle
+import fcntl
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sarimax_predictor import load_historical_data
 
 # SARIMA Training Module: train_sarima.py
 # Runs daily to fit the SARIMA model on 60 days of history.
 
-def train_sarima(days=60):
+def train_sarima(days=14):
     print(f"Loading last {days} days for SARIMA training...")
     ts_data = load_historical_data(last_n_days=days)
     
@@ -16,28 +17,51 @@ def train_sarima(days=60):
         print("❌ Not enough data for SARIMA training.")
         return
 
+    params_path = 'sarima_model_params.pkl'
+    start_params = None
+    if os.path.exists(params_path):
+        try:
+            with open(params_path, 'rb') as f:
+                old_data = pickle.load(f)
+                start_params = old_data.get('params')
+                print("🔄 Found existing parameters. Using as 'Warm Start' for faster convergence.")
+        except Exception:
+            pass
+
     try:
-        print(f"Fitting SARIMA model (60-day window, s=96, D=1)... This may take a few minutes.")
-        # Using the same config as sarimax_predictor.py
+        print(f"Fitting SARIMA model ({days}-day window, s=96, D=1)...")
+        # Specification
+        order = (1, 1, 1)
+        seasonal_order = (1, 1, 0, 96)
+        
         model = SARIMAX(
             ts_data, 
-            order=(1, 1, 1), 
-            seasonal_order=(1, 1, 0, 96), 
+            order=order, 
+            seasonal_order=seasonal_order, 
             enforce_stationarity=False, 
             enforce_invertibility=False
         )
-        results = model.fit(disp=False)
         
-        # Save the results object (statsmodels has its own save/load)
-        results.save('sarima_model.pkl')
-        print("✅ SARIMA model trained and saved to sarima_model.pkl")
+        # Use warm start if available
+        results = model.fit(start_params=start_params, disp=False)
         
-        # Also save the training data's end index to know where to start 'extend' from
-        with open('sarima_train_end.txt', 'w') as f:
-            f.write(ts_data.index.max().isoformat())
+        # Manually save ONLY the parameters and specification to keep file size tiny
+        model_data = {
+            'params': results.params,
+            'order': order,
+            'seasonal_order': seasonal_order,
+            'last_index': ts_data.index.max()
+        }
+        
+        with open('sarima_model_params.pkl', 'wb') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            pickle.dump(model_data, f)
+            fcntl.flock(f, fcntl.LOCK_UN)
             
+        print(f"✅ SARIMA parameters saved to sarima_model_params.pkl ({len(results.params)} params)")
+        
     except Exception as e:
         print(f"❌ SARIMA Training Error: {e}")
 
 if __name__ == "__main__":
-    train_sarima(days=60)
+    train_sarima(days=14)

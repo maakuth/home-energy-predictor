@@ -3,11 +3,13 @@ import numpy as np
 import json
 import os
 import sqlite3
-from statsmodels.tsa.statespace.sarimax import SARIMAX, SARIMAXResults
+import pickle
+import fcntl
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 from datetime import datetime, timezone
 
 # SARIMA Prediction Module: sarimax_predictor.py
-# Updated for fast frequent execution: loads a daily-trained model and forecasts.
+# Updated for fast frequent execution: loads pre-trained parameters and forecasts.
 
 def load_historical_data(file_path='processed_data.csv', target_col='baseload_power', last_n_days=14):
     """
@@ -42,8 +44,13 @@ def save_benchmark_results(forecast_mean, forecast_ci, filename="sarimax_predict
     if forecast_mean is not None:
         results = []
         for ts, val in forecast_mean.items():
-            low = forecast_ci.loc[ts, 'lower baseload_power']
-            high = forecast_ci.loc[ts, 'upper baseload_power']
+            # Handle potential missing CI values
+            try:
+                low = forecast_ci.loc[ts, 'lower baseload_power']
+                high = forecast_ci.loc[ts, 'upper baseload_power']
+            except (KeyError, AttributeError):
+                low = val * 0.5
+                high = val * 1.5
             
             results.append({
                 "timestamp": ts.isoformat(),
@@ -66,7 +73,6 @@ def archive_sarimax_predictions(forecast_mean, forecast_ci, db_file='hepo.db'):
         conn = sqlite3.connect(db_file)
         cur = conn.cursor()
         
-        # Add columns if they don't exist
         cur.execute('''
             CREATE TABLE IF NOT EXISTS sarimax_predictions (
                 target_timestamp TEXT,
@@ -87,16 +93,16 @@ def archive_sarimax_predictions(forecast_mean, forecast_ci, db_file='hepo.db'):
             cur.execute("ALTER TABLE sarimax_predictions ADD COLUMN upper_95 REAL")
 
         generated_at = datetime.now(timezone.utc).isoformat()
-        data_to_insert = [
-            (
-                ts.isoformat(), 
-                generated_at, 
-                float(val), 
-                float(max(0, forecast_ci.loc[ts, 'lower baseload_power'])),
-                float(max(0, forecast_ci.loc[ts, 'upper baseload_power']))
-            )
-            for ts, val in forecast_mean.items()
-        ]
+        data_to_insert = []
+        for ts, val in forecast_mean.items():
+            try:
+                low = float(max(0, forecast_ci.loc[ts, 'lower baseload_power']))
+                high = float(max(0, forecast_ci.loc[ts, 'upper baseload_power']))
+            except (KeyError, AttributeError):
+                low = float(val * 0.5)
+                high = float(val * 1.5)
+                
+            data_to_insert.append((ts.isoformat(), generated_at, float(val), low, high))
         
         cur.executemany('''
             INSERT OR REPLACE INTO sarimax_predictions 
@@ -111,36 +117,42 @@ def archive_sarimax_predictions(forecast_mean, forecast_ci, db_file='hepo.db'):
         print(f"⚠️ Error archiving SARIMA to SQLite: {e}")
 
 def main():
-    model_path = 'sarima_model.pkl'
-    train_end_path = 'sarima_train_end.txt'
+    params_path = 'sarima_model_params.pkl'
 
-    if not os.path.exists(model_path):
-        print(f"⚠️ No SARIMA model found at {model_path}. Please run train_sarima.py first.")
+    if not os.path.exists(params_path):
+        print(f"⚠️ No SARIMA parameters found at {params_path}. Please run train_sarima.py first.")
         return
 
-    # 1. Load the pre-trained model
-    print("Loading pre-trained SARIMA model...")
-    results = SARIMAXResults.load(model_path)
+    # 1. Load the pre-trained parameters
+    print("Loading pre-trained SARIMA parameters...")
+    with open(params_path, 'rb') as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        model_data = pickle.load(f)
+        fcntl.flock(f, fcntl.LOCK_UN)
     
-    # 2. Load latest data for anchoring (extend model to 'now')
-    # Fetch enough to cover the gap since training (usually 1 day) plus some context.
+    # 2. Load latest data for anchoring (at least 2 days to maintain seasonal state)
     ts_data = load_historical_data(last_n_days=3)
-    
     if ts_data is None:
         return
 
-    # 3. Synchronize model to latest data without full retraining
-    # We use .apply() to update the model state with the latest 15-minute intervals.
-    # This is much faster than full retraining.
-    print(f"Extending SARIMA model with {len(ts_data)} recent data points...")
-    updated_results = results.apply(ts_data, refit=False)
+    # 3. Re-instantiate model and apply parameters
+    print(f"Reconstructing SARIMA model and updating state...")
+    model = SARIMAX(
+        ts_data,
+        order=model_data['order'],
+        seasonal_order=model_data['seasonal_order'],
+        enforce_stationarity=False,
+        enforce_invertibility=False
+    )
+    # This 'smooth' method allows updating the model with new data using fixed parameters
+    results = model.smooth(model_data['params'])
     
     # 4. Predict
     forecast_steps = 96 # 24 hours
     print(f"Forecasting {forecast_steps} steps ahead using SARIMA...")
-    forecast = updated_results.get_forecast(steps=forecast_steps)
+    forecast = results.get_forecast(steps=forecast_steps)
     forecast_mean = forecast.predicted_mean
-    forecast_ci = forecast.conf_int(alpha=0.05) # 95% CI
+    forecast_ci = forecast.conf_int(alpha=0.05)
     
     # Ensure no negative predictions
     forecast_mean = np.clip(forecast_mean, 0, None)
