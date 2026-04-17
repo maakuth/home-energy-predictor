@@ -29,6 +29,8 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
     acc_val = current_states.get('acc_val', 45.0)
     p_temp_val = current_states.get('p_temp_val', np.nan)
     soc_val = current_states.get('soc_val', 80.0)
+    leaf_lag_val = current_states.get('leaf_lag_val', 0.0)
+    leaf_energy_val = current_states.get('leaf_energy_val', 0.0)
     lag1h_val = current_states.get('lag1h_val', 1.0)
     lag24h_val = current_states.get('lag24h_val', 1.0)
     
@@ -93,6 +95,8 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
             'accumulator_temp': acc_val,
             'gshp_pump_temp': p_temp_val,
             'is_gshp_pump_running': 1 if not np.isnan(p_temp_val) else 0,
+            'leaf_power_lag_1h': leaf_lag_val,
+            'leaf_energy_24h': leaf_energy_val,
             'acc_roc': 0,
             'is_fireplace_lag1': 0,
             'ev_soc': soc_val,
@@ -193,16 +197,17 @@ def predict():
             solar_df = anchor_data.get('sensor.solarh_63038_real_power_kw')
             gshp_df = anchor_data.get('sensor.mlp_teho')
             leaf_df = anchor_data.get('sensor.tasmota_energy_power_3')
-            
+
             # Find nearest values
             def get_nearest(df, ts):
                 if df is None or df.empty: return 0.0
+
                 # Ensure we use a DatetimeIndex for get_indexer
                 if not isinstance(df.index, pd.DatetimeIndex):
                     temp_df = df.set_index('timestamp')
                 else:
                     temp_df = df
-                
+
                 idx = temp_df.index.get_indexer([ts], method='nearest')[0]
                 if idx == -1: return 0.0
                 return float(temp_df.iloc[idx]['state'])
@@ -211,15 +216,40 @@ def predict():
             solar = get_nearest(solar_df, target_ts)
             gshp = get_nearest(gshp_df, target_ts) / 1000.0 # W to kW
             leaf = get_nearest(leaf_df, target_ts) / 1000.0 # W to kW
-            
+
             return max(0.0, total + solar - gshp - leaf)
         except Exception as e:
             print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
             return 1.0 # Fallback
 
+    def get_leaf_features():
+        # Get Leaf power 1h ago and energy sum for last 24h
+        try:
+            leaf_df = anchor_data.get('sensor.tasmota_energy_power_3')
+            if leaf_df is None or leaf_df.empty:
+                return 0.0, 0.0
+
+            # 1h lag
+            target_ts_1h = datetime.now(timezone.utc) - timedelta(hours=1)
+            temp_df = leaf_df.set_index('timestamp')
+            idx = temp_df.index.get_indexer([target_ts_1h], method='nearest')[0]
+            leaf_lag_1h = float(temp_df.iloc[idx]['state']) if idx != -1 else 0.0
+
+            # 24h energy proxy (kWh)
+            # Power is in Watts. Average power * 24 hours / 1000 = kWh
+            leaf_energy_24h = (leaf_df['state'].astype(float).mean() * 24.0) / 1000.0
+
+            return leaf_lag_1h, leaf_energy_24h
+        except Exception as e:
+            print(f"⚠️ Error calculating Leaf features: {e}")
+            return 0.0, 0.0
+
     lag1h_val = get_baseload_at_lag(1)
     lag24h_val = get_baseload_at_lag(24)
-    print(f"⚓ Anchors - 1h: {lag1h_val:.2f}kW, 24h: {lag24h_val:.2f}kW")
+    leaf_lag1h, leaf_energy_24h = get_leaf_features()
+
+    print(f"⚓ Anchors - 1h: {lag1h_val:.2f}kW, 24h: {lag24h_val:.2f}kW, Leaf 24h: {leaf_energy_24h:.1f}kWh")
+
         
     acc_temp = get_ha_state('sensor.mlp_varaajan_lampotila')
     try:
@@ -329,6 +359,8 @@ def predict():
         'p_temp_val': p_temp_val,
         'soc_val': soc_val,
         'ev_pos_val': pos_val,
+        'leaf_lag_val': leaf_lag1h,
+        'leaf_energy_val': leaf_energy_24h,
         'lag1h_val': lag1h_val,
         'lag24h_val': lag24h_val
     }

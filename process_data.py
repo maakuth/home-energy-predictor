@@ -98,6 +98,17 @@ def process_data():
         print(f"Applying lags: 1h = shift({shift_1h}), 24h = shift({shift_24h})")
         df['baseload_lag_1h'] = df['baseload_power'].shift(shift_1h).ffill()
         df['baseload_lag_24h'] = df['baseload_power'].shift(shift_24h).ffill()
+        
+        if 'leaf_power' in df.columns:
+            # Leaf features: power lag and 24h cumulative energy proxy
+            df['leaf_power_lag_1h'] = df['leaf_power'].shift(shift_1h).ffill()
+            
+            # 24h rolling sum of power (divided by resolution to approximate kWh)
+            # Power is in Watts, convert to kW and then sum over intervals
+            leaf_kw = df['leaf_power'] / 1000.0
+            # Energy = power * time. For 1-min data, each point is 1/60 kWh.
+            # Rolling sum of (kW * (interval_min/60))
+            df['leaf_energy_24h'] = leaf_kw.rolling(window=shift_24h, min_periods=1).sum() * (interval_minutes / 60.0)
 
     print('Applying fireplace logic...')
     if 'accumulator_temp' in df.columns:
