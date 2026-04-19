@@ -417,19 +417,37 @@ def predict():
                 predicted_usage_kw REAL,
                 solar_forecast_kw REAL,
                 version TEXT,
+                battery_action TEXT,
+                battery_power_kw REAL,
+                battery_soc_pct REAL,
+                import_price REAL,
+                export_price REAL,
+                grid_import_kwh REAL,
+                grid_export_kwh REAL,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
         
-        # Schema migration: add is_fallback_price if missing
+        # Schema migration: add missing columns
         cur.execute("PRAGMA table_info(predictions)")
         columns = [c[1] for c in cur.fetchall()]
-        if 'is_fallback_price' not in columns:
-            print("Adding is_fallback_price column to predictions table...")
-            cur.execute("ALTER TABLE predictions ADD COLUMN is_fallback_price INTEGER DEFAULT 0")
-        if 'version' not in columns:
-            print("Adding version column to predictions table...")
-            cur.execute("ALTER TABLE predictions ADD COLUMN version TEXT DEFAULT 'unknown'")
+        
+        new_cols = {
+            'is_fallback_price': 'INTEGER DEFAULT 0',
+            'version': "TEXT DEFAULT 'unknown'",
+            'battery_action': 'TEXT',
+            'battery_power_kw': 'REAL',
+            'battery_soc_pct': 'REAL',
+            'import_price': 'REAL',
+            'export_price': 'REAL',
+            'grid_import_kwh': 'REAL',
+            'grid_export_kwh': 'REAL'
+        }
+        
+        for col, col_type in new_cols.items():
+            if col not in columns:
+                print(f"Adding {col} column to predictions table...")
+                cur.execute(f"ALTER TABLE predictions ADD COLUMN {col} {col_type}")
 
         # Insert predictions.
         data_to_insert = [

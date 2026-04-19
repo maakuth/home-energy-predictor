@@ -616,17 +616,36 @@ def optimize():
                 predicted_usage_kw REAL,
                 solar_forecast_kw REAL,
                 version TEXT,
+                battery_action TEXT,
+                battery_power_kw REAL,
+                battery_soc_pct REAL,
+                import_price REAL,
+                export_price REAL,
+                grid_import_kwh REAL,
+                grid_export_kwh REAL,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
 
-        # Schema migration: add is_fallback_price if missing
+        # Schema migration: add missing columns
         cur.execute("PRAGMA table_info(predictions)")
         columns = [c[1] for c in cur.fetchall()]
-        if 'is_fallback_price' not in columns:
-            cur.execute("ALTER TABLE predictions ADD COLUMN is_fallback_price INTEGER DEFAULT 0")
-        if 'version' not in columns:
-            cur.execute("ALTER TABLE predictions ADD COLUMN version TEXT DEFAULT 'unknown'")
+        
+        new_cols = {
+            'is_fallback_price': 'INTEGER DEFAULT 0',
+            'version': "TEXT DEFAULT 'unknown'",
+            'battery_action': 'TEXT',
+            'battery_power_kw': 'REAL',
+            'battery_soc_pct': 'REAL',
+            'import_price': 'REAL',
+            'export_price': 'REAL',
+            'grid_import_kwh': 'REAL',
+            'grid_export_kwh': 'REAL'
+        }
+        
+        for col, col_type in new_cols.items():
+            if col not in columns:
+                cur.execute(f"ALTER TABLE predictions ADD COLUMN {col} {col_type}")
 
         # We reuse the same table schema as predict_future.py
         data_to_insert = [
@@ -636,14 +655,25 @@ def optimize():
                 item['predicted_usage_kw'], 
                 item['solar_forecast_kw'], 
                 item['is_fallback_price'],
-                git_version
+                git_version,
+                item.get('battery_action'),
+                item.get('battery_power_kw'),
+                item.get('soc_pct'),
+                item.get('import_unit_price'),
+                item.get('export_unit_price'),
+                item.get('grid_import_kwh'),
+                item.get('grid_export_kwh')
             )
             for item in final_plan
         ]
         cur.executemany('''
             INSERT OR REPLACE INTO predictions 
-            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price, version)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (
+                target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, 
+                is_fallback_price, version, battery_action, battery_power_kw, 
+                battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
 
         

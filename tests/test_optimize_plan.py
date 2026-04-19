@@ -62,8 +62,15 @@ class OptimizeArchivingTests(unittest.TestCase):
         cur.execute("PRAGMA table_info(predictions)")
         columns = [c[1] for c in cur.fetchall()]
         self.assertIn('version', columns)
+        self.assertIn('battery_action', columns)
+        self.assertIn('import_price', columns)
 
-        cur.execute("SELECT predicted_usage_kw, version FROM predictions LIMIT 1")
+        cur.execute("""
+            SELECT 
+                predicted_usage_kw, version, battery_action, battery_power_kw, 
+                battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh 
+            FROM predictions LIMIT 1
+        """)
         row = cur.fetchone()
         conn.close()
         
@@ -72,6 +79,12 @@ class OptimizeArchivingTests(unittest.TestCase):
         # GSHP might be 0 or more depending on prices/temp
         self.assertGreaterEqual(row[0], 2.0)
         self.assertNotEqual(row[1], "")
+        
+        # New battery columns should be populated (not None)
+        self.assertIsNotNone(row[2]) # battery_action
+        self.assertIsNotNone(row[5]) # import_price
+        self.assertIsNotNone(row[6]) # export_price
+        self.assertIsNotNone(row[7]) # grid_import_kwh
 
 
 @contextmanager
