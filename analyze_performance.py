@@ -39,7 +39,7 @@ def fetch_actuals(days=7):
     df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0)
     return df_actual[['actual_usage']]
 
-def get_archived_predictions(version=None):
+def get_archived_predictions(version=None, include_battery=False):
     """Load predictions that were actually made in real-time from the SQLite DB."""
     db_file = 'hepo.db'
     if not os.path.exists(db_file):
@@ -49,8 +49,13 @@ def get_archived_predictions(version=None):
         conn = sqlite3.connect(db_file)
         # Filter by version first to get the latest prediction made BY THIS VERSION
         where_clause = f"WHERE version = '{version}'" if version else ""
+        
+        cols = "target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price, version"
+        if include_battery:
+            cols += ", battery_action, battery_power_kw, battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh"
+
         query = f"""
-            SELECT target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price, version
+            SELECT {cols}
             FROM (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
                 FROM predictions
@@ -65,6 +70,42 @@ def get_archived_predictions(version=None):
     except Exception as e:
         print(f"Error reading archived predictions: {e}")
         return pd.DataFrame()
+
+def summarize_battery_performance(df_merged):
+    """
+    Analyzes how well the battery plan performed compared to a 'no battery' baseline.
+    Uses the archived plan context (what we THOUGHT would happen).
+    """
+    if 'battery_action' not in df_merged.columns or df_merged['battery_action'].isnull().all():
+        return
+
+    print("\n--- BATTERY PLAN EVALUATION (Hindsight vs. Foresight) ---")
+    
+    # Filter to periods where battery was active
+    active = df_merged[df_merged['battery_action'] != 'idle'].copy()
+    if active.empty:
+        print("  No battery activity found in this period.")
+        return
+
+    # Calculate Savings: (Planned Discharge * Actual Price) - (Planned Charge * Actual Price)
+    # We use planned energy because we want to evaluate the logic of the plan.
+    # Note: interval_hours is needed to convert power to energy.
+    interval_hours = (df_merged.index[1] - df_merged.index[0]).total_seconds() / 3600.0 if len(df_merged) > 1 else 0.25
+    
+    planned_savings = (active['import_price'] * (active['predicted_usage'] - active['grid_import_kwh']) * interval_hours).sum()
+    
+    charge_hours = active[active['battery_action'].str.contains('charge', na=False)]
+    discharge_hours = active[active['battery_action'].str.contains('discharge', na=False)]
+    
+    print(f"  Planned Savings:      {planned_savings:+.2f} €")
+    if not charge_hours.empty:
+        print(f"  Avg Charge Price:    {charge_hours['import_price'].mean():.4f} €/kWh")
+    if not discharge_hours.empty:
+        print(f"  Avg Discharge Value: {discharge_hours['import_price'].mean():.4f} €/kWh")
+    
+    if not charge_hours.empty and not discharge_hours.empty:
+        spread = discharge_hours['import_price'].mean() - charge_hours['import_price'].mean()
+        print(f"  Planned Spread:      {spread:+.4f} €/kWh")
 
 def backtest_current_model(df_actual):
     """
@@ -127,7 +168,7 @@ def analyze(days=2, do_backtest=False):
         return
 
     current_version = get_git_version()
-    df_archived = get_archived_predictions(version=current_version)
+    df_archived = get_archived_predictions(version=current_version, include_battery=True)
     
     # 1. Real-time Analysis (What actually happened)
     # Scope to current model version
@@ -161,6 +202,9 @@ def analyze(days=2, do_backtest=False):
                 'sample_count': len(res_3h),
                 'model_version': current_version
             })
+
+        # Battery Evaluation
+        summarize_battery_performance(comparison_clean)
 
     # 2. Hindsight Backtest (How would the current model have done?)
     if do_backtest:
