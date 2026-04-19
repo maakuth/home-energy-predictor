@@ -77,7 +77,7 @@ def summarize_battery_performance(df_merged):
     Uses the archived plan context (what we THOUGHT would happen).
     """
     if 'battery_action' not in df_merged.columns or df_merged['battery_action'].isnull().all():
-        return
+        return {}
 
     print("\n--- BATTERY PLAN EVALUATION (Hindsight vs. Foresight) ---")
     
@@ -85,7 +85,7 @@ def summarize_battery_performance(df_merged):
     active = df_merged[df_merged['battery_action'] != 'idle'].copy()
     if active.empty:
         print("  No battery activity found in this period.")
-        return
+        return {}
 
     # Calculate Savings: (Planned Discharge * Actual Price) - (Planned Charge * Actual Price)
     # We use planned energy because we want to evaluate the logic of the plan.
@@ -97,15 +97,67 @@ def summarize_battery_performance(df_merged):
     charge_hours = active[active['battery_action'].str.contains('charge', na=False)]
     discharge_hours = active[active['battery_action'].str.contains('discharge', na=False)]
     
+    avg_charge = charge_hours['import_price'].mean() if not charge_hours.empty else None
+    avg_discharge = discharge_hours['import_price'].mean() if not discharge_hours.empty else None
+    spread = avg_discharge - avg_charge if avg_charge is not None and avg_discharge is not None else None
+
     print(f"  Planned Savings:      {planned_savings:+.2f} €")
-    if not charge_hours.empty:
-        print(f"  Avg Charge Price:    {charge_hours['import_price'].mean():.4f} €/kWh")
-    if not discharge_hours.empty:
-        print(f"  Avg Discharge Value: {discharge_hours['import_price'].mean():.4f} €/kWh")
-    
-    if not charge_hours.empty and not discharge_hours.empty:
-        spread = discharge_hours['import_price'].mean() - charge_hours['import_price'].mean()
+    if avg_charge is not None:
+        print(f"  Avg Charge Price:    {avg_charge:.4f} €/kWh")
+    if avg_discharge is not None:
+        print(f"  Avg Discharge Value: {avg_discharge:.4f} €/kWh")
+    if spread is not None:
         print(f"  Planned Spread:      {spread:+.4f} €/kWh")
+        
+    return {
+        'planned_savings_eur': float(planned_savings),
+        'avg_charge_price': float(avg_charge) if avg_charge is not None else None,
+        'avg_discharge_price': float(avg_discharge) if avg_discharge is not None else None,
+        'planned_spread': float(spread) if spread is not None else None
+    }
+
+def store_performance_results(results):
+    """Store the analysis results into hepo.db for historical tracking and agent access."""
+    db_file = 'hepo.db'
+    try:
+        conn = sqlite3.connect(db_file)
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS performance_analysis (
+                analysis_timestamp TEXT,
+                period_days INTEGER,
+                mae_kw REAL,
+                bias_kw REAL,
+                battery_planned_savings_eur REAL,
+                battery_avg_charge_price REAL,
+                battery_avg_discharge_price REAL,
+                battery_planned_spread REAL,
+                model_version TEXT,
+                PRIMARY KEY (analysis_timestamp)
+            )
+        ''')
+        
+        cur.execute('''
+            INSERT INTO performance_analysis 
+            (analysis_timestamp, period_days, mae_kw, bias_kw, 
+             battery_planned_savings_eur, battery_avg_charge_price, 
+             battery_avg_discharge_price, battery_planned_spread, model_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            datetime.now().astimezone().isoformat(),
+            results.get('period_days'),
+            results.get('mae_kw'),
+            results.get('bias_kw'),
+            results.get('battery_planned_savings_eur'),
+            results.get('battery_avg_charge_price'),
+            results.get('battery_avg_discharge_price'),
+            results.get('battery_planned_spread'),
+            results.get('model_version')
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Error storing analysis results: {e}")
 
 def backtest_current_model(df_actual):
     """
@@ -178,6 +230,17 @@ def analyze(days=2, do_backtest=False):
         print(f"⚠️ No archived predictions found for current version ({current_version}) in the last {days} days.")
         comparison = pd.DataFrame()
     
+    results = {
+        'period_days': days,
+        'model_version': current_version,
+        'mae_kw': None,
+        'bias_kw': None,
+        'battery_planned_savings_eur': None,
+        'battery_avg_charge_price': None,
+        'battery_avg_discharge_price': None,
+        'battery_planned_spread': None
+    }
+
     if comparison.empty:
         print("No overlapping data found between archived predictions (current version) and actuals.")
     else:
@@ -188,8 +251,12 @@ def analyze(days=2, do_backtest=False):
         res_3h = comparison_clean.resample('3h').mean(numeric_only=True).dropna()
         if not res_3h.empty:
             res_3h['error'] = res_3h['predicted_usage'] - res_3h['actual_usage']
-            mae = res_3h['error'].abs().mean()
-            bias = res_3h['error'].mean()
+            mae = float(res_3h['error'].abs().mean())
+            bias = float(res_3h['error'].mean())
+            
+            results['mae_kw'] = mae
+            results['bias_kw'] = bias
+            
             print(f"\nREAL-TIME ARCHIVED PERFORMANCE (3-Hour Avg, Version: {current_version}):")
             print(f"  MAE:  {mae:.3f} kW")
             print(f"  Bias: {bias:+.3f} kW (Positive means over-predicting)")
@@ -204,7 +271,17 @@ def analyze(days=2, do_backtest=False):
             })
 
         # Battery Evaluation
-        summarize_battery_performance(comparison_clean)
+        batt_res = summarize_battery_performance(comparison_clean)
+        if batt_res:
+            results['battery_planned_savings_eur'] = batt_res.get('planned_savings_eur')
+            results['battery_avg_charge_price'] = batt_res.get('avg_charge_price')
+            results['battery_avg_discharge_price'] = batt_res.get('avg_discharge_price')
+            results['battery_planned_spread'] = batt_res.get('planned_spread')
+
+        # Store results in DB
+        if results['mae_kw'] is not None or results['battery_planned_savings_eur'] is not None:
+            store_performance_results(results)
+            print("✅ Performance analysis stored in hepo.db")
 
     # 2. Hindsight Backtest (How would the current model have done?)
     if do_backtest:
