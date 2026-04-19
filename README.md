@@ -10,7 +10,7 @@ An ML-powered agent that predicts household energy consumption and optimizes usa
 - **Processing (`process_data.py`)**:
   - Denoises sensor data with a rolling median filter.
   - Implements **Fireplace Logic** to infer when the fireplace is active.
-- **Feedback Loop Storage**: All predictions are archived in a local SQLite database (`hepo.db`) for performance analysis.
+- **Feedback Loop Storage**: All predictions are archived in a local SQLite database (`hepo.db`) for performance analysis. This includes the full optimization plan: **battery intents, power levels, expected SOC, and assumed market prices.**
 
 ### 2. Machine Learning
 - **Model (`train_model.py`)**: Uses **XGBoost Regressor** to predict total home consumption (gross load).
@@ -33,6 +33,8 @@ An ML-powered agent that predicts household energy consumption and optimizes usa
 - **Analysis (`analyze_performance.py`)**:
   - Compares archived predictions against actual observed consumption from the HA database.
   - Aggregates results into **3-hour windows** to provide stable Mean Absolute Error (MAE) and Bias metrics.
+  - **Battery Evaluation**: Calculates the **Planned ROI** of the battery strategy (Savings in €, Avg Charge/Discharge prices, and price Spread).
+  - **Persistence**: Automatically stores analysis results into a dedicated `performance_analysis` table in `hepo.db` for long-term trend tracking and strategic adaptation.
   - Pushes accuracy metrics to `sensor.hepo_accuracy`.
 
 ## Usage
