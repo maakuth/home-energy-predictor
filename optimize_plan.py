@@ -168,12 +168,18 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             soc_kwh += charge_from_solar * charge_eff
             charge_limit_input_kwh -= charge_from_solar
             soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+        # 2. Discharge to Load (if price is high OR we need to make room for solar)
+        solar_overflow_kwh = max(0.0, soc_kwh + expected_solar_surplus_kwh - max_soc_kwh)
+        is_pressure_discharge = solar_overflow_kwh > 1e-4
 
-        if net_load > 0 and discharge_limit_output_kwh > 0 and current_import >= import_q_high:
+        if net_load > 0 and discharge_limit_output_kwh > 0 and (current_import >= import_q_high or is_pressure_discharge):
             discharge_to_load = min(net_load, discharge_limit_output_kwh)
             soc_kwh -= discharge_to_load / discharge_eff
             discharge_limit_output_kwh -= discharge_to_load
             soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
+            # Re-calculate room for subsequent charging logic
+            soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+
 
         profitable_grid_charge = (best_future_value * round_trip_eff) > current_import
         is_cheap_hour = current_import <= import_q_low
