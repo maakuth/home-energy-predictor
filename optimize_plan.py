@@ -108,6 +108,11 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
     discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
     allow_export = get_env_bool('BATTERY_ALLOW_EXPORT', True)
+    
+    # New: Configurable percentiles for more/less aggressive behavior
+    chg_p = get_env_float('BATTERY_CHARGE_PERCENTILE', 30.0)
+    dis_p = get_env_float('BATTERY_DISCHARGE_PERCENTILE', 70.0)
+    
     interval_hours = get_plan_interval_hours()
 
     charge_eff = min(max(charge_eff, 0.01), 1.0)
@@ -121,8 +126,9 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     horizon = len(predictions)
     net_without_battery = np.array(predictions, dtype=float) - np.array(solar_array, dtype=float)
 
-    import_q30 = np.percentile(import_prices, 30)
-    import_q70 = np.percentile(import_prices, 70)
+    # Use configurable percentiles
+    import_q_low = np.percentile(import_prices, chg_p)
+    import_q_high = np.percentile(import_prices, dis_p)
     export_q80 = np.percentile(export_prices, 80)
 
     battery_plan = []
@@ -135,6 +141,15 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         future_import = import_prices[i + 1:] if i + 1 < horizon else np.array([current_import])
         future_export = export_prices[i + 1:] if i + 1 < horizon else np.array([current_export])
         best_future_value = max(float(np.max(future_import)), float(np.max(future_export)) if allow_export else -np.inf)
+
+        # Lookahead for solar surplus to avoid grid-charging when solar is coming
+        # We look ahead up to 24 hours or until the end of the horizon
+        lookahead_steps = min(int(24 / interval_hours), horizon - i - 1)
+        if lookahead_steps > 0:
+            future_net = net_without_battery[i+1 : i+1+lookahead_steps]
+            expected_solar_surplus_kwh = np.sum(np.maximum(0, -future_net)) * interval_hours
+        else:
+            expected_solar_surplus_kwh = 0.0
 
         charge_from_solar = 0.0
         charge_from_grid = 0.0
@@ -152,17 +167,27 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             charge_from_solar = min(solar_surplus, charge_limit_input_kwh)
             soc_kwh += charge_from_solar * charge_eff
             charge_limit_input_kwh -= charge_from_solar
+            soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
 
-        if net_load > 0 and discharge_limit_output_kwh > 0 and current_import >= import_q70:
+        if net_load > 0 and discharge_limit_output_kwh > 0 and current_import >= import_q_high:
             discharge_to_load = min(net_load, discharge_limit_output_kwh)
             soc_kwh -= discharge_to_load / discharge_eff
             discharge_limit_output_kwh -= discharge_to_load
+            soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
 
         profitable_grid_charge = (best_future_value * round_trip_eff) > current_import
-        is_cheap_hour = current_import <= import_q30
+        is_cheap_hour = current_import <= import_q_low
+        # Room after solar: how much space is left if we reserve enough for future solar surplus?
+        # This prevents grid charging from "stealing" space from tomorrow's free solar.
+        room_after_solar_kwh = max(0.0, soc_room_kwh - (expected_solar_surplus_kwh * charge_eff))
+        
         if discharge_to_load == 0.0 and charge_limit_input_kwh > 0 and profitable_grid_charge and is_cheap_hour:
-            charge_from_grid = charge_limit_input_kwh
-            soc_kwh += charge_from_grid * charge_eff
+            # Limit grid charge to the room available AFTER accounting for upcoming solar
+            max_grid_charge_kwh = min(charge_limit_input_kwh, room_after_solar_kwh / charge_eff)
+            if max_grid_charge_kwh > 1e-4:
+                charge_from_grid = max_grid_charge_kwh
+                soc_kwh += charge_from_grid * charge_eff
+                soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
 
         if (
             allow_export
