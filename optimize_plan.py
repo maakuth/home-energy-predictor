@@ -623,6 +623,8 @@ def optimize():
                 export_price REAL,
                 grid_import_kwh REAL,
                 grid_export_kwh REAL,
+                charge_from_solar_kwh REAL,
+                charge_from_grid_kwh REAL,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
@@ -640,7 +642,9 @@ def optimize():
             'import_price': 'REAL',
             'export_price': 'REAL',
             'grid_import_kwh': 'REAL',
-            'grid_export_kwh': 'REAL'
+            'grid_export_kwh': 'REAL',
+            'charge_from_solar_kwh': 'REAL',
+            'charge_from_grid_kwh': 'REAL'
         }
         
         for col, col_type in new_cols.items():
@@ -662,7 +666,9 @@ def optimize():
                 item.get('import_unit_price'),
                 item.get('export_unit_price'),
                 item.get('grid_import_kwh'),
-                item.get('grid_export_kwh')
+                item.get('grid_export_kwh'),
+                item.get('charge_from_solar_kwh'),
+                item.get('charge_from_grid_kwh')
             )
             for item in final_plan
         ]
@@ -671,9 +677,10 @@ def optimize():
             (
                 target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, 
                 is_fallback_price, version, battery_action, battery_power_kw, 
-                battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh
+                battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh,
+                charge_from_solar_kwh, charge_from_grid_kwh
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
 
         
