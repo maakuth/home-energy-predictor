@@ -102,7 +102,22 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
     max_soc_pct = get_env_float('BATTERY_MAX_SOC_PCT', 90.0)
     reserve_soc_pct = get_env_float('BATTERY_RESERVE_SOC_PCT', min_soc_pct)
+    
+    # Try to get current House Battery SoC from HA
+    # If not found, use BATTERY_INITIAL_SOC_PCT from .env
+    batt_state = get_ha_state('sensor.home_battery_soc')
     initial_soc_pct = get_env_float('BATTERY_INITIAL_SOC_PCT', 50.0)
+    if batt_state and batt_state.get('state') not in ['unknown', 'unavailable']:
+        try:
+            initial_soc_pct = float(batt_state['state'])
+            print(f"House Battery SoC from HA: {initial_soc_pct}%")
+        except (ValueError, TypeError):
+            pass
+    else:
+        print(f"House Battery SoC using .env/default: {initial_soc_pct}%")
+
+    print(f"Battery Config: Capacity={capacity_kwh}kWh, MinSOC={min_soc_pct}%, Reserve={reserve_soc_pct}%")
+    
     max_charge_kw = get_env_float('BATTERY_MAX_CHARGE_KW', 10.0)
     max_discharge_kw = get_env_float('BATTERY_MAX_DISCHARGE_KW', 10.0)
     charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
@@ -142,14 +157,23 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         future_export = export_prices[i + 1:] if i + 1 < horizon else np.array([current_export])
         best_future_value = max(float(np.max(future_import)), float(np.max(future_export)) if allow_export else -np.inf)
 
+        # Current room before we plan solar capture
+        soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+
         # Lookahead for solar surplus to avoid grid-charging when solar is coming
         # We look ahead up to 24 hours or until the end of the horizon
         lookahead_steps = min(int(24 / interval_hours), horizon - i - 1)
         if lookahead_steps > 0:
             future_net = net_without_battery[i+1 : i+1+lookahead_steps]
             expected_solar_surplus_kwh = np.sum(np.maximum(0, -future_net)) * interval_hours
+            
+            # IMPROVED: Proactively discharge if solar surplus is likely to fill more than 80% of our room.
+            # This ensures we have a safety buffer and clear out expensive grid power early.
+            room_threshold_kwh = (soc_room_kwh / charge_eff) * 0.8
+            expected_solar_export_kwh = max(0.0, expected_solar_surplus_kwh - room_threshold_kwh)
         else:
             expected_solar_surplus_kwh = 0.0
+            expected_solar_export_kwh = 0.0
 
         charge_from_solar = 0.0
         charge_from_grid = 0.0
@@ -169,10 +193,15 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             charge_limit_input_kwh -= charge_from_solar
             soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
         # 2. Discharge to Load (if price is high OR we need to make room for solar)
-        solar_overflow_kwh = max(0.0, soc_kwh + expected_solar_surplus_kwh - max_soc_kwh)
-        is_pressure_discharge = solar_overflow_kwh > 1e-4
+        # Force discharge if we expect to export solar later (Solar-Pressure)
+        is_pressure_discharge = expected_solar_export_kwh > 0.1
+        
+        # We only discharge if the price is high enough, UNLESS we have solar pressure.
+        # But even with solar pressure, it only makes sense if current_import > current_export
+        # (Since exporting later is what we are avoiding).
+        should_discharge = current_import >= import_q_high or (is_pressure_discharge and current_import > current_export)
 
-        if net_load > 0 and discharge_limit_output_kwh > 0 and (current_import >= import_q_high or is_pressure_discharge):
+        if net_load > 0 and discharge_limit_output_kwh > 0 and should_discharge:
             discharge_to_load = min(net_load, discharge_limit_output_kwh)
             soc_kwh -= discharge_to_load / discharge_eff
             discharge_limit_output_kwh -= discharge_to_load
@@ -545,14 +574,18 @@ def optimize():
         planned_leaf_kw.append(3.0 if intent == 'ON' else 0.0)
 
     planned_leaf_kw = np.array(planned_leaf_kw)
-    total_planned_load_kw = predictions + planned_gshp_kw + planned_ev_kw + planned_leaf_kw
+    
+    # We only use Baseload + GSHP for battery optimization.
+    # Charging an EV from a stationary battery is double-conversion loss.
+    battery_optimization_load_kw = predictions + planned_gshp_kw
+    total_planned_load_kw = battery_optimization_load_kw + planned_ev_kw + planned_leaf_kw
 
     effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)
     price_threshold = np.percentile(effective_prices, 20)
     heating_plan = [1 if p <= price_threshold else 0 for p in effective_prices]
 
-    # Battery Dispatch uses Total = Baseload + GSHP + EV + Leaf
-    predictions_kwh = total_planned_load_kw * get_plan_interval_hours()
+    # Battery Dispatch uses Baseload + GSHP
+    predictions_kwh = (predictions + planned_gshp_kw) * get_plan_interval_hours()
     solar_kwh = solar_array * get_plan_interval_hours()
     battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
 
