@@ -530,8 +530,8 @@ def optimize():
     print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {'RUNNING' if is_hp_currently_running else 'STOPPED'}")
     
     final_plan = []
-    print('Time        | Baseload | GSHP kW | EV kW | Leaf kW | Market | Import | Solar | SOC% | Intent | Acc Sim')
-    print('------------|----------|---------|-------|---------|--------|--------|-------|------|--------|--------')
+    print('Time        | Baseload | GSHP kW | Grid kW | Solar | SOC% | P-tile | Intent | Acc Sim')
+    print('------------|----------|---------|---------|-------|------|--------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
         # Ensure ts is local-aware for consistent display
         if ts.tzinfo is None:
@@ -550,24 +550,18 @@ def optimize():
         b = battery_plan[i]
         g = gshp_plan[i]
         
-        actions = []
-        if ev_plan[i]:
-            actions.append('EV_CHARGE')
-        if leaf_intents[i] == 'ON':
-            actions.append('LEAF_CHARGE')
-        if heating_plan[i]:
-            actions.append('HEAT_BOOST')
-        if p_solar_kw > 0.5:
-            actions.append('SOLAR')
-        if b['battery_action'] != 'idle':
-            actions.append(b['battery_action'].upper())
-        if g['gshp_intent'] == 'START':
-            actions.append('GSHP_START')
-        action_str = ' '.join(actions)
+        # Calculate price percentile within the current plan window
+        # (Where does current price rank among all prices in the plan)
+        p_tile = (import_prices < p_import).mean() * 100.0
+        
+        # Net Grid Exchange: positive means importing, negative means exporting
+        # grid_import and grid_export are in kWh per interval
+        # power (kW) = energy (kWh) / hours
+        p_grid_kw = (b['grid_import_kwh'] - b['grid_export_kwh']) / get_plan_interval_hours()
         
         print(
-            f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_ev_kw:5.1f} | {p_leaf_kw:7.1f} | {p_market:6.3f} | {p_import:6.3f} | "
-            f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
+            f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_grid_kw:7.1f} | "
+            f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {p_tile:5.1f}% | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
         )
         
         final_plan.append({
