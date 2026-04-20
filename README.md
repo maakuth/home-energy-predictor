@@ -29,13 +29,19 @@ An ML-powered agent that predicts household energy consumption and optimizes usa
     - `DISCHARGE_LOAD`: Cover house consumption.
     - `DISCHARGE_EXPORT`: Sell stored energy to the grid.
 
-### 4. Performance Reflection
-- **Analysis (`analyze_performance.py`)**:
-  - Compares archived predictions against actual observed consumption from the HA database.
-  - Aggregates results into **3-hour windows** to provide stable Mean Absolute Error (MAE) and Bias metrics.
-  - **Battery Evaluation**: Calculates the **Planned ROI** of the battery strategy (Savings in €, Avg Charge/Discharge prices, and price Spread).
-  - **Persistence**: Automatically stores analysis results into a dedicated `performance_analysis` table in `hepo.db` for long-term trend tracking and strategic adaptation.
-  - Pushes accuracy metrics to `sensor.hepo_accuracy`.
+- **Performance Reflection**:
+  - **Analysis (`analyze_performance.py`)**:
+    - Compares archived predictions against actual observed consumption from the HA database.
+    - Aggregates results into **3-hour windows** to provide stable Mean Absolute Error (MAE) and Bias metrics.
+    - **Battery Evaluation**: Calculates the **Planned ROI** of the battery strategy (Savings in €, Avg Charge/Discharge prices, and price Spread).
+    - **Persistence**: Automatically stores analysis results into a dedicated `performance_analysis` table in `hepo.db` for long-term trend tracking and strategic adaptation.
+    - Pushes accuracy metrics to `sensor.hepo_accuracy`.
+  - **Evolution Tracking (`analyze_evolution.py`)**:
+    - Evaluates how plans **evolve** as the target time approaches.
+    - Tracks **MAE by Lead Time** (e.g., how accurate is a 24h prediction vs. a 1h prediction?).
+    - Measures **Stability**: Calculates the StdDev of predictions for the same timestamp and the frequency of **Battery Action flips** (e.g., changing from charge to idle).
+    - Analyzes **Planned Cost Evolution** to see if the optimizer finds better deals as market price certainty increases.
+
 
 ## Usage
 
@@ -51,7 +57,7 @@ Run this once a day (e.g., at night or at 18:00) to keep the ML model updated wi
 ```bash
 ./run_daily.sh
 ```
-*Effect: Full extraction (365 days), retrains XGBoost model, updates forecast.*
+*Effect: Full extraction (365 days), retrains XGBoost model, updates forecast, and analyzes plan evolution.*
 
 ### 3. Automation (Cron)
 Example crontab for a robust setup:
