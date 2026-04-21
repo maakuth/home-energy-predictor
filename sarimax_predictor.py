@@ -39,7 +39,45 @@ def load_historical_data(file_path='processed_data.csv', target_col='baseload_po
         print(f"Error loading historical data: {e}")
         return None
 
-def save_benchmark_results(forecast_mean, forecast_ci, filename="sarimax_predictions.json"):
+def predict_sarimax(ts_data, forecast_steps=96, params_path='sarima_model_params.pkl'):
+    """
+    Predicts future values using SARIMA model.
+    If params_path exists, uses pre-trained parameters.
+    Otherwise, fits a default SARIMA model on the data.
+    """
+    if os.path.exists(params_path):
+        with open(params_path, 'rb') as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            model_data = pickle.load(f)
+            fcntl.flock(f, fcntl.LOCK_UN)
+        
+        model = SARIMAX(
+            ts_data,
+            order=model_data['order'],
+            seasonal_order=model_data['seasonal_order'],
+            enforce_stationarity=False,
+            enforce_invertibility=False
+        )
+        results = model.smooth(model_data['params'])
+    else:
+        model = SARIMAX(
+            ts_data,
+            order=(1, 1, 1),
+            seasonal_order=(1, 1, 1, 96),
+            enforce_stationarity=False,
+            enforce_invertibility=False
+        )
+        results = model.fit(disp=False)
+    
+    forecast = results.get_forecast(steps=forecast_steps)
+    forecast_mean = forecast.predicted_mean
+    forecast_ci = forecast.conf_int(alpha=0.05)
+    
+    forecast_mean = np.clip(forecast_mean, 0, None)
+    
+    return forecast_mean
+
+def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_predictions.json"):
     """Saves SARIMA forecast and confidence intervals."""
     if forecast_mean is not None:
         results = []
