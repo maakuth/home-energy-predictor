@@ -79,7 +79,11 @@ def summarize_battery_performance(df_merged):
     if 'battery_action' not in df_merged.columns or df_merged['battery_action'].isnull().all():
         return {}
 
-    print("\n--- BATTERY PLAN EVALUATION (Hindsight vs. Foresight) ---")
+    start_ts = df_merged.index.min()
+    end_ts = df_merged.index.max()
+    duration_hours = (end_ts - start_ts).total_seconds() / 3600
+    print(f"\n--- BATTERY PLAN EVALUATION (Hindsight vs. Foresight) ---")
+    print(f"  Period: {start_ts.strftime('%Y-%m-%d %H:%M')} to {end_ts.strftime('%Y-%m-%d %H:%M')} ({duration_hours:.1f}h)")
     
     # Filter to periods where battery was active
     active = df_merged[df_merged['battery_action'] != 'idle'].copy()
