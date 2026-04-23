@@ -5,7 +5,7 @@ import numpy as np
 import argparse
 from datetime import datetime, timedelta, timezone
 from analyze_performance import fetch_actuals
-from utils.git_utils import get_git_version
+from utils.git_utils import get_model_version
 
 def fetch_all_predictions(days=7):
     """Fetch ALL archived predictions from the SQLite DB for the given period."""
@@ -120,7 +120,7 @@ def analyze_evolution(days=7):
         print(f"Timestamps where Battery Action evolved:        {changed_actions_pct:.1f}%")
 
     # Version comparison: Does the latest version of the model perform better?
-    current_version = get_git_version()
+    current_version = get_model_version()
     versions = df_merged['version'].unique()
     if len(versions) > 1:
         print("\nAccuracy by Model Version:")

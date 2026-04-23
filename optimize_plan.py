@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
 from utils.price_utils import fetch_market_prices, align_interval_prices
-from utils.git_utils import get_git_version
+from utils.git_utils import get_model_version
 
 load_dotenv(override=True)
 
@@ -661,7 +661,7 @@ def optimize():
     # This ensures analyze_performance.py compares actuals against Baseload + Planned GSHP
     db_file = 'hepo.db'
     generated_at = datetime.now().astimezone().isoformat()
-    git_version = get_git_version()
+    git_version = get_model_version()
     try:
         conn = sqlite3.connect(db_file)
         cur = conn.cursor()

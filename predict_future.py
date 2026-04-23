@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, call_ha_service
 from utils.price_utils import fetch_market_prices
 from utils.db_utils import fetch_states_history
-from utils.git_utils import get_git_version
+from utils.git_utils import get_model_version
 
 load_dotenv(override=True)
 
@@ -406,7 +406,7 @@ def predict():
 
     # Archive predictions for feedback loop using SQLite
     db_file = 'hepo.db'
-    git_version = get_git_version()
+    git_version = get_model_version()
     try:
         conn = sqlite3.connect(db_file)
         cur = conn.cursor()

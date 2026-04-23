@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
-from utils.git_utils import get_git_version
+from utils.git_utils import get_model_version
 
 load_dotenv(override=True)
 
@@ -223,7 +223,7 @@ def analyze(days=2, do_backtest=False):
     if df_actual.empty:
         return
 
-    current_version = get_git_version()
+    current_version = get_model_version()
     df_archived = get_archived_predictions(version=current_version, include_battery=True)
     
     # 1. Real-time Analysis (What actually happened)
