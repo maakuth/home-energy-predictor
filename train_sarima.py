@@ -3,11 +3,13 @@ import numpy as np
 import os
 import pickle
 import fcntl
+import argparse
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sarimax_predictor import load_historical_data
 
 # SARIMA Training Module: train_sarima.py
-# Runs daily to fit the SARIMA model on 60 days of history.
+# Runs periodically to fit the SARIMA model on historical data.
+# Default: 14 days (for frequent runs), but 30 days recommended for weekly runs.
 
 def train_sarima(days=14):
     print(f"Loading last {days} days for SARIMA training...")
@@ -64,4 +66,8 @@ def train_sarima(days=14):
         print(f"❌ SARIMA Training Error: {e}")
 
 if __name__ == "__main__":
-    train_sarima(days=14)
+    parser = argparse.ArgumentParser(description="Train SARIMA model")
+    parser.add_argument("--days", type=int, default=14, help="Number of days of historical data to use (default: 14)")
+    args = parser.parse_args()
+    
+    train_sarima(days=args.days)

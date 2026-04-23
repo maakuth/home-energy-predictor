@@ -9,43 +9,44 @@ source venv/bin/activate
 
 # Use a lockfile to prevent race conditions with run_frequent.sh
 (
-  # For daily, we wait for the lock (don't exit immediately like frequent)
+  # For weekly, we wait for the lock (don't exit immediately like frequent)
   flock 200
 
-  echo "=== Starting Daily HEPO Pipeline: $(date) ==="
+  echo "=== Starting Weekly HEPO Pipeline: $(date) ==="
 
   # 1. Extract Data (Full 2 Years for Training)
-  echo "[1/5] Extracting Data..."
+  echo "[1/6] Extracting Data (730 days for training)..."
   python extract_data.py --days 730
 
   # 2. Process Data
-  echo "[2/5] Processing Data..."
+  echo "[2/6] Processing Data..."
   python process_data.py
 
-  # 3. Retrain Model
-  echo "[3/8] Retraining XGBoost Model..."
+  # 3. Retrain XGBoost Model
+  echo "[3/6] Retraining XGBoost Model (full dataset)..."
   python train_model.py
 
-  echo "[4/8] Retraining SARIMA Model (14-day window)..."
-  python train_sarima.py
+  # 4. Retrain SARIMA Model (extended 30-day window for better stability)
+  echo "[4/6] Retraining SARIMA Model (30-day window for weekly runs)..."
+  python train_sarima.py --days 30
 
   # 5. Predict Future
-  echo "[5/8] Predicting Future..."
+  echo "[5/6] Predicting Future..."
   python predict_future.py
 
   # 6. Optimize & Push
-  echo "[6/8] Optimizing & Pushing Plan..."
+  echo "[6/6] Optimizing & Pushing Plan..."
   python optimize_plan.py
   python push_to_ha.py
 
-  # 7. Performance Analysis
-  echo "[7/8] Analyzing Performance (Last 7 Days)..."
-  python analyze_performance.py --days 7 --backtest
+  # 7. Performance Analysis (weekly: analyze 14 days)
+  echo "[7/6] Analyzing Performance (Last 14 Days)..."
+  python analyze_performance.py --days 14 --backtest
 
-  # 8. Evolution Analysis
-  echo "[8/8] Analyzing Plan Evolution (Last 7 Days)..."
-  python analyze_evolution.py --days 7
+  # 8. Evolution Analysis (weekly: analyze 14 days)
+  echo "[8/6] Analyzing Plan Evolution (Last 14 Days)..."
+  python analyze_evolution.py --days 14
 
-  echo "=== Pipeline Complete: $(date) ==="
+  echo "=== Weekly Pipeline Complete: $(date) ==="
 
 ) 200>/tmp/hepo.lock
