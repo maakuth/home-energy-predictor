@@ -18,7 +18,8 @@ def fetch_actuals(days=7):
     print(f"Fetching actuals for last {days} days from PostgreSQL...")
     entities = {
         'sensor.sahkokauppa_nyt': 'total_power',
-        'sensor.solarh_63038_real_power_kw': 'solar_actual'
+        'sensor.solarh_63038_real_power_kw': 'solar_actual',
+        'sensor.mlp_teho': 'gshp_actual_w'
     }
     
     hist_data = fetch_states_history(list(entities.keys()), hours=days*24)
@@ -32,12 +33,13 @@ def fetch_actuals(days=7):
     
     if not all_resampled:
         print("⚠️ No data fetched from PostgreSQL.")
-        return pd.DataFrame(columns=['actual_usage'])
+        return pd.DataFrame(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw'])
 
     df_actual = pd.concat(all_resampled, axis=1).fillna(0)
     # Total home power is grid_meter + solar_production
     df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0)
-    return df_actual[['actual_usage']]
+    df_actual['gshp_actual_kw'] = df_actual.get('gshp_actual_w', 0) / 1000.0
+    return df_actual[['actual_usage', 'solar_actual', 'gshp_actual_kw']]
 
 def get_archived_predictions(version=None, include_battery=False):
     """Load predictions that were actually made in real-time from the SQLite DB."""
@@ -52,7 +54,7 @@ def get_archived_predictions(version=None, include_battery=False):
         
         cols = "target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price, version"
         if include_battery:
-            cols += ", battery_action, battery_power_kw, battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh"
+            cols += ", battery_action, battery_power_kw, battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh, planned_gshp_kw"
 
         query = f"""
             SELECT {cols}
@@ -70,6 +72,62 @@ def get_archived_predictions(version=None, include_battery=False):
     except Exception as e:
         print(f"Error reading archived predictions: {e}")
         return pd.DataFrame()
+
+def summarize_gshp_performance(df_merged):
+    """
+    Analyzes how well the GSHP load was timed relative to solar and spot prices.
+    """
+    if 'gshp_actual_kw' not in df_merged.columns or 'import_price' not in df_merged.columns:
+        return {}
+
+    # Calculate intervals in hours
+    if len(df_merged) < 2: return {}
+    interval_hours = (df_merged.index[1] - df_merged.index[0]).total_seconds() / 3600.0
+    
+    gshp_kw = df_merged['gshp_actual_kw']
+    prices = df_merged['import_price']
+    solar_kw = df_merged['solar_actual']
+    total_kw = df_merged['actual_usage']
+    
+    # Baseload (excluding GSHP)
+    baseload_kw = (total_kw - gshp_kw).clip(lower=0)
+    
+    # Solar available for GSHP
+    solar_for_gshp = (solar_kw - baseload_kw).clip(lower=0)
+    gshp_from_solar = np.minimum(gshp_kw, solar_for_gshp)
+    
+    gshp_total_kwh = (gshp_kw * interval_hours).sum()
+    if gshp_total_kwh < 0.1: # Negligible usage
+        return {}
+        
+    gshp_solar_kwh = (gshp_from_solar * interval_hours).sum()
+    gshp_solar_pct = (gshp_solar_kwh / gshp_total_kwh) * 100
+    
+    # Weighted average price for GSHP (excluding solar-covered part)
+    gshp_from_grid_kw = gshp_kw - gshp_from_solar
+    gshp_grid_kwh = (gshp_from_grid_kw * interval_hours).sum()
+    gshp_cost_eur = (gshp_from_grid_kw * prices * interval_hours).sum()
+    
+    gshp_avg_price = (gshp_cost_eur / gshp_grid_kwh) if gshp_grid_kwh > 0.01 else 0
+    
+    # Market average price for the same period (for comparison)
+    market_avg_price = prices.mean()
+    
+    print(f"\n--- GSHP LOAD TIMING EVALUATION ---")
+    print(f"  Total GSHP Energy:    {gshp_total_kwh:.2f} kWh")
+    print(f"  Solar Utilization:    {gshp_solar_pct:.1f}% ({gshp_solar_kwh:.2f} kWh)")
+    print(f"  Avg Grid Price Paid:  {gshp_avg_price:.4f} €/kWh")
+    print(f"  Market Avg Price:     {market_avg_price:.4f} €/kWh")
+    if market_avg_price > 0 and gshp_avg_price > 0:
+        savings_vs_avg = (1 - gshp_avg_price / market_avg_price) * 100
+        print(f"  Timing Efficiency:    {savings_vs_avg:+.1f}% vs market average")
+
+    return {
+        'gshp_avg_price': float(gshp_avg_price),
+        'gshp_solar_pct': float(gshp_solar_pct),
+        'gshp_total_kwh': float(gshp_total_kwh),
+        'market_avg_price': float(market_avg_price)
+    }
 
 def summarize_battery_performance(df_merged):
     """
@@ -137,16 +195,34 @@ def store_performance_results(results):
                 battery_avg_discharge_price REAL,
                 battery_planned_spread REAL,
                 model_version TEXT,
+                gshp_avg_price REAL,
+                gshp_solar_pct REAL,
+                gshp_total_kwh REAL,
+                market_avg_price REAL,
                 PRIMARY KEY (analysis_timestamp)
             )
         ''')
         
+        # Migration: Add missing columns if they don't exist
+        cur.execute("PRAGMA table_info(performance_analysis)")
+        cols = [c[1] for c in cur.fetchall()]
+        new_cols = {
+            'gshp_avg_price': 'REAL',
+            'gshp_solar_pct': 'REAL',
+            'gshp_total_kwh': 'REAL',
+            'market_avg_price': 'REAL'
+        }
+        for col, col_type in new_cols.items():
+            if col not in cols:
+                cur.execute(f"ALTER TABLE performance_analysis ADD COLUMN {col} {col_type}")
+
         cur.execute('''
             INSERT INTO performance_analysis 
             (analysis_timestamp, period_days, mae_kw, bias_kw, 
              battery_planned_savings_eur, battery_avg_charge_price, 
-             battery_avg_discharge_price, battery_planned_spread, model_version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             battery_avg_discharge_price, battery_planned_spread, model_version,
+             gshp_avg_price, gshp_solar_pct, gshp_total_kwh, market_avg_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             datetime.now().astimezone().isoformat(),
             results.get('period_days'),
@@ -156,7 +232,11 @@ def store_performance_results(results):
             results.get('battery_avg_charge_price'),
             results.get('battery_avg_discharge_price'),
             results.get('battery_planned_spread'),
-            results.get('model_version')
+            results.get('model_version'),
+            results.get('gshp_avg_price'),
+            results.get('gshp_solar_pct'),
+            results.get('gshp_total_kwh'),
+            results.get('market_avg_price')
         ))
         conn.commit()
         conn.close()
@@ -242,7 +322,11 @@ def analyze(days=2, do_backtest=False):
         'battery_planned_savings_eur': None,
         'battery_avg_charge_price': None,
         'battery_avg_discharge_price': None,
-        'battery_planned_spread': None
+        'battery_planned_spread': None,
+        'gshp_avg_price': None,
+        'gshp_solar_pct': None,
+        'gshp_total_kwh': None,
+        'market_avg_price': None
     }
 
     if comparison.empty:
@@ -282,8 +366,16 @@ def analyze(days=2, do_backtest=False):
             results['battery_avg_discharge_price'] = batt_res.get('avg_discharge_price')
             results['battery_planned_spread'] = batt_res.get('planned_spread')
 
+        # GSHP Evaluation
+        gshp_res = summarize_gshp_performance(comparison_clean)
+        if gshp_res:
+            results['gshp_avg_price'] = gshp_res.get('gshp_avg_price')
+            results['gshp_solar_pct'] = gshp_res.get('gshp_solar_pct')
+            results['gshp_total_kwh'] = gshp_res.get('gshp_total_kwh')
+            results['market_avg_price'] = gshp_res.get('market_avg_price')
+
         # Store results in DB
-        if results['mae_kw'] is not None or results['battery_planned_savings_eur'] is not None:
+        if results['mae_kw'] is not None or results['battery_planned_savings_eur'] is not None or results['gshp_total_kwh'] is not None:
             store_performance_results(results)
             print("✅ Performance analysis stored in hepo.db")
 

@@ -1,8 +1,8 @@
 import unittest
 import sqlite3
 import os
-from utils.git_utils import get_git_version
-from predict_future import get_git_version as get_git_version_pf
+from utils.git_utils import get_model_version
+from predict_future import get_model_version as get_model_version_pf
 
 class TestDBVersioning(unittest.TestCase):
     def setUp(self):
@@ -15,7 +15,7 @@ class TestDBVersioning(unittest.TestCase):
             os.remove(self.db_file)
 
     def test_git_version(self):
-        version = get_git_version()
+        version = get_model_version()
         self.assertIsNotNone(version)
         self.assertNotEqual(version, "")
 

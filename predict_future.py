@@ -424,6 +424,10 @@ def predict():
                 export_price REAL,
                 grid_import_kwh REAL,
                 grid_export_kwh REAL,
+                charge_from_solar_kwh REAL,
+                charge_from_grid_kwh REAL,
+                planned_gshp_kw REAL,
+                gshp_intent TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
@@ -441,7 +445,11 @@ def predict():
             'import_price': 'REAL',
             'export_price': 'REAL',
             'grid_import_kwh': 'REAL',
-            'grid_export_kwh': 'REAL'
+            'grid_export_kwh': 'REAL',
+            'charge_from_solar_kwh': 'REAL',
+            'charge_from_grid_kwh': 'REAL',
+            'planned_gshp_kw': 'REAL',
+            'gshp_intent': 'TEXT'
         }
         
         for col, col_type in new_cols.items():
