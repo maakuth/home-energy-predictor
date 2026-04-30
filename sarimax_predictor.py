@@ -7,6 +7,7 @@ import pickle
 import fcntl
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from datetime import datetime, timezone
+from utils.sqlite_utils import get_db_connection
 
 # SARIMA Prediction Module: sarimax_predictor.py
 # Updated for fast frequent execution: loads pre-trained parameters and forecasts.
@@ -102,13 +103,13 @@ def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_pr
             json.dump(results, f, indent=2)
         print(f"✅ SARIMA forecast with CI saved to {filename}")
 
-def archive_sarimax_predictions(forecast_mean, forecast_ci, db_file='hepo.db'):
+def archive_sarimax_predictions(forecast_mean, forecast_ci):
     """Archiving SARIMA predictions and CI to SQLite for later benchmarking."""
     if forecast_mean is None:
         return
         
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection()
         cur = conn.cursor()
         
         cur.execute('''

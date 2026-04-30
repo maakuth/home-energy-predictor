@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
+from utils.sqlite_utils import get_db_connection
 from utils.git_utils import get_model_version
 
 load_dotenv(override=True)
@@ -43,12 +44,11 @@ def fetch_actuals(days=7):
 
 def get_archived_predictions(version=None, include_battery=False):
     """Load predictions that were actually made in real-time from the SQLite DB."""
-    db_file = 'hepo.db'
-    if not os.path.exists(db_file):
+    if not db_exists():
         return pd.DataFrame()
 
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection()
         # Filter by version first to get the latest prediction made BY THIS VERSION
         where_clause = f"WHERE version = '{version}'" if version else ""
         
@@ -180,9 +180,8 @@ def summarize_battery_performance(df_merged):
 
 def store_performance_results(results):
     """Store the analysis results into hepo.db for historical tracking and agent access."""
-    db_file = 'hepo.db'
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute('''
             CREATE TABLE IF NOT EXISTS performance_analysis (

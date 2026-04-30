@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
 from utils.price_utils import fetch_market_prices, align_interval_prices
 from utils.git_utils import get_model_version
+from utils.sqlite_utils import get_db_connection
 
 load_dotenv(override=True)
 
@@ -659,11 +660,10 @@ def optimize():
 
     # Archive the TOTAL planned usage to hepo.db for accuracy tracking
     # This ensures analyze_performance.py compares actuals against Baseload + Planned GSHP
-    db_file = 'hepo.db'
     generated_at = datetime.now().astimezone().isoformat()
     git_version = get_model_version()
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection()
         cur = conn.cursor()
 
         # Ensure table exists (re-using logic from predict_future.py)

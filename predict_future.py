@@ -10,6 +10,7 @@ from utils.ha_utils import get_ha_state, call_ha_service
 from utils.price_utils import fetch_market_prices
 from utils.db_utils import fetch_states_history
 from utils.git_utils import get_model_version
+from utils.sqlite_utils import get_db_connection
 
 load_dotenv(override=True)
 
@@ -405,10 +406,9 @@ def predict():
     print('\n✅ Predictions saved to future_predictions.json')
 
     # Archive predictions for feedback loop using SQLite
-    db_file = 'hepo.db'
     git_version = get_model_version()
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute('''
             CREATE TABLE IF NOT EXISTS predictions (

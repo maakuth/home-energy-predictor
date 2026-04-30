@@ -6,17 +6,17 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from analyze_performance import fetch_actuals
 from utils.git_utils import get_model_version
+from utils.sqlite_utils import get_db_connection, db_exists
 
 def fetch_all_predictions(days=7):
     """Fetch ALL archived predictions from the SQLite DB for the given period."""
-    db_file = 'hepo.db'
-    if not os.path.exists(db_file):
-        print(f"⚠️ {db_file} not found.")
+    if not db_exists():
+        print(f"⚠️ Database not found.")
         return pd.DataFrame()
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection()
         query = f"""
             SELECT target_timestamp, generated_at, predicted_usage_kw, 
                    battery_action, version, grid_import_kwh, import_price, 

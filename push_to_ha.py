@@ -2,15 +2,15 @@ import json
 import sqlite3
 import os
 from utils.ha_utils import push_ha_state
+from utils.sqlite_utils import get_db_connection, db_exists
 
 def push_accuracy():
     """Reads the latest performance metrics from hepo.db and pushes to HA."""
-    db_file = 'hepo.db'
-    if not os.path.exists(db_file):
+    if not db_exists():
         return
 
     try:
-        conn = sqlite3.connect(db_file)
+        conn = get_db_connection()
         cur = conn.cursor()
         # Get the latest analysis
         cur.execute("SELECT mae_kw, bias_kw, model_version, period_days FROM performance_analysis ORDER BY analysis_timestamp DESC LIMIT 1")

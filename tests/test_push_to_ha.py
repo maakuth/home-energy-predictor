@@ -7,8 +7,8 @@ from push_to_ha import push_accuracy
 class TestPushToHA(unittest.TestCase):
     
     @patch('push_to_ha.push_ha_state')
-    @patch('sqlite3.connect')
-    @patch('os.path.exists')
+    @patch('push_to_ha.get_db_connection')
+    @patch('push_to_ha.db_exists')
     def test_push_accuracy_success(self, mock_exists, mock_connect, mock_push):
         # Setup
         mock_exists.return_value = True
@@ -32,7 +32,7 @@ class TestPushToHA(unittest.TestCase):
         self.assertEqual(args[2]['period_days'], 7)
 
     @patch('push_to_ha.push_ha_state')
-    @patch('os.path.exists')
+    @patch('push_to_ha.db_exists')
     def test_push_accuracy_no_db(self, mock_exists, mock_push):
         mock_exists.return_value = False
         push_accuracy()

@@ -5,16 +5,17 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from sarimax_predictor import load_historical_data as load_actual_baseload
+from utils.sqlite_utils import get_db_connection, db_exists
 
 # Comparison Script: compare_models.py
 # Compares the accuracy of the main XGBoost model vs the SARIMA benchmark.
 
-def get_archived_xgboost_predictions(db_file='hepo.db', days=2):
+def get_archived_xgboost_predictions(days=2):
     """Fetch archived XGBoost predictions from SQLite."""
-    if not os.path.exists(db_file):
+    if not db_exists():
         return pd.DataFrame()
     
-    conn = sqlite3.connect(db_file)
+    conn = get_db_connection()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     query = f"""
         SELECT target_timestamp, predicted_usage_kw as predicted_baseload
@@ -43,12 +44,12 @@ def load_sarima_latest_forecast(filename='sarimax_predictions.json'):
     df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
     return df.set_index('timestamp')[['predicted_baseload']]
 
-def get_archived_sarima_predictions(db_file='hepo.db', days=2):
+def get_archived_sarima_predictions(days=2):
     """Fetch archived SARIMA predictions from SQLite."""
-    if not os.path.exists(db_file):
+    if not db_exists():
         return pd.DataFrame()
     
-    conn = sqlite3.connect(db_file)
+    conn = get_db_connection()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
         query = f"""

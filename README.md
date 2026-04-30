@@ -71,22 +71,15 @@ Example crontab for a robust setup:
 
 ## Configuration
 Set these in `.env` (refer to `README.md` for full list):
-- `BATTERY_CAPACITY_KWH`: Total usable capacity.
+- `BATTERY_CAPACITY_KWH`: Total usable capacity. **Set to `0` to disable battery simulation entirely** — the optimizer will plan as if no battery exists, and `grid_import_kwh`/`grid_export_kwh`/estimated costs will reflect a battery-less home. GSHP and EV optimizations are unaffected (battery dispatch runs downstream of those).
 - `GRID_TRANSFER_EUR_PER_KWH`: Variable transfer costs.
 - `IMPORT_VAT_MULTIPLIER`: Tax calculations.
 - `DATA_RESAMPLE_INTERVAL`: Typically `15min`.
 
 ## Future Battery Integration
-When the physical battery is installed, the following updates are required:
+When the physical battery is installed, switch from simulation to real control by:
 
-### 1. Load Calculation (`process_data.py`)
-Currently, `total_home_power = grid_power + solar_actual`.
-With a battery, you must subtract the battery's net discharge to get the **true house load**:
-`total_home_power = grid_power + solar_actual - (battery_discharge_power - battery_charge_power)`
-
-### 2. Closed-Loop SOC (`optimize_plan.py`)
-- **Initial State:** Update `fetch_ha_state` to pull the **real-time Battery SOC** from Home Assistant at the start of each optimization run.
-- **Constraints:** Fine-tune `BATTERY_CHARGE_EFFICIENCY` and `BATTERY_DISCHARGE_EFFICIENCY` based on real-world data from the inverter.
-
-### 3. Inverter Automation
-Use the `battery_action` field from the `sensor.hepo_optimization_plan` to trigger the inverter's operating modes (e.g., via Modbus or a Home Assistant integration).
+1. Set `BATTERY_CAPACITY_KWH` to the actual capacity (e.g., `40`) in `.env`.
+2. Update load calculation in `process_data.py` — currently `total_home_power = grid_power + solar_actual`. With a battery, subtract the battery's net discharge to get the **true house load**: `total_home_power = grid_power + solar_actual - (battery_discharge_power - battery_charge_power)`.
+3. The optimizer already reads real-time SOC from `sensor.home_battery_soc` in Home Assistant when available, so closed-loop SOC tracking works out of the box. Fine-tune `BATTERY_CHARGE_EFFICIENCY` and `BATTERY_DISCHARGE_EFFICIENCY` based on real-world inverter data.
+4. Use the `battery_action` field from `sensor.hepo_optimization_plan` to trigger the inverter's operating modes (e.g., via Modbus or a Home Assistant integration).

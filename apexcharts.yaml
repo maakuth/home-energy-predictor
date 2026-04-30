@@ -62,7 +62,7 @@ series:
     show:
       in_header: false
   - entity: sensor.hepo_optimization_plan
-    name: "SARIMA Alaraja (95%)"
+    name: SARIMA Alaraja (95%)
     type: line
     color: lightgrey
     stroke_width: 1
@@ -77,7 +77,7 @@ series:
       in_header: false
       legend_value: false
   - entity: sensor.hepo_optimization_plan
-    name: "SARIMA Yläraja (95%)"
+    name: SARIMA Yläraja (95%)
     type: line
     color: lightgrey
     stroke_width: 1
@@ -91,15 +91,6 @@ series:
     show:
       in_header: false
       legend_value: false
-  - entity: sensor.hepo_accuracy
-    yaxis_id: header_only
-    name: Virhe 3h jaksoissa
-    color: Grey
-    unit: kW
-    show:
-      legend_value: true
-      in_header: true
-      in_chart: false
   - entity: sensor.hepo_predicted_24h_usage
     yaxis_id: header_only
     name: 24h ennuste
@@ -108,3 +99,12 @@ series:
       legend_value: true
       in_header: true
       in_chart: false
+  - entity: sensor.hepo_accuracy
+    yaxis_id: header_only
+    name: Virhe 3h ikkunoissa
+    color: Grey
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
+
