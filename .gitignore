@@ -14,3 +14,5 @@ ENV/
 *.json
 hepo.db
 !model_features.json
+sarima_model_params.pkl
+sarima_train_end.txt
