@@ -12,6 +12,13 @@ def push_accuracy():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        
+        # Check if table exists
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='performance_analysis'")
+        if not cur.fetchone():
+            conn.close()
+            return
+
         # Get the latest analysis
         cur.execute("SELECT mae_kw, bias_kw, model_version, period_days FROM performance_analysis ORDER BY analysis_timestamp DESC LIMIT 1")
         row = cur.fetchone()

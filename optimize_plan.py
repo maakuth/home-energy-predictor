@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state
 from utils.price_utils import fetch_market_prices, align_interval_prices
 from utils.git_utils import get_model_version
-from utils.sqlite_utils import get_db_connection
+from utils.sqlite_utils import get_db_connection, get_db_path
 
 load_dotenv(override=True)
 
@@ -750,7 +750,7 @@ def optimize():
         
         conn.commit()
         conn.close()
-        print(f'✅ Archived {len(final_plan)} optimized points to {db_file}')
+        print(f'✅ Archived {len(final_plan)} optimized points to {get_db_path()}')
     except Exception as e:
         print(f'⚠️ Error archiving optimized plan to SQLite: {e}')
 

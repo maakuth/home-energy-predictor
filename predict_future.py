@@ -10,7 +10,7 @@ from utils.ha_utils import get_ha_state, call_ha_service
 from utils.price_utils import fetch_market_prices
 from utils.db_utils import fetch_states_history
 from utils.git_utils import get_model_version
-from utils.sqlite_utils import get_db_connection
+from utils.sqlite_utils import get_db_connection, get_db_path
 
 load_dotenv(override=True)
 
@@ -470,7 +470,7 @@ def predict():
         
         conn.commit()
         conn.close()
-        print(f'✅ Archived {len(results)} points to {db_file} (SQLite)')
+        print(f'✅ Archived {len(results)} points to {get_db_path()} (SQLite)')
     except Exception as e:
         print(f'⚠️ Error archiving to SQLite: {e}')
 

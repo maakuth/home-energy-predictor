@@ -7,7 +7,7 @@ import pickle
 import fcntl
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from datetime import datetime, timezone
-from utils.sqlite_utils import get_db_connection
+from utils.sqlite_utils import get_db_connection, get_db_path
 
 # SARIMA Prediction Module: sarimax_predictor.py
 # Updated for fast frequent execution: loads pre-trained parameters and forecasts.
@@ -151,7 +151,7 @@ def archive_sarimax_predictions(forecast_mean, forecast_ci):
         
         conn.commit()
         conn.close()
-        print(f"✅ Archived {len(data_to_insert)} SARIMA points with CI to {db_file}")
+        print(f"✅ Archived {len(data_to_insert)} SARIMA points with CI to {get_db_path()}")
     except Exception as e:
         print(f"⚠️ Error archiving SARIMA to SQLite: {e}")
 

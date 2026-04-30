@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
-from utils.sqlite_utils import get_db_connection
+from utils.sqlite_utils import get_db_connection, db_exists
 from utils.git_utils import get_model_version
 
 load_dotenv(override=True)
