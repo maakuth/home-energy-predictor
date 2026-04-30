@@ -1,5 +1,35 @@
 import json
+import sqlite3
+import os
 from utils.ha_utils import push_ha_state
+
+def push_accuracy():
+    """Reads the latest performance metrics from hepo.db and pushes to HA."""
+    db_file = 'hepo.db'
+    if not os.path.exists(db_file):
+        return
+
+    try:
+        conn = sqlite3.connect(db_file)
+        cur = conn.cursor()
+        # Get the latest analysis
+        cur.execute("SELECT mae_kw, bias_kw, model_version, period_days FROM performance_analysis ORDER BY analysis_timestamp DESC LIMIT 1")
+        row = cur.fetchone()
+        conn.close()
+
+        if row:
+            mae, bias, version, days = row
+            if mae is not None:
+                push_ha_state('sensor.hepo_accuracy', f"{mae:.3f}", {
+                    'friendly_name': f'HEPO Real-time MAE ({days}d window)',
+                    'unit_of_measurement': 'kW',
+                    'bias': float(bias) if bias is not None else 0.0,
+                    'model_version': version,
+                    'period_days': days
+                })
+                print(f'✅ Accuracy metrics pushed: MAE={mae:.3f}, Version={version}')
+    except Exception as e:
+        print(f"⚠️ Error pushing accuracy metrics: {e}")
 
 def push_plan():
     print('Loading optimization plan...')
@@ -57,3 +87,4 @@ def push_plan():
 
 if __name__ == '__main__':
     push_plan()
+    push_accuracy()
