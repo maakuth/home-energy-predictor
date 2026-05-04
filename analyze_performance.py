@@ -52,9 +52,9 @@ def get_archived_predictions(version=None, include_battery=False):
         # Filter by version first to get the latest prediction made BY THIS VERSION
         where_clause = f"WHERE version = '{version}'" if version else ""
         
-        cols = "target_timestamp, predicted_usage_kw as predicted_usage, is_fallback_price, version"
+        cols = "target_timestamp, predicted_usage_kw as predicted_usage, solar_forecast_kw, is_fallback_price, version"
         if include_battery:
-            cols += ", battery_action, battery_power_kw, battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh, planned_gshp_kw"
+            cols += ", battery_action, battery_power_kw, battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh, charge_from_solar_kwh, charge_from_grid_kwh, discharge_to_load_kwh, discharge_to_export_kwh, planned_gshp_kw"
 
         query = f"""
             SELECT {cols}
@@ -149,18 +149,46 @@ def summarize_battery_performance(df_merged):
         print("  No battery activity found in this period.")
         return {}
 
-    # Calculate Savings: (Planned Discharge * Actual Price) - (Planned Charge * Actual Price)
-    # We use planned energy because we want to evaluate the logic of the plan.
     # Note: interval_hours is needed to convert power to energy.
     interval_hours = (df_merged.index[1] - df_merged.index[0]).total_seconds() / 3600.0 if len(df_merged) > 1 else 0.25
     
-    planned_savings = (active['import_price'] * (active['predicted_usage'] - active['grid_import_kwh']) * interval_hours).sum()
+    # More accurate Savings calculation: compare with 'no battery' baseline
+    if 'solar_forecast_kw' in active.columns and 'export_price' in active.columns:
+        # No battery: net = predicted_usage - solar_forecast_kw
+        net_no_batt = active['predicted_usage'] - active['solar_forecast_kw']
+        import_no_batt = np.maximum(net_no_batt, 0)
+        export_no_batt = np.maximum(-net_no_batt, 0)
+        cost_no_batt = (import_no_batt * active['import_price']) - (export_no_batt * active['export_price'])
+        
+        # With battery: grid_import_kwh and grid_export_kwh are stored per interval
+        cost_with_batt = (active['grid_import_kwh'] * active['import_price']) - (active['grid_export_kwh'] * active['export_price'])
+        
+        # Savings = (Cost No Batt - Cost With Batt) summed over active hours
+        planned_savings = ((cost_no_batt - cost_with_batt) * interval_hours).sum()
+    else:
+        # Fallback to old less-accurate logic if columns are missing
+        planned_savings = (active['import_price'] * (active['predicted_usage'] - active['grid_import_kwh']) * interval_hours).sum()
     
-    charge_hours = active[active['battery_action'].str.contains('charge', na=False)]
-    discharge_hours = active[active['battery_action'].str.contains('discharge', na=False)]
-    
-    avg_charge = charge_hours['import_price'].mean() if not charge_hours.empty else None
-    avg_discharge = discharge_hours['import_price'].mean() if not discharge_hours.empty else None
+    # Calculate Weighted Average Charge Price
+    if 'charge_from_grid_kwh' in active.columns and 'charge_from_solar_kwh' in active.columns:
+        # Cost of solar charging is the lost export opportunity
+        chg_cost = (active['charge_from_grid_kwh'] * active['import_price'] + 
+                    active['charge_from_solar_kwh'] * active['export_price']).sum()
+        chg_kwh = (active['charge_from_grid_kwh'] + active['charge_from_solar_kwh']).sum()
+        avg_charge = chg_cost / chg_kwh if chg_kwh > 0 else None
+    else:
+        charge_hours = active[active['battery_action'].str.contains('charge', na=False)]
+        avg_charge = charge_hours['import_price'].mean() if not charge_hours.empty else None
+
+    # Calculate Weighted Average Discharge Value
+    if 'discharge_to_load_kwh' in active.columns and 'discharge_to_export_kwh' in active.columns:
+        dis_val = (active['discharge_to_load_kwh'] * active['import_price'] + 
+                   active['discharge_to_export_kwh'] * active['export_price']).sum()
+        dis_kwh = (active['discharge_to_load_kwh'] + active['discharge_to_export_kwh']).sum()
+        avg_discharge = dis_val / dis_kwh if dis_kwh > 0 else None
+    else:
+        discharge_hours = active[active['battery_action'].str.contains('discharge', na=False)]
+        avg_discharge = discharge_hours['import_price'].mean() if not discharge_hours.empty else None
     spread = avg_discharge - avg_charge if avg_charge is not None and avg_discharge is not None else None
 
     print(f"  Planned Savings:      {planned_savings:+.2f} €")

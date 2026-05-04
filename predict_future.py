@@ -426,6 +426,8 @@ def predict():
                 grid_export_kwh REAL,
                 charge_from_solar_kwh REAL,
                 charge_from_grid_kwh REAL,
+                discharge_to_load_kwh REAL,
+                discharge_to_export_kwh REAL,
                 planned_gshp_kw REAL,
                 gshp_intent TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
@@ -448,6 +450,8 @@ def predict():
             'grid_export_kwh': 'REAL',
             'charge_from_solar_kwh': 'REAL',
             'charge_from_grid_kwh': 'REAL',
+            'discharge_to_load_kwh': 'REAL',
+            'discharge_to_export_kwh': 'REAL',
             'planned_gshp_kw': 'REAL',
             'gshp_intent': 'TEXT'
         }

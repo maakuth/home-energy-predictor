@@ -683,6 +683,8 @@ def optimize():
                 grid_export_kwh REAL,
                 charge_from_solar_kwh REAL,
                 charge_from_grid_kwh REAL,
+                discharge_to_load_kwh REAL,
+                discharge_to_export_kwh REAL,
                 planned_gshp_kw REAL,
                 gshp_intent TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
@@ -705,6 +707,8 @@ def optimize():
             'grid_export_kwh': 'REAL',
             'charge_from_solar_kwh': 'REAL',
             'charge_from_grid_kwh': 'REAL',
+            'discharge_to_load_kwh': 'REAL',
+            'discharge_to_export_kwh': 'REAL',
             'planned_gshp_kw': 'REAL',
             'gshp_intent': 'TEXT'
         }
@@ -731,6 +735,8 @@ def optimize():
                 item.get('grid_export_kwh'),
                 item.get('charge_from_solar_kwh'),
                 item.get('charge_from_grid_kwh'),
+                item.get('discharge_to_load_kwh'),
+                item.get('discharge_to_export_kwh'),
                 item.get('planned_gshp_kw'),
                 item.get('gshp_intent')
             )
@@ -742,9 +748,10 @@ def optimize():
                 target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, 
                 is_fallback_price, version, battery_action, battery_power_kw, 
                 battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh,
-                charge_from_solar_kwh, charge_from_grid_kwh, planned_gshp_kw, gshp_intent
+                charge_from_solar_kwh, charge_from_grid_kwh, discharge_to_load_kwh, discharge_to_export_kwh,
+                planned_gshp_kw, gshp_intent
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
 
         
