@@ -9,6 +9,7 @@ from utils.ha_utils import get_ha_state
 from utils.price_utils import fetch_market_prices, align_interval_prices
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, get_db_path
+from utils.db_utils import fetch_states_history
 
 load_dotenv(override=True)
 
@@ -479,6 +480,30 @@ def optimize():
     except (TypeError, ValueError):
         pass
 
+    # Fireplace detection: check if accumulator temp is rising while GSHP is off
+    is_fireplace_currently_on = False
+    try:
+        # Get recent accumulator temperature history (last 30 minutes)
+        acc_temp_history = fetch_states_history('sensor.mlp_varaajan_lampotila', hours=0.5)
+        acc_df = acc_temp_history.get('sensor.mlp_varaajan_lampotila', pd.DataFrame())
+        
+        if len(acc_df) >= 2:
+            # Calculate rate of change over the most recent data
+            acc_df = acc_df.sort_values('timestamp')
+            time_diff = (acc_df['timestamp'].iloc[-1] - acc_df['timestamp'].iloc[-2]).total_seconds() / 60.0  # in minutes
+            temp_diff = acc_df['state'].iloc[-1] - acc_df['state'].iloc[-2]
+            
+            if time_diff > 0:
+                acc_roc = temp_diff / time_diff  # °C per minute
+                # Scale to 15-minute rate for comparison with the 0.3 threshold
+                acc_roc_15m = acc_roc * 15
+                
+                # Check if accumulator is rising fast and GSHP is mostly off
+                # Using the same heuristic as in process_data.py
+                is_fireplace_currently_on = (acc_roc_15m > 0.3) and (float(gshp_power_state.get('state', 0)) < 100)
+    except Exception as e:
+        print(f"⚠️ Error detecting fireplace status: {e}")
+
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
 
@@ -596,6 +621,7 @@ def optimize():
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
     print(f"Interval: {get_plan_interval_minutes()} minutes")
     print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {'RUNNING' if is_hp_currently_running else 'STOPPED'}")
+    print(f"Fireplace: {'ON' if is_fireplace_currently_on else 'OFF'}")
     
     final_plan = []
     print('Time        | Baseload | GSHP kW | Grid kW | Solar | SOC% | P-tile | Intent | Acc Sim')
