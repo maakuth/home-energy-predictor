@@ -110,16 +110,25 @@ def summarize_gshp_performance(df_merged):
     
     gshp_avg_price = (gshp_cost_eur / gshp_grid_kwh) if gshp_grid_kwh > 0.01 else 0
     
+    # Calculate spot-only price paid for GSHP for fair comparison
+    if 'export_price' in df_merged.columns and gshp_grid_kwh > 0.01:
+        gshp_spot_cost_eur = (gshp_from_grid_kw * df_merged['export_price'] * interval_hours).sum()
+        gshp_avg_spot_paid = gshp_spot_cost_eur / gshp_grid_kwh
+    else:
+        gshp_avg_spot_paid = gshp_avg_price # Fallback if no export_price
+
     # Market average price for the same period (for comparison)
-    market_avg_price = prices.mean()
+    # We use export_price as it's the raw spot price (or closest to it)
+    market_avg_price = df_merged['export_price'].mean() if 'export_price' in df_merged.columns else prices.mean()
     
     print(f"\n--- GSHP LOAD TIMING EVALUATION ---")
     print(f"  Total GSHP Energy:    {gshp_total_kwh:.2f} kWh")
     print(f"  Solar Utilization:    {gshp_solar_pct:.1f}% ({gshp_solar_kwh:.2f} kWh)")
-    print(f"  Avg Grid Price Paid:  {gshp_avg_price:.4f} €/kWh")
-    print(f"  Market Avg Price:     {market_avg_price:.4f} €/kWh")
-    if market_avg_price > 0 and gshp_avg_price > 0:
-        savings_vs_avg = (1 - gshp_avg_price / market_avg_price) * 100
+    print(f"  Avg Grid Price Paid:  {gshp_avg_price:.4f} €/kWh (incl. fees)")
+    print(f"  Avg Spot Price Paid:  {gshp_avg_spot_paid:.4f} €/kWh")
+    print(f"  Market Avg Spot Price: {market_avg_price:.4f} €/kWh")
+    if market_avg_price > 0 and gshp_avg_spot_paid > 0:
+        savings_vs_avg = (1 - gshp_avg_spot_paid / market_avg_price) * 100
         print(f"  Timing Efficiency:    {savings_vs_avg:+.1f}% vs market average")
 
     return {

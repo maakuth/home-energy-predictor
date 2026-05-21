@@ -61,5 +61,23 @@ class TestGSHPAnalysis(unittest.TestCase):
         res = summarize_gshp_performance(df)
         self.assertEqual(res['gshp_solar_pct'], 25.0)
 
+    def test_summarize_gshp_performance_export_price_as_market_avg(self):
+        # Setup data: 1 hour, distinct import and export prices
+        ts = [datetime(2024, 1, 1, 12, 0) + timedelta(minutes=15*i) for i in range(4)]
+        df = pd.DataFrame({
+            'gshp_actual_kw': [1.0, 1.0, 1.0, 1.0],
+            'solar_actual':   [0.0, 0.0, 0.0, 0.0],
+            'actual_usage':   [1.0, 1.0, 1.0, 1.0],
+            'import_price':   [0.2, 0.2, 0.2, 0.2],
+            'export_price':   [0.1, 0.1, 0.1, 0.1]
+        }, index=ts)
+        
+        # market_avg_price should be 0.1 (from export_price)
+        # gshp_avg_price should be 0.2 (from import_price)
+        
+        res = summarize_gshp_performance(df)
+        self.assertEqual(res['market_avg_price'], 0.1)
+        self.assertEqual(res['gshp_avg_price'], 0.2)
+
 if __name__ == '__main__':
     unittest.main()

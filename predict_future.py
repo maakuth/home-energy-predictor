@@ -382,7 +382,7 @@ def predict():
     # Fetch market prices to identify fallbacks
     print('Fetching market prices for fallback detection...')
     prediction_timestamps_dt = [datetime.fromisoformat(ts) for ts in timestamps]
-    market_prices, is_fallback_price, _ = fetch_market_prices(prediction_timestamps_dt, PREDICTION_INTERVAL_MINUTES)
+    market_prices, is_fallback_price, _, _ = fetch_market_prices(prediction_timestamps_dt, PREDICTION_INTERVAL_MINUTES)
     if is_fallback_price is None:
         is_fallback_price = [0] * len(predictions)
 

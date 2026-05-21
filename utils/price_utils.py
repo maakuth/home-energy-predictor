@@ -52,6 +52,7 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps, interv
 
 def fetch_market_prices(prediction_timestamps, interval_minutes=15):
     candidate_sensors = [
+        "sensor.average_electricity_price_today",
         "sensor.current_electricity_market_price",
         "sensor.nordpool_kwh_fi_eur_3_10_0",
         "sensor.nordpool_total",
@@ -63,15 +64,28 @@ def fetch_market_prices(prediction_timestamps, interval_minutes=15):
             continue
 
         attrs = state_data.get("attributes", {})
-        raw_today = attrs.get("raw_today") or attrs.get("today") or []
-        tomorrow_valid = attrs.get("tomorrow_valid", False)
-        raw_tomorrow = []
-        if tomorrow_valid:
-            raw_tomorrow = attrs.get("raw_tomorrow") or attrs.get("tomorrow") or []
+        
+        # Standard format (Nordpool integration)
+        raw_today = attrs.get("raw_today") or attrs.get("today")
+        raw_tomorrow = attrs.get("raw_tomorrow") or attrs.get("tomorrow")
+        
+        # Alternative format (ENTSO-e integration)
+        if raw_today is None:
+            raw_today = attrs.get("prices_today")
+            if raw_today:
+                # Normalize ENTSO-e format to Nordpool-like list of dicts with 'start' and 'value'
+                raw_today = [{"start": item["time"], "value": item["price"]} for item in raw_today]
+        
+        if raw_tomorrow is None:
+            raw_tomorrow = attrs.get("prices_tomorrow")
+            if raw_tomorrow:
+                raw_tomorrow = [{"start": item["time"], "value": item["price"]} for item in raw_tomorrow]
 
         if isinstance(raw_today, list) and len(raw_today) > 0:
-            aligned, is_fallback = align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps, interval_minutes)
+            aligned, is_fallback = align_interval_prices(raw_today, raw_tomorrow or [], prediction_timestamps, interval_minutes)
             if aligned is not None:
-                return aligned, is_fallback, sensor
+                # Flag if this sensor is known to include additional costs
+                is_inclusive = (sensor == "sensor.nordpool_total")
+                return aligned, is_fallback, sensor, is_inclusive
 
-    return None, None, None
+    return None, None, None, False

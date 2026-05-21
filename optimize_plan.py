@@ -85,7 +85,7 @@ def load_predictions(file_path='future_predictions.json', sarima_path='sarimax_p
     return xgb_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper
 
 
-def build_tariff_prices(market_prices):
+def build_tariff_prices(market_prices, is_inclusive=False):
     grid_transfer = get_env_float('GRID_TRANSFER_EUR_PER_KWH', 0.0)
     electricity_tax = get_env_float('ELECTRICITY_TAX_EUR_PER_KWH', 0.0)
     import_fixed_adders = get_env_float('IMPORT_FIXED_ADDERS_EUR_PER_KWH', 0.0)
@@ -93,7 +93,12 @@ def build_tariff_prices(market_prices):
     export_deduction = get_env_float('EXPORT_DEDUCTION_EUR_PER_KWH', 0.0)
 
     market_prices = np.array(market_prices, dtype=float)
-    import_unit_prices = (market_prices + grid_transfer + electricity_tax + import_fixed_adders) * import_vat_multiplier
+    
+    # If the source is already inclusive, we don't add transfer and tax again
+    effective_transfer = 0.0 if is_inclusive else grid_transfer
+    effective_tax = 0.0 if is_inclusive else electricity_tax
+    
+    import_unit_prices = (market_prices + effective_transfer + effective_tax + import_fixed_adders) * import_vat_multiplier
     export_unit_prices = np.maximum(0.0, market_prices - export_deduction)
 
     return import_unit_prices, export_unit_prices
@@ -455,13 +460,13 @@ def optimize():
         return
 
     print('Fetching market prices...')
-    market_prices, is_fallback_price, price_source = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
+    market_prices, is_fallback_price, price_source, is_inclusive = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
     if market_prices is None:
         print('Error: Could not fetch market prices from Home Assistant sensors.')
         return
 
-    print(f'Using market prices from {price_source}')
-    import_prices, export_prices = build_tariff_prices(market_prices)
+    print(f'Using market prices from {price_source} (Inclusive of fees: {is_inclusive})')
+    import_prices, export_prices = build_tariff_prices(market_prices, is_inclusive)
 
     solar_array = np.array(prediction_solar, dtype=float)
 

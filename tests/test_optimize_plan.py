@@ -44,7 +44,7 @@ class OptimizeArchivingTests(unittest.TestCase):
     @patch('optimize_plan.fetch_market_prices')
     def test_optimize_archives_to_db(self, mock_prices, mock_ha):
         # Mocking external calls
-        mock_prices.return_value = ([0.1], [0], "Nordpool")
+        mock_prices.return_value = ([0.1], [0], "Nordpool", False)
         mock_ha.return_value = {"state": "50.0"} # acc_temp
         
         # Run optimize
@@ -124,6 +124,20 @@ class OptimizePlanTests(unittest.TestCase):
 
         np.testing.assert_allclose(import_prices, expected_import, rtol=1e-9, atol=1e-9)
         np.testing.assert_allclose(export_prices, expected_export, rtol=1e-9, atol=1e-9)
+
+    def test_build_tariff_prices_skips_fees_when_inclusive(self):
+        with patched_env(
+            {
+                "GRID_TRANSFER_EUR_PER_KWH": "0.05",
+                "ELECTRICITY_TAX_EUR_PER_KWH": "0.03",
+                "IMPORT_VAT_MULTIPLIER": "1.0",
+            }
+        ):
+            market = np.array([0.10])
+            # is_inclusive=True should skip 0.05 and 0.03
+            import_prices, _ = build_tariff_prices(market, is_inclusive=True)
+            
+            self.assertEqual(import_prices[0], 0.10)
 
     def test_align_interval_prices_ffill_hourly_to_15min(self):
         # Hourly data
