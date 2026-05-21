@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 
 class OptimizeArchivingTests(unittest.TestCase):
     def setUp(self):
-        self.db_file = 'hepo.db'
+        self.db_file = 'test_hepo.db'
         if os.path.exists(self.db_file):
             os.remove(self.db_file)
         
@@ -42,8 +42,10 @@ class OptimizeArchivingTests(unittest.TestCase):
 
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')
-    def test_optimize_archives_to_db(self, mock_prices, mock_ha):
+    @patch('optimize_plan.get_db_connection')
+    def test_optimize_archives_to_db(self, mock_db, mock_prices, mock_ha):
         # Mocking external calls
+        mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
         mock_prices.return_value = ([0.1], [0], "Nordpool", False)
         mock_ha.return_value = {"state": "50.0"} # acc_temp
         
