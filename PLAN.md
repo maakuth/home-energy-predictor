@@ -12,6 +12,7 @@ HEPO (Home Energy Prediction & Optimization) is an ML-powered system designed to
 - **Thermal Storage:** `sensor.mlp_varaajan_lampotila` (500L Accumulator)
 - **Sauna:** `sensor.sauna_kiuas_lampotila` (Used to infer sauna activity)
 - **EV State:** `sensor.xpz_491_battery_level` (SOC), `device_tracker.xpz_491_position` (Home/Away)
+- **Home Battery:** `sensor.be_soc` (State of Charge %), `sensor.be_stat_batt_power` (Power in Watts, positive=charging)
 - **Grid Power:** `sensor.sahkokauppa_nyt` (Bidirectional grid meter)
 - **Solar Production:** `sensor.solcast_pv_forecast_actual_power` (Actual) and `sensor.solcast_pv_forecast_forecast_tomorrow` (Forecast).
 
@@ -60,11 +61,13 @@ The system executes a 24-48 hour optimization plan every 15-60 minutes (`predict
 ## 5. Deployment & Integration
 
 ### Execution Loop
+- **Often (`run_often.sh`):** Runs every minute. Lightweight update: reads current battery/grid sensor states and pushes latest battery intent to Home Assistant (no heavy computation).
 - **Frequent (`run_frequent.sh`):** Runs every 30 mins. Performs fast extraction, generates fresh predictions, and updates the MPC plan.
 - **Daily (`run_daily.sh`):** Runs once a day. Performs full extraction and retrains the XGBoost model.
 
 ### Home Assistant Integration
 - **Optimization Plan:** Pushed to `sensor.hepo_optimization_plan` as a JSON attribute, containing 15-minute resolution actions for the inverter and GSHP.
+- **Battery Intent:** `sensor.hepo_battery_intent` (in Watts) provides real-time control intent for the battery inverter. Positive = discharge (provide power to home), Negative = charge (draw power from grid/solar). Updated every minute via `run_often.sh`.
 - **Accuracy Tracking:** `sensor.hepo_accuracy` reports 3-hour windowed MAE and Bias from `analyze_performance.py`.
 
 ## 6. Technical Stack
