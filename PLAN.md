@@ -73,7 +73,7 @@ The system executes a 24-48 hour optimization plan every 15-60 minutes (`predict
 
 ### Home Assistant Integration
 - **Optimization Plan:** Pushed to `sensor.hepo_optimization_plan` as a JSON attribute, containing 15-minute resolution actions for the inverter and GSHP.
-- **Battery Intent:** `sensor.hepo_battery_intent` (in Watts) provides real-time control intent for the battery inverter. Positive = discharge (provide power to home), Negative = charge (draw power from grid/solar). Updated every minute via `run_often.sh`.
+- **Battery Control:** `number.hoymiles_remote_control_hoymiles_battery_power` (in Watts) provides real-time control setpoint for the Hoymiles battery inverter. Positive = discharge (provide power to home), Negative = charge (draw power from grid/solar). Updated every minute via `run_often.sh`.
 - **Accuracy Tracking:** `sensor.hepo_accuracy` reports 3-hour windowed MAE and Bias from `analyze_performance.py`.
 
 ## 6. Technical Stack

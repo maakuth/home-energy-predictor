@@ -84,18 +84,18 @@ def push_plan():
     })
     print(f'✅ Leaf Intent pushed: {current_leaf_intent}')
 
-    # Push battery power intent (positive = discharge, negative = charge)
-    # Sign reversed: battery_power_kw is positive for charging, but intent is from home perspective
+    # Push battery power control (positive = discharge, negative = charge)
+    # Sign reversed: battery_power_kw is positive for charging, but control is from home perspective
     battery_power_kw = plan[0].get('battery_power_kw', 0.0)
-    battery_intent_w = int(-battery_power_kw * 1000)  # Reverse sign, kW→W
-    push_ha_state('sensor.hepo_battery_intent', battery_intent_w, {
-        'friendly_name': 'HEPO Battery Intent',
+    battery_control_w = int(-battery_power_kw * 1000)  # Reverse sign, kW→W
+    push_ha_state('number.hoymiles_remote_control_hoymiles_battery_power', battery_control_w, {
+        'friendly_name': 'HEPO Battery Control',
         'unit_of_measurement': 'W',
         'device_class': 'power',
         'battery_action': plan[0].get('battery_action', 'idle'),
         'battery_soc_pct': plan[0].get('soc_pct')
     })
-    print(f'✅ Battery Intent pushed: {battery_intent_w}W ({plan[0].get("battery_action", "idle")})')
+    print(f'✅ Battery Control pushed: {battery_control_w}W ({plan[0].get("battery_action", "idle")})')
 
     # Also push 24h usage as a standalone sensor for easier history tracking
     attributes_24h = {
