@@ -56,7 +56,7 @@ class TestPushPlan(unittest.TestCase):
     @patch('utils.battery_utils.call_ha_service')
     def test_push_plan_with_battery_intent(self, mock_service):
         """Test that battery control is correctly pushed with reversed sign."""
-        mock_service.return_value = True  # Mock successful service call
+        mock_service.return_value = {}  # Mock successful service call (returns dict)
         
         # Setup mock plan data
         plan_data = [
@@ -99,7 +99,7 @@ class TestPushPlan(unittest.TestCase):
     @patch('utils.battery_utils.call_ha_service')
     def test_push_plan_battery_discharge_intent(self, mock_service):
         """Test battery discharge control (negative battery_power_kw → positive control)."""
-        mock_service.return_value = True  # Mock successful service call
+        mock_service.return_value = {}  # Mock successful service call (returns dict)
         
         plan_data = [
             {

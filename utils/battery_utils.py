@@ -30,16 +30,20 @@ def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct
     
     try:
         # Use number.set_value service (only touches value, preserves MQTT)
+        # Note: return_response=False because number.set_value doesn't support responses
         result = call_ha_service(
             domain='number',
             service='set_value',
             service_data={
                 'entity_id': entity_id,
                 'value': battery_power_w
-            }
+            },
+            return_response=False
         )
         
-        if result:
+        # With return_response=False, the service call either succeeds (returns dict/json)
+        # or fails (returns None from the except/error handlers)
+        if result is not None:
             action_str = f"({battery_action})" if battery_action != 'idle' else ""
             if battery_soc_pct is not None:
                 print(f'✅ Battery Control: {battery_power_w}W {action_str} [SoC {battery_soc_pct:.1f}%]')
@@ -47,7 +51,7 @@ def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct
                 print(f'✅ Battery Control: {battery_power_w}W {action_str}')
             return True
         else:
-            print(f'⚠️ Failed to set battery control to {battery_power_w}W')
+            # result is None means error was already printed by call_ha_service
             return False
             
     except Exception as e:
