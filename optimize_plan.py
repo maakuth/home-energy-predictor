@@ -112,7 +112,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     
     # Try to get current House Battery SoC from HA
     # If not found, use BATTERY_INITIAL_SOC_PCT from .env
-    batt_state = get_ha_state('sensor.home_battery_soc')
+    batt_state = get_ha_state('sensor.be_soc')
     initial_soc_pct = get_env_float('BATTERY_INITIAL_SOC_PCT', 50.0)
     if batt_state and batt_state.get('state') not in ['unknown', 'unavailable']:
         try:

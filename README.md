@@ -81,5 +81,5 @@ When the physical battery is installed, switch from simulation to real control b
 
 1. Set `BATTERY_CAPACITY_KWH` to the actual capacity (e.g., `40`) in `.env`.
 2. Update load calculation in `process_data.py` — currently `total_home_power = grid_power + solar_actual`. With a battery, subtract the battery's net discharge to get the **true house load**: `total_home_power = grid_power + solar_actual - (battery_discharge_power - battery_charge_power)`.
-3. The optimizer already reads real-time SOC from `sensor.home_battery_soc` in Home Assistant when available, so closed-loop SOC tracking works out of the box. Fine-tune `BATTERY_CHARGE_EFFICIENCY` and `BATTERY_DISCHARGE_EFFICIENCY` based on real-world inverter data.
+3. The optimizer already reads real-time SOC from `sensor.be_soc` in Home Assistant when available, so closed-loop SOC tracking works out of the box. Fine-tune `BATTERY_CHARGE_EFFICIENCY` and `BATTERY_DISCHARGE_EFFICIENCY` based on real-world inverter data.
 4. Use the `battery_action` field from `sensor.hepo_optimization_plan` to trigger the inverter's operating modes (e.g., via Modbus or a Home Assistant integration).
