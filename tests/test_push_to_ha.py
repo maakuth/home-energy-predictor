@@ -1,9 +1,10 @@
 import unittest
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 import os
 import sqlite3
 import json
 from push_to_ha import push_accuracy, push_plan
+from utils.battery_utils import push_battery_control
 
 class TestPushToHA(unittest.TestCase):
     
@@ -52,9 +53,11 @@ class TestPushPlan(unittest.TestCase):
         if os.path.exists('optimization_plan.json'):
             os.remove('optimization_plan.json')
     
-    @patch('push_to_ha.push_ha_state')
-    def test_push_plan_with_battery_intent(self, mock_push):
-        """Test that battery intent is correctly pushed with reversed sign."""
+    @patch('utils.battery_utils.call_ha_service')
+    def test_push_plan_with_battery_intent(self, mock_service):
+        """Test that battery control is correctly pushed with reversed sign."""
+        mock_service.return_value = True  # Mock successful service call
+        
         # Setup mock plan data
         plan_data = [
             {
@@ -77,28 +80,27 @@ class TestPushPlan(unittest.TestCase):
         # Execute
         push_plan()
         
-        # Verify battery control was pushed with correct properties
-        calls = mock_push.call_args_list
+        # Verify battery control was pushed with correct service call
+        calls = mock_service.call_args_list
         battery_control_call = None
         for call in calls:
-            args = call[0]
-            if len(args) > 0 and args[0] == 'number.hoymiles_remote_control_hoymiles_battery_power':
+            kwargs = call[1]
+            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == 'number.hoymiles_remote_control_hoymiles_battery_power':
                 battery_control_call = call
                 break
         
-        self.assertIsNotNone(battery_control_call, "Battery control push not found")
-        args = battery_control_call[0]
-        
-        # Verify entity ID
-        self.assertEqual(args[0], 'number.hoymiles_remote_control_hoymiles_battery_power')
+        self.assertIsNotNone(battery_control_call, "Battery control service call not found")
         
         # Verify sign reversal: battery_power_kw=2.5 (charging) → control=-2500W (charge)
-        # Note: We only push the value, not attributes, to preserve MQTT subscription
-        self.assertEqual(int(args[1]), -2500)
+        service_data = battery_control_call[1]['service_data']
+        self.assertEqual(service_data['entity_id'], 'number.hoymiles_remote_control_hoymiles_battery_power')
+        self.assertEqual(int(service_data['value']), -2500)
 
-    @patch('push_to_ha.push_ha_state')
-    def test_push_plan_battery_discharge_intent(self, mock_push):
-        """Test battery discharge intent (negative battery_power_kw → positive intent)."""
+    @patch('utils.battery_utils.call_ha_service')
+    def test_push_plan_battery_discharge_intent(self, mock_service):
+        """Test battery discharge control (negative battery_power_kw → positive control)."""
+        mock_service.return_value = True  # Mock successful service call
+        
         plan_data = [
             {
                 'predicted_usage_kwh': 0.5,
@@ -120,21 +122,20 @@ class TestPushPlan(unittest.TestCase):
         # Execute
         push_plan()
         
-        # Verify battery control
-        calls = mock_push.call_args_list
+        # Verify battery control service call
+        calls = mock_service.call_args_list
         battery_control_call = None
         for call in calls:
-            args = call[0]
-            if len(args) > 0 and args[0] == 'number.hoymiles_remote_control_hoymiles_battery_power':
+            kwargs = call[1]
+            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == 'number.hoymiles_remote_control_hoymiles_battery_power':
                 battery_control_call = call
                 break
         
         self.assertIsNotNone(battery_control_call)
-        args = battery_control_call[0]
         
         # battery_power_kw=-3.0 (discharging) → control=3000W (discharge/provide power)
-        # Note: We only push the value, not attributes, to preserve MQTT subscription
-        self.assertEqual(int(args[1]), 3000)
+        service_data = battery_control_call[1]['service_data']
+        self.assertEqual(int(service_data['value']), 3000)
 
 if __name__ == '__main__':
     unittest.main()
