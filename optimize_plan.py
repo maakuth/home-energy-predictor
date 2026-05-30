@@ -37,7 +37,12 @@ def get_env_bool(name, default=False):
     return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
-def load_predictions(file_path='future_predictions.json', sarima_path='sarimax_predictions.json'):
+def load_predictions(file_path=None, sarima_path=None):
+    # Support environment variable overrides for testing
+    if file_path is None:
+        file_path = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
+    if sarima_path is None:
+        sarima_path = os.getenv('TEST_SARIMA_FILE', 'sarimax_predictions.json')
     with open(file_path, 'r') as f:
         xgb_data = json.load(f)
 
@@ -454,7 +459,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
 def optimize():
     print('Loading predictions...')
     try:
-        predictions_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper = load_predictions('future_predictions.json')
+        predictions_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper = load_predictions()
     except FileNotFoundError:
         print('Error: future_predictions.json not found. Run predict_future.py first.')
         return
@@ -688,9 +693,11 @@ def optimize():
             **b,
         })
         
-    with open('optimization_plan.json', 'w') as f:
+    # Support environment variable override for testing
+    plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')
+    with open(plan_file, 'w') as f:
         json.dump(final_plan, f, indent=2)
-    print('\n✅ Plan saved to optimization_plan.json')
+    print(f'\n✅ Plan saved to {plan_file}')
 
     # Archive the TOTAL planned usage to hepo.db for accuracy tracking
     # This ensures analyze_performance.py compares actuals against Baseload + Planned GSHP

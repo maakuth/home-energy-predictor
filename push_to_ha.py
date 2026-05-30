@@ -41,11 +41,13 @@ def push_accuracy():
 
 def push_plan():
     print('Loading optimization plan...')
+    # Support environment variable override for testing
+    plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')
     try:
-        with open('optimization_plan.json', 'r') as f:
+        with open(plan_file, 'r') as f:
             plan = json.load(f)
     except FileNotFoundError:
-        print('Error: optimization_plan.json not found.')
+        print(f'Error: {plan_file} not found.')
         return
 
     # State: Total predicted energy from current hour to end of tomorrow (sum of hourly predictions)

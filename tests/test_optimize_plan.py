@@ -14,9 +14,16 @@ from unittest.mock import patch, MagicMock
 
 class OptimizeArchivingTests(unittest.TestCase):
     def setUp(self):
-        self.db_file = 'test_hepo.db'
-        if os.path.exists(self.db_file):
-            os.remove(self.db_file)
+        # Use test-specific paths from environment (set by conftest.py)
+        self.db_file = os.getenv('TEST_DB_PATH', 'test_hepo.db')
+        self.predictions_file = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
+        self.plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')
+        
+        # Create directories if they don't exist (only if not in current directory)
+        for path in [self.db_file, self.predictions_file, self.plan_file]:
+            dir_path = os.path.dirname(path)
+            if dir_path:
+                os.makedirs(dir_path, exist_ok=True)
         
         # Setup dummy predictions
         self.predictions_data = [
@@ -29,16 +36,12 @@ class OptimizeArchivingTests(unittest.TestCase):
                 "is_fallback_price": 0
             }
         ]
-        with open('future_predictions.json', 'w') as f:
+        with open(self.predictions_file, 'w') as f:
             json.dump(self.predictions_data, f)
 
     def tearDown(self):
-        if os.path.exists(self.db_file):
-            os.remove(self.db_file)
-        if os.path.exists('future_predictions.json'):
-            os.remove('future_predictions.json')
-        if os.path.exists('optimization_plan.json'):
-            os.remove('optimization_plan.json')
+        # No cleanup needed - conftest.py handles it via tmp_path fixture
+        pass
 
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')

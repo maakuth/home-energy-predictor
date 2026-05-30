@@ -405,9 +405,11 @@ def predict():
         
     print(f'\nGenerated {len(results)} predictions at {interval}-minute resolution.')
     
-    with open('future_predictions.json', 'w') as f:
+    # Support environment variable override for testing
+    predictions_file = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
+    with open(predictions_file, 'w') as f:
         json.dump(results, f, indent=2)
-    print('\n✅ Predictions saved to future_predictions.json')
+    print(f'\n✅ Predictions saved to {predictions_file}')
 
     # Archive predictions for feedback loop using SQLite
     git_version = get_model_version()

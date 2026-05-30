@@ -8,8 +8,17 @@ from optimize_plan import optimize
 
 class TestEVLogic(unittest.TestCase):
     def setUp(self):
-        self.predictions_file = 'future_predictions.json'
-        self.plan_file = 'optimization_plan.json'
+        # Use test-specific paths from environment (set by conftest.py)
+        self.predictions_file = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
+        self.plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')
+        self.db_file = os.getenv('TEST_DB_PATH', 'hepo.db')
+        
+        # Create directories if they don't exist (only if not in current directory)
+        for path in [self.predictions_file, self.plan_file, self.db_file]:
+            dir_path = os.path.dirname(path)
+            if dir_path:
+                os.makedirs(dir_path, exist_ok=True)
+        
         # Dummy data: 4 intervals. 
         # Prices: [10, 5, 20, 15] -> index 1 is cheapest, then 3.
         # ev_position: [0, 1, 0, 1] -> Car home only at index 1 and 3.
@@ -23,9 +32,8 @@ class TestEVLogic(unittest.TestCase):
             json.dump(self.predictions_data, f)
             
     def tearDown(self):
-        for f in [self.predictions_file, self.plan_file, 'hepo.db']:
-            if os.path.exists(f):
-                os.remove(f)
+        # No cleanup needed - conftest.py handles it via tmp_path fixture
+        pass
 
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')

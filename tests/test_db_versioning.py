@@ -6,13 +6,17 @@ from predict_future import get_model_version as get_model_version_pf
 
 class TestDBVersioning(unittest.TestCase):
     def setUp(self):
-        self.db_file = 'test_hepo.db'
-        if os.path.exists(self.db_file):
-            os.remove(self.db_file)
+        # Use test-specific database path from environment (set by conftest.py)
+        self.db_file = os.getenv('TEST_DB_PATH', 'test_hepo.db')
+        
+        # Create directory if it doesn't exist (only if not in current directory)
+        dir_path = os.path.dirname(self.db_file)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
 
     def tearDown(self):
-        if os.path.exists(self.db_file):
-            os.remove(self.db_file)
+        # No cleanup needed - conftest.py handles it via tmp_path fixture
+        pass
 
     def test_git_version(self):
         version = get_model_version()

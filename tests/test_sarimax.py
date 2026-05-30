@@ -7,8 +7,17 @@ from sarimax_predictor import load_historical_data, predict_sarimax, save_benchm
 
 class TestSARIMAPredictor(unittest.TestCase):
     def setUp(self):
-        self.test_csv = 'test_processed_data.csv'
-        self.test_json = 'test_sarimax_predictions.json'
+        # Use test-specific paths from environment (set by conftest.py)
+        self.test_csv = os.getenv('TEST_SARIMA_CSV', 'test_processed_data.csv')
+        self.test_json = os.getenv('TEST_SARIMA_FILE', 'test_sarimax_predictions.json')
+        
+        # Create directories if they don't exist (only if not in current directory)
+        csv_dir = os.path.dirname(self.test_csv)
+        if csv_dir:
+            os.makedirs(csv_dir, exist_ok=True)
+        json_dir = os.path.dirname(self.test_json)
+        if json_dir:
+            os.makedirs(json_dir, exist_ok=True)
         
         # Create dummy historical data (3 days of 15-min intervals)
         # 3 * 24 * 4 = 288 points
@@ -24,9 +33,8 @@ class TestSARIMAPredictor(unittest.TestCase):
         df.to_csv(self.test_csv)
 
     def tearDown(self):
-        for f in [self.test_csv, self.test_json]:
-            if os.path.exists(f):
-                os.remove(f)
+        # No cleanup needed - conftest.py handles it via tmp_path fixture
+        pass
 
     def test_load_historical_data(self):
         ts_data = load_historical_data(self.test_csv, last_n_days=2)

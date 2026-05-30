@@ -44,14 +44,18 @@ class TestPushToHA(unittest.TestCase):
 class TestPushPlan(unittest.TestCase):
     
     def setUp(self):
-        """Clean up test file if it exists."""
-        if os.path.exists('optimization_plan.json'):
-            os.remove('optimization_plan.json')
+        """Use test-specific plan file from environment."""
+        # Use test-specific plan file path from environment (set by conftest.py)
+        self.plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')
+        
+        # Create directory if it doesn't exist (only if not in current directory)
+        dir_path = os.path.dirname(self.plan_file)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
     
     def tearDown(self):
-        """Clean up test file after test."""
-        if os.path.exists('optimization_plan.json'):
-            os.remove('optimization_plan.json')
+        """No cleanup needed - conftest.py handles it via tmp_path fixture."""
+        pass
     
     @patch('utils.battery_utils.call_ha_service')
     def test_push_plan_with_battery_intent(self, mock_service):
@@ -74,7 +78,7 @@ class TestPushPlan(unittest.TestCase):
         plan_data.extend([plan_data[0].copy() for _ in range(95)])
         
         # Write test plan to file
-        with open('optimization_plan.json', 'w') as f:
+        with open(self.plan_file, 'w') as f:
             json.dump(plan_data, f)
         
         # Execute
@@ -116,7 +120,7 @@ class TestPushPlan(unittest.TestCase):
         plan_data.extend([plan_data[0].copy() for _ in range(95)])
         
         # Write test plan to file
-        with open('optimization_plan.json', 'w') as f:
+        with open(self.plan_file, 'w') as f:
             json.dump(plan_data, f)
         
         # Execute
