@@ -12,7 +12,7 @@ HEPO (Home Energy Prediction & Optimization) is an ML-powered system designed to
 - **Thermal Storage:** `sensor.mlp_varaajan_lampotila` (500L Accumulator)
 - **Sauna:** `sensor.sauna_kiuas_lampotila` (Used to infer sauna activity)
 - **EV State:** `sensor.xpz_491_battery_level` (SOC), `device_tracker.xpz_491_position` (Home/Away)
-- **Home Battery:** `sensor.be_soc` (State of Charge %), `sensor.be_stat_batt_power` (Power in Watts, positive=charging)
+- **Home Battery:** `sensor.be_soc` (State of Charge %), `sensor.be_stat_batt_power` (Power in Watts, positive=charging from grid/solar, negative=discharging to home)
 - **Grid Power:** `sensor.sahkokauppa_nyt` (Bidirectional grid meter)
 - **Solar Production:** `sensor.solcast_pv_forecast_actual_power` (Actual) and `sensor.solcast_pv_forecast_forecast_tomorrow` (Forecast).
 
@@ -20,9 +20,15 @@ HEPO (Home Energy Prediction & Optimization) is an ML-powered system designed to
 1. **Extraction (`extract_data.py`):** Fetches historical state history. Supports fast 3-day sync or full 365-day extraction.
 2. **Denoising (`process_data.py`):** Applies a 15-point Rolling Median Filter to remove sensor spikes.
 3. **Resampling:** Aggregates data to 15-minute intervals.
-4. **Calculations:** 
-   - `total_home_power = grid_power + solar_actual`
-   - `baseload_power = total_home_power - (gshp_power / 1000)` (Target for the ML model)
+4. **Calculations (Battery-Aware):** 
+   - `total_home_power = grid_power + solar_actual - battery_power`
+   - `baseload_power = total_home_power - (gshp_power / 1000) - (leaf_power / 1000)` (Target for the ML model)
+   - **Critical:** Battery power MUST be subtracted to get true home load. Without this correction:
+     - When battery charges from solar: home load is calculated as if solar went to house (wrong!)
+     - When battery discharges: home load is underestimated (wrong!)
+     - Model learns incorrect patterns from inflated/deflated load values
+   - **Convention:** Battery power positive = charging (from grid/solar), negative = discharging (to home).
+   - **Backward Compatibility:** If battery sensor unavailable, battery_power defaults to 0.
 
 ## 3. Machine Learning & Feature Engineering
 

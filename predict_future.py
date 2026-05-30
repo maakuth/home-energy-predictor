@@ -198,6 +198,7 @@ def predict():
             solar_df = anchor_data.get('sensor.solarh_63038_real_power_kw')
             gshp_df = anchor_data.get('sensor.mlp_teho')
             leaf_df = anchor_data.get('sensor.tasmota_energy_power_3')
+            battery_df = anchor_data.get('sensor.be_stat_batt_power')  # Battery power (W, positive=charging)
 
             # Find nearest values
             def get_nearest(df, ts):
@@ -217,8 +218,11 @@ def predict():
             solar = get_nearest(solar_df, target_ts)
             gshp = get_nearest(gshp_df, target_ts) / 1000.0 # W to kW
             leaf = get_nearest(leaf_df, target_ts) / 1000.0 # W to kW
+            battery = get_nearest(battery_df, target_ts) / 1000.0  # W to kW (positive=charging)
 
-            return max(0.0, total + solar - gshp - leaf)
+            # Home Load = Grid Import + Solar - Battery Net Power
+            # (Battery positive when charging from grid, so we subtract to get true load)
+            return max(0.0, total + solar - gshp - leaf - battery)
         except Exception as e:
             print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
             return 1.0 # Fallback

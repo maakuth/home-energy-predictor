@@ -46,8 +46,16 @@ def process_data():
         interval_minutes = 15 # Fallback
     
     # Compute total home consumption BEFORE clipping
+    # With a home battery: Battery power is positive when charging, negative when discharging
+    # Since we measure grid power (what flows to/from grid), we must subtract net battery power
+    # to get true home load: Home Load = Grid Import + Solar - (Battery Discharge - Battery Charge)
+    #                                  = Grid + Solar - Battery Power (our convention)
     if 'total_power' in df.columns and 'solar_actual' in df.columns:
         df['total_home_power'] = df['total_power'] + df['solar_actual']
+        # Subtract battery power to get true home load (only if battery sensor exists)
+        if 'battery_power' in df.columns:
+            battery_kw = (df['battery_power'] / 1000.0)  # Convert W to kW
+            df['total_home_power'] = df['total_home_power'] - battery_kw
     elif 'total_power' in df.columns:
         df['total_home_power'] = df['total_power']
 

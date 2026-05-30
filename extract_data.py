@@ -24,6 +24,7 @@ ENTITIES = {
     'sensor.solarh_63038_real_power_kw': 'solar_actual',
     'sensor.sauna_temperature_2': 'sauna_temp',
     'sensor.mlp_pumpun_lampotla': 'gshp_pump_temp',
+    'sensor.be_stat_batt_power': 'battery_power',  # Home battery power (Watts, positive=charging)
     'weather.home': 'wind_speed' # Special handling for attribute
 }
 
