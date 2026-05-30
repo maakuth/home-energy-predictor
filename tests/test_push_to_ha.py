@@ -77,30 +77,24 @@ class TestPushPlan(unittest.TestCase):
         # Execute
         push_plan()
         
-        # Verify battery intent was pushed with correct properties
+        # Verify battery control was pushed with correct properties
         calls = mock_push.call_args_list
-        battery_intent_call = None
+        battery_control_call = None
         for call in calls:
             args = call[0]
-            if len(args) > 0 and args[0] == 'sensor.hepo_battery_intent':
-                battery_intent_call = call
+            if len(args) > 0 and args[0] == 'number.hoymiles_remote_control_hoymiles_battery_power':
+                battery_control_call = call
                 break
         
-        self.assertIsNotNone(battery_intent_call, "Battery intent push not found")
-        args = battery_intent_call[0]
+        self.assertIsNotNone(battery_control_call, "Battery control push not found")
+        args = battery_control_call[0]
         
         # Verify entity ID
-        self.assertEqual(args[0], 'sensor.hepo_battery_intent')
+        self.assertEqual(args[0], 'number.hoymiles_remote_control_hoymiles_battery_power')
         
-        # Verify sign reversal: battery_power_kw=2.5 (charging) → intent=-2500W (charge)
+        # Verify sign reversal: battery_power_kw=2.5 (charging) → control=-2500W (charge)
+        # Note: We only push the value, not attributes, to preserve MQTT subscription
         self.assertEqual(int(args[1]), -2500)
-        
-        # Verify attributes
-        attrs = args[2]
-        self.assertEqual(attrs['battery_action'], 'charge_solar')
-        self.assertEqual(attrs['battery_soc_pct'], 60.0)
-        self.assertEqual(attrs['unit_of_measurement'], 'W')
-        self.assertEqual(attrs['device_class'], 'power')
 
     @patch('push_to_ha.push_ha_state')
     def test_push_plan_battery_discharge_intent(self, mock_push):
@@ -126,22 +120,21 @@ class TestPushPlan(unittest.TestCase):
         # Execute
         push_plan()
         
-        # Verify battery intent
+        # Verify battery control
         calls = mock_push.call_args_list
-        battery_intent_call = None
+        battery_control_call = None
         for call in calls:
             args = call[0]
-            if len(args) > 0 and args[0] == 'sensor.hepo_battery_intent':
-                battery_intent_call = call
+            if len(args) > 0 and args[0] == 'number.hoymiles_remote_control_hoymiles_battery_power':
+                battery_control_call = call
                 break
         
-        self.assertIsNotNone(battery_intent_call)
-        args = battery_intent_call[0]
+        self.assertIsNotNone(battery_control_call)
+        args = battery_control_call[0]
         
-        # battery_power_kw=-3.0 (discharging) → intent=3000W (discharge/provide power)
+        # battery_power_kw=-3.0 (discharging) → control=3000W (discharge/provide power)
+        # Note: We only push the value, not attributes, to preserve MQTT subscription
         self.assertEqual(int(args[1]), 3000)
-        self.assertEqual(args[2]['battery_action'], 'discharge_load')
-        self.assertEqual(args[2]['battery_soc_pct'], 45.0)
 
 if __name__ == '__main__':
     unittest.main()
