@@ -3,9 +3,31 @@
 Handles pushing battery control setpoint to Hoymiles inverter via Home Assistant.
 Uses the number.set_value service to only touch the numeric value without
 modifying entity structure or MQTT subscriptions.
+
+Gracefully handles battery unavailability - if the entity doesn't exist,
+silently continues without error (degradation mode for testing).
 """
 
-from utils.ha_utils import call_ha_service
+import os
+from dotenv import load_dotenv
+from utils.ha_utils import call_ha_service, get_ha_state
+
+load_dotenv(override=True)
+
+
+def is_battery_available():
+    """
+    Check if battery control entity is available in Home Assistant.
+    
+    Returns:
+        bool: True if battery entity exists and is not unavailable, False otherwise
+    """
+    entity_id = 'number.hoymiles_remote_control_hoymiles_battery_power'
+    state = get_ha_state(entity_id)
+    
+    if state and state.get('state') not in ['unknown', 'unavailable', None]:
+        return True
+    return False
 
 
 def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct=None):
@@ -20,13 +42,25 @@ def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct
         battery_soc_pct (float): Current battery SoC percentage (for logging)
     
     Returns:
-        bool: True if successful, False otherwise
+        bool: True if successful, False otherwise (still True if battery unavailable - degradation mode)
     
     Note:
         Uses number.set_value service to only update the numeric value,
         preserving the entity's MQTT subscription and attributes.
+        
+        If battery entity is unavailable, silently skips push (degradation mode).
     """
     entity_id = 'number.hoymiles_remote_control_hoymiles_battery_power'
+    
+    # Check if battery is available before attempting push
+    if not is_battery_available():
+        # Degradation mode: battery not available, skip gracefully
+        action_str = f"({battery_action})" if battery_action != 'idle' else ""
+        if battery_soc_pct is not None:
+            print(f'⊘ Battery Unavailable: {battery_power_w}W {action_str} [SoC {battery_soc_pct:.1f}%] (skipped)')
+        else:
+            print(f'⊘ Battery Unavailable: {battery_power_w}W {action_str} (skipped)')
+        return True  # Still return True to not break the plan
     
     try:
         # Use number.set_value service (only touches value, preserves MQTT)

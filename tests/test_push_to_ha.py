@@ -57,9 +57,11 @@ class TestPushPlan(unittest.TestCase):
         """No cleanup needed - conftest.py handles it via tmp_path fixture."""
         pass
     
+    @patch('utils.battery_utils.is_battery_available')
     @patch('utils.battery_utils.call_ha_service')
-    def test_push_plan_with_battery_intent(self, mock_service):
+    def test_push_plan_with_battery_intent(self, mock_service, mock_battery_available):
         """Test that battery control is correctly pushed with reversed sign."""
+        mock_battery_available.return_value = True  # Battery is available
         mock_service.return_value = {}  # Mock successful service call (returns dict)
         
         # Setup mock plan data
@@ -100,9 +102,11 @@ class TestPushPlan(unittest.TestCase):
         self.assertEqual(service_data['entity_id'], 'number.hoymiles_remote_control_hoymiles_battery_power')
         self.assertEqual(int(service_data['value']), -2500)
 
+    @patch('utils.battery_utils.is_battery_available')
     @patch('utils.battery_utils.call_ha_service')
-    def test_push_plan_battery_discharge_intent(self, mock_service):
+    def test_push_plan_battery_discharge_intent(self, mock_service, mock_battery_available):
         """Test battery discharge control (negative battery_power_kw → positive control)."""
+        mock_battery_available.return_value = True  # Battery is available
         mock_service.return_value = {}  # Mock successful service call (returns dict)
         
         plan_data = [

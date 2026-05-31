@@ -109,6 +109,62 @@ def build_tariff_prices(market_prices, is_inclusive=False):
     return import_unit_prices, export_unit_prices
 
 
+def is_battery_enabled():
+    """
+    Check if battery optimization should be used.
+    
+    Battery can be disabled for testing/degradation mode via:
+    - HEPO_DISABLE_BATTERY=1 in .env
+    - Missing sensor.be_soc entity in Home Assistant
+    
+    Returns:
+        bool: True if battery optimization should be used
+    """
+    # Check environment variable (for testing/degradation mode)
+    if get_env_bool('HEPO_DISABLE_BATTERY', False):
+        print("⚠️ Battery optimization DISABLED (HEPO_DISABLE_BATTERY=1)")
+        return False
+    
+    # Check if battery SoC sensor exists
+    batt_state = get_ha_state('sensor.be_soc')
+    if not batt_state or batt_state.get('state') in ['unknown', 'unavailable', None]:
+        print("⚠️ Battery SoC sensor unavailable - disabling battery optimization")
+        return False
+    
+    return True
+
+
+def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices):
+    """
+    Create a no-op battery plan when battery is disabled.
+    
+    Returns a list of plans with no battery action, allowing the system
+    to continue without battery optimization during testing/degradation.
+    """
+    horizon = len(predictions)
+    interval_hours = get_plan_interval_hours()
+    
+    no_battery_plan = []
+    for i in range(horizon):
+        no_battery_plan.append({
+            'battery_action': 'idle',
+            'battery_power_kw': 0.0,
+            'charge_from_solar_kwh': 0.0,
+            'charge_from_grid_kwh': 0.0,
+            'discharge_to_load_kwh': 0.0,
+            'discharge_to_export_kwh': 0.0,
+            'soc_kwh': 0.0,
+            'soc_pct': 0.0,
+            'grid_import_kwh': 0.0,
+            'grid_export_kwh': 0.0,
+            'estimated_hour_cost': 0.0,
+            'estimated_hour_savings': 0.0,
+            'net_load_without_battery_kwh': 0.0,
+        })
+    
+    return no_battery_plan
+
+
 def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices):
     capacity_kwh = get_env_float('BATTERY_CAPACITY_KWH', 40.0)
     min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
@@ -626,7 +682,12 @@ def optimize():
     # Battery Dispatch uses Baseload + GSHP
     predictions_kwh = (predictions + planned_gshp_kw) * get_plan_interval_hours()
     solar_kwh = solar_array * get_plan_interval_hours()
-    battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
+    
+    # Use battery optimization if available, otherwise fall back to no-battery plan
+    if is_battery_enabled():
+        battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
+    else:
+        battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
 
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
     print(f"Interval: {get_plan_interval_minutes()} minutes")

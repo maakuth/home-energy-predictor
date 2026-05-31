@@ -76,7 +76,43 @@ The system executes a 24-48 hour optimization plan every 15-60 minutes (`predict
 - **Battery Control:** `number.hoymiles_remote_control_hoymiles_battery_power` (in Watts) provides real-time control setpoint for the Hoymiles battery inverter. Positive = discharge (provide power to home), Negative = charge (draw power from grid/solar). Updated every minute via `run_often.sh`.
 - **Accuracy Tracking:** `sensor.hepo_accuracy` reports 3-hour windowed MAE and Bias from `analyze_performance.py`.
 
-## 6. Technical Stack
+## 6. Battery Availability & Degradation Mode
+
+The system gracefully handles battery unavailability for testing and maintenance periods:
+
+### How It Works
+
+1. **Battery Detection:**
+   - On startup, checks if `sensor.be_soc` exists and is available in Home Assistant
+   - If unavailable → automatically falls back to no-battery optimization
+   - Can also be disabled via `HEPO_DISABLE_BATTERY=1` in `.env`
+
+2. **With Battery Available:**
+   - Full battery dispatch optimization (charge/discharge planning)
+   - Real-time control setpoint pushed to Hoymiles inverter every minute
+   - Battery SoC tracked and used for planning
+
+3. **Without Battery (Degradation Mode):**
+   - GSHP and baseload still optimized normally
+   - Battery control skipped silently (no errors)
+   - System continues to operate and learn from load patterns
+   - Log shows: `⊘ Battery Unavailable: ...W (skipped)`
+
+### Use Case
+
+Perfect for test deployments:
+- Day 1-5: Battery not installed → System learns baseload patterns
+- Day 6+: Battery installed → System adds battery optimization automatically
+- No code changes needed, no errors logged
+
+### Configuration
+
+To manually disable battery optimization during testing:
+```env
+HEPO_DISABLE_BATTERY=1  # Set to 1 to disable, 0 or omit to enable
+```
+
+## 7. Technical Stack
 - **Core:** Python 3.10+, Pandas, XGBoost.
 - **Database:** PostgreSQL (Source), SQLite (Performance Archiving), CSV (Intermediate).
 - **Config:** Environment variables (.env) for hardware constraints (battery capacity, efficiencies, COP).
