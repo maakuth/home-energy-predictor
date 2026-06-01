@@ -134,7 +134,27 @@ def is_battery_enabled():
     return True
 
 
-def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices):
+def _has_spill_risk(soc_kwh, start_idx, horizon, net_without_battery, min_soc_kwh, max_soc_kwh,
+                     charge_eff, discharge_eff, max_charge_kw, max_discharge_kw, interval_hours):
+    """Simulate battery from start_idx forward with no grid charging.
+    Returns True if battery would hit max_soc with solar still spilling."""
+    sim_soc = soc_kwh
+    for j in range(start_idx, horizon):
+        net_j = float(net_without_battery[j])
+        if net_j < 0:
+            charge = min(-net_j, (max_soc_kwh - sim_soc) / charge_eff,
+                         max_charge_kw * interval_hours)
+            sim_soc += charge * charge_eff
+            if sim_soc >= max_soc_kwh - 1e-6 and net_j + charge < -1e-6:
+                return True
+        else:
+            discharge = min(net_j, (sim_soc - min_soc_kwh) * discharge_eff,
+                            max_discharge_kw * interval_hours)
+            sim_soc -= discharge / discharge_eff
+    return False
+
+
+def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
     """
     Create a no-op battery plan when battery is disabled.
     
@@ -144,8 +164,18 @@ def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_pri
     horizon = len(predictions)
     interval_hours = get_plan_interval_hours()
     
+    if committed_load_kwh is None:
+        committed_load_kwh = np.zeros(horizon)
+    
     no_battery_plan = []
     for i in range(horizon):
+        net_load = float(predictions[i]) - float(solar_array[i])
+        committed = float(committed_load_kwh[i]) if i < len(committed_load_kwh) else 0.0
+        total_net = net_load + committed
+        grid_import_kwh = max(total_net, 0.0)
+        grid_export_kwh = max(-total_net, 0.0)
+        hour_cost = (grid_import_kwh * import_prices[i]) - (grid_export_kwh * export_prices[i])
+        
         no_battery_plan.append({
             'battery_action': 'idle',
             'battery_power_kw': 0.0,
@@ -155,17 +185,17 @@ def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_pri
             'discharge_to_export_kwh': 0.0,
             'soc_kwh': 0.0,
             'soc_pct': 0.0,
-            'grid_import_kwh': 0.0,
-            'grid_export_kwh': 0.0,
-            'estimated_hour_cost': 0.0,
+            'grid_import_kwh': float(grid_import_kwh),
+            'grid_export_kwh': float(grid_export_kwh),
+            'estimated_hour_cost': float(hour_cost),
             'estimated_hour_savings': 0.0,
-            'net_load_without_battery_kwh': 0.0,
+            'net_load_without_battery_kwh': float(net_load),
         })
     
     return no_battery_plan
 
 
-def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices):
+def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
     capacity_kwh = get_env_float('BATTERY_CAPACITY_KWH', 40.0)
     min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
     max_soc_pct = get_env_float('BATTERY_MAX_SOC_PCT', 90.0)
@@ -196,6 +226,10 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     chg_p = get_env_float('BATTERY_CHARGE_PERCENTILE', 30.0)
     dis_p = get_env_float('BATTERY_DISCHARGE_PERCENTILE', 70.0)
     
+    # Grid connection limit (3-phase, 230V)
+    main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
+    max_grid_import_kw = main_fuse_a * 3 * 0.230
+    
     interval_hours = get_plan_interval_hours()
 
     charge_eff = min(max(charge_eff, 0.01), 1.0)
@@ -208,6 +242,9 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
     horizon = len(predictions)
     net_without_battery = np.array(predictions, dtype=float) - np.array(solar_array, dtype=float)
+    
+    if committed_load_kwh is None:
+        committed_load_kwh = np.zeros(horizon)
 
     # Use configurable percentiles
     import_q_low = np.percentile(import_prices, chg_p)
@@ -277,20 +314,25 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             # Re-calculate room for subsequent charging logic
             soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
 
+        # Forward simulation: would adding grid charge now cause solar spill later?
+        spill_risk = _has_spill_risk(soc_kwh, i, horizon, net_without_battery, min_soc_kwh, max_soc_kwh,
+                                      charge_eff, discharge_eff, max_charge_kw, max_discharge_kw, interval_hours)
+
+        # Grid capacity calculation: how much can we still draw without blowing the main fuse?
+        committed = float(committed_load_kwh[i]) if i < len(committed_load_kwh) else 0.0
+        existing_grid_import = max(net_load - discharge_to_load + committed, 0.0)
+        available_grid_kwh = max(0.0, max_grid_import_kw * interval_hours - existing_grid_import)
 
         profitable_grid_charge = (best_future_value * round_trip_eff) > current_import
         is_cheap_hour = current_import <= import_q_low
-        # Room after solar: how much space is left if we reserve enough for future solar surplus?
-        # This prevents grid charging from "stealing" space from tomorrow's free solar.
-        room_after_solar_kwh = max(0.0, soc_room_kwh - (expected_solar_surplus_kwh * charge_eff))
         
-        if discharge_to_load == 0.0 and charge_limit_input_kwh > 0 and profitable_grid_charge and is_cheap_hour:
-            # Limit grid charge to the room available AFTER accounting for upcoming solar
-            max_grid_charge_kwh = min(charge_limit_input_kwh, room_after_solar_kwh / charge_eff)
-            if max_grid_charge_kwh > 1e-4:
-                charge_from_grid = max_grid_charge_kwh
-                soc_kwh += charge_from_grid * charge_eff
-                soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+        if discharge_to_load == 0.0 and charge_limit_input_kwh > 0 and not spill_risk:
+            if profitable_grid_charge and is_cheap_hour:
+                max_grid_charge_kwh = min(charge_limit_input_kwh, available_grid_kwh)
+                if max_grid_charge_kwh > 1e-4:
+                    charge_from_grid = max_grid_charge_kwh
+                    soc_kwh += charge_from_grid * charge_eff
+                    soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
 
         if (
             allow_export
@@ -306,12 +348,13 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
         soc_kwh = min(max(soc_kwh, min_soc_kwh), max_soc_kwh)
 
-        net_after_battery = net_load + charge_from_solar + charge_from_grid - discharge_to_load - discharge_to_export
-        grid_import_kwh = max(net_after_battery, 0.0)
-        grid_export_kwh = max(-net_after_battery, 0.0)
+        # Total grid exchange including committed loads (EV, Leaf)
+        total_net_after_battery = net_load + charge_from_solar + charge_from_grid - discharge_to_load - discharge_to_export + committed
+        grid_import_kwh = max(total_net_after_battery, 0.0)
+        grid_export_kwh = max(-total_net_after_battery, 0.0)
 
-        no_battery_import = max(net_load, 0.0)
-        no_battery_export = max(-net_load, 0.0)
+        no_battery_import = max(net_load + committed, 0.0)
+        no_battery_export = max(-(net_load + committed), 0.0)
 
         hour_cost_no_battery = (no_battery_import * current_import) - (no_battery_export * current_export)
         hour_cost_with_battery = (grid_import_kwh * current_import) - (grid_export_kwh * current_export)
@@ -683,11 +726,14 @@ def optimize():
     predictions_kwh = (predictions + planned_gshp_kw) * get_plan_interval_hours()
     solar_kwh = solar_array * get_plan_interval_hours()
     
+    # Committed loads (EV + Leaf) consume grid capacity but are not powered from house battery
+    committed_load_kwh = (planned_ev_kw + planned_leaf_kw) * get_plan_interval_hours()
+    
     # Use battery optimization if available, otherwise fall back to no-battery plan
     if is_battery_enabled():
-        battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
+        battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
     else:
-        battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices)
+        battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
 
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
     print(f"Interval: {get_plan_interval_minutes()} minutes")

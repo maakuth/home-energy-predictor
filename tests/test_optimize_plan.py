@@ -304,6 +304,79 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertTrue(all(row["battery_action"] == "idle" for row in plan))
         self.assertTrue(all(abs(row["grid_export_kwh"]) < 1e-9 for row in plan))
 
+    def test_summer_no_grid_charge_when_solar_covers_load(self):
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "50",
+                "BATTERY_MAX_CHARGE_KW": "5",
+                "BATTERY_MAX_DISCHARGE_KW": "5",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+                "MAIN_FUSE_SIZE_A": "25",
+            }
+        ):
+            # 24 hours: night load 1, day load 1 with 5 solar surplus
+            predictions = np.array([1.0]*6 + [1.0]*13 + [1.0]*5)  # 24h, load 1 kWh/h
+            solar = np.array([0.0]*6 + [5.0]*13 + [0.0]*5)  # solar 5 kWh/h during day
+            import_prices = np.array([0.05]*6 + [0.30]*13 + [0.30]*5)
+            export_prices = np.array([0.03]*6 + [0.20]*13 + [0.20]*5)
+            committed = np.zeros(24)
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices, committed)
+
+        # Night hours (0-5): should NOT grid charge (discharging to cover load is OK)
+        for i in range(6):
+            self.assertAlmostEqual(plan[i]["charge_from_grid_kwh"], 0.0, places=5, msg=f"Hour {i} should not grid charge")
+        
+        # In a high-solar summer day, the battery should NEVER charge from the grid
+        # (solar covers everything; grid charging would just displace free solar)
+        for i in range(24):
+            self.assertAlmostEqual(plan[i]["charge_from_grid_kwh"], 0.0, places=5, msg=f"Hour {i} should not grid charge")
+        
+        # Evening hours: should discharge to load (covered by solar charging during day)
+        for i in range(19, 24):
+            self.assertEqual(plan[i]["battery_action"], "discharge_load", f"Hour {i} should discharge to load")
+
+    def test_grid_capacity_limits_battery_charge(self):
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "10",  # almost empty
+                "BATTERY_MAX_CHARGE_KW": "5",
+                "BATTERY_MAX_DISCHARGE_KW": "5",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+                "MAIN_FUSE_SIZE_A": "25",
+            }
+        ):
+            # Hour 0: cheap, house load 2 kWh, EV 11 kWh. Total non-battery = 13 kWh.
+            # Fuse limit: 17.25 kWh. Available for battery: 4.25 kWh.
+            # Battery max charge: 5 kWh.
+            predictions = np.array([2.0, 2.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.05, 0.30])
+            export_prices = np.array([0.03, 0.20])
+            committed = np.array([11.0, 0.0])  # EV charging 11 kWh in first hour
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices, committed)
+
+        # Hour 0: should charge from grid but limited by fuse
+        self.assertEqual(plan[0]["battery_action"], "charge_grid")
+        self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 4.25, places=2)
+        
+        # Hour 1: should discharge to cover load
+        self.assertEqual(plan[1]["battery_action"], "discharge_load")
+        self.assertAlmostEqual(plan[1]["discharge_to_load_kwh"], 2.0, places=2)
+
 
 class GSHPPlanTests(unittest.TestCase):
     def test_gshp_starts_at_min_temp(self):

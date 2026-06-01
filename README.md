@@ -72,9 +72,16 @@ Example crontab for a robust setup:
 ## Configuration
 Set these in `.env` (refer to `README.md` for full list):
 - `BATTERY_CAPACITY_KWH`: Total usable capacity. **Set to `0` to disable battery simulation entirely** — the optimizer will plan as if no battery exists, and `grid_import_kwh`/`grid_export_kwh`/estimated costs will reflect a battery-less home. GSHP and EV optimizations are unaffected (battery dispatch runs downstream of those).
+- `MAIN_FUSE_SIZE_A`: Main fuse rating per phase (default `25`). Used to enforce maximum grid import limit (`3 × fuse × 230V`). Prevents battery grid-charging from overloading the connection when EV or other large loads are already drawing power.
 - `GRID_TRANSFER_EUR_PER_KWH`: Variable transfer costs.
 - `IMPORT_VAT_MULTIPLIER`: Tax calculations.
 - `DATA_RESAMPLE_INTERVAL`: Typically `15min`.
+
+### Battery Optimization Logic
+The battery optimizer uses a 24-hour forward simulation to decide whether grid charging is safe:
+1. **Spill-Risk Check**: Before charging from the grid, it simulates the battery forward with *only* solar charging. If the battery would hit 100% SOC while solar is still spilling, grid charging is blocked for that interval. This prevents paying for grid energy that would just displace free solar later.
+2. **Profitability Check**: If no spill risk exists, grid charging is only allowed when `(best_future_price × round_trip_efficiency) > current_import_price`, respecting the full asymmetric price spread (grid fees, taxes, VAT on import; deductions on export).
+3. **Fuse Limit Check**: Even if profitable, grid charging is clamped to the remaining import capacity after accounting for house load, GSHP, EV, and Leaf loads: `available = max_fuse_kw − committed_import`.
 
 ## Future Battery Integration
 When the physical battery is installed, switch from simulation to real control by:
