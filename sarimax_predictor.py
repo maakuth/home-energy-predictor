@@ -40,11 +40,49 @@ def load_historical_data(file_path='processed_data.csv', target_col='baseload_po
         print(f"Error loading historical data: {e}")
         return None
 
+def _get_safe_forecast(model, forecast_steps, start_params=None, max_ci_upper=100):
+    """
+    Fit SARIMA model and return forecast with reasonable confidence intervals.
+    
+    If start_params are provided, tries a warm-start fit first.
+    If the resulting CIs explode (indicating numerical instability), falls back
+    to a clean fit without warm start.
+    """
+    if start_params is not None:
+        try:
+            results = model.fit(start_params=start_params, disp=False)
+            forecast = results.get_forecast(steps=forecast_steps)
+            ci = forecast.conf_int(alpha=0.05)
+            max_upper = ci.iloc[:, 1].max()
+            if max_upper <= max_ci_upper:
+                return forecast
+            print(f"⚠️ SARIMA warm-start CIs exploded (max upper={max_upper:.1f}), refitting without warm start...")
+        except Exception as e:
+            print(f"⚠️ SARIMA warm-start fit failed: {e}, refitting without warm start...")
+    
+    results = model.fit(disp=False)
+    return results.get_forecast(steps=forecast_steps)
+
+
+def _clamp_ci(val, low, high, historical_std=None):
+    """Clamp confidence intervals to physically reasonable values for home baseload."""
+    if historical_std is not None:
+        max_reasonable = val + 3 * historical_std + 5
+    else:
+        max_reasonable = max(50.0, val * 5)
+    upper = min(float(high), max_reasonable)
+    lower = max(float(low), 0.0)
+    return lower, upper
+
+
 def predict_sarimax(ts_data, forecast_steps=96, params_path='sarima_model_params.pkl'):
     """
     Predicts future values using SARIMA model.
-    If params_path exists, uses pre-trained parameters.
+    If params_path exists, uses pre-trained parameters with fallback if CIs explode.
     Otherwise, fits a default SARIMA model on the data.
+    
+    Returns:
+        (forecast_mean, forecast_ci): tuple of predicted mean and confidence intervals
     """
     if os.path.exists(params_path):
         with open(params_path, 'rb') as f:
@@ -59,26 +97,25 @@ def predict_sarimax(ts_data, forecast_steps=96, params_path='sarima_model_params
             enforce_stationarity=False,
             enforce_invertibility=False
         )
-        results = model.smooth(model_data['params'])
+        forecast = _get_safe_forecast(model, forecast_steps, start_params=model_data['params'])
     else:
         model = SARIMAX(
             ts_data,
             order=(1, 1, 1),
-            seasonal_order=(1, 1, 1, 96),
+            seasonal_order=(1, 1, 0, 96),
             enforce_stationarity=False,
             enforce_invertibility=False
         )
-        results = model.fit(disp=False)
+        forecast = _get_safe_forecast(model, forecast_steps)
     
-    forecast = results.get_forecast(steps=forecast_steps)
     forecast_mean = forecast.predicted_mean
     forecast_ci = forecast.conf_int(alpha=0.05)
     
     forecast_mean = np.clip(forecast_mean, 0, None)
     
-    return forecast_mean
+    return forecast_mean, forecast_ci
 
-def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_predictions.json"):
+def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_predictions.json", historical_std=None):
     """Saves SARIMA forecast and confidence intervals."""
     if forecast_mean is not None:
         results = []
@@ -91,11 +128,13 @@ def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_pr
                 low = val * 0.5
                 high = val * 1.5
             
+            low, high = _clamp_ci(val, low, high, historical_std)
+            
             results.append({
                 "timestamp": ts.isoformat(),
                 "predicted_baseload": float(val),
-                "lower_95": float(max(0, low)),
-                "upper_95": float(max(0, high)),
+                "lower_95": low,
+                "upper_95": high,
                 "model": "SARIMA"
             })
         
@@ -103,7 +142,7 @@ def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_pr
             json.dump(results, f, indent=2)
         print(f"✅ SARIMA forecast with CI saved to {filename}")
 
-def archive_sarimax_predictions(forecast_mean, forecast_ci):
+def archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=None):
     """Archiving SARIMA predictions and CI to SQLite for later benchmarking."""
     if forecast_mean is None:
         return
@@ -135,11 +174,13 @@ def archive_sarimax_predictions(forecast_mean, forecast_ci):
         data_to_insert = []
         for ts, val in forecast_mean.items():
             try:
-                low = float(max(0, forecast_ci.loc[ts, 'lower baseload_power']))
-                high = float(max(0, forecast_ci.loc[ts, 'upper baseload_power']))
+                low = float(forecast_ci.loc[ts, 'lower baseload_power'])
+                high = float(forecast_ci.loc[ts, 'upper baseload_power'])
             except (KeyError, AttributeError):
                 low = float(val * 0.5)
                 high = float(val * 1.5)
+            
+            low, high = _clamp_ci(val, low, high, historical_std)
                 
             data_to_insert.append((ts.isoformat(), generated_at, float(val), low, high))
         
@@ -174,6 +215,8 @@ def main():
     if ts_data is None:
         return
 
+    historical_std = float(ts_data.std()) if len(ts_data) > 1 else None
+
     # 3. Re-instantiate model and apply parameters
     print(f"Reconstructing SARIMA model and updating state...")
     model = SARIMAX(
@@ -183,13 +226,10 @@ def main():
         enforce_stationarity=False,
         enforce_invertibility=False
     )
-    # This 'smooth' method allows updating the model with new data using fixed parameters
-    results = model.smooth(model_data['params'])
-    
-    # 4. Predict
+    # Use safe forecast: tries warm start, falls back to clean fit if CIs explode
     forecast_steps = 96 # 24 hours
     print(f"Forecasting {forecast_steps} steps ahead using SARIMA...")
-    forecast = results.get_forecast(steps=forecast_steps)
+    forecast = _get_safe_forecast(model, forecast_steps, start_params=model_data['params'])
     forecast_mean = forecast.predicted_mean
     forecast_ci = forecast.conf_int(alpha=0.05)
     
@@ -197,8 +237,8 @@ def main():
     forecast_mean = np.clip(forecast_mean, 0, None)
     
     # 5. Save & Archive
-    save_benchmark_results(forecast_mean, forecast_ci)
-    archive_sarimax_predictions(forecast_mean, forecast_ci)
+    save_benchmark_results(forecast_mean, forecast_ci, historical_std=historical_std)
+    archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=historical_std)
 
 if __name__ == "__main__":
     main()
