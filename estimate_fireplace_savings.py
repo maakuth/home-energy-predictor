@@ -63,14 +63,15 @@ def main():
     cop = get_env_float('GSHP_COP', 3.5)
     reservoir_l = get_env_float('GSHP_RESERVOIR_LITERS', 500)
     kwh_per_degree = (reservoir_l * 4.18) / 3600.0 
-    heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135) 
-    
+    heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135)
+    baseline_demand_kw = get_env_float('GSHP_BASELINE_DEMAND_KW', 1.0)
+
     # Calculate thermal energy for each interval
     # 1. House heat demand during this interval
-    # max(0, (20.0 - o_temp) * heat_loss_k) in kW, multiplied by interval_hours
-    
+    # baseline_demand_kw + max(0, (20.0 - o_temp) * heat_loss_k) in kW, multiplied by interval_hours
+
     active_df['outside_temp'] = active_df['outside_temp'].fillna(5.0)
-    active_df['heat_demand_kw'] = np.maximum(0, (20.0 - active_df['outside_temp']) * heat_loss_k)
+    active_df['heat_demand_kw'] = baseline_demand_kw + np.maximum(0, (20.0 - active_df['outside_temp']) * heat_loss_k)
     active_df['heat_demand_kwh'] = active_df['heat_demand_kw'] * interval_hours
 
     # 2. Accumulator heating

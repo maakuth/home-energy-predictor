@@ -62,7 +62,7 @@ The system executes a 24-48 hour optimization plan every 15-60 minutes (`predict
 ### GSHP (Heat Pump) Dispatch Strategy
 - **Thermal Buffering:** Increases setpoint/runs the pump when prices are in the bottom 30th percentile or when solar surplus is available.
 - **Strategic Stop:** Pauses heating during price peaks if the accumulator temperature allows, considering a 2-8 hour lookahead.
-- **Heat Loss Modeling:** Uses a cooling coefficient (`GSHP_HEAT_LOSS_K`) and outdoor temperature to model the reservoir's thermal decay.
+- **Heat Loss Modeling:** Uses a cooling coefficient (`GSHP_HEAT_LOSS_K`) and outdoor temperature to model the reservoir's thermal decay, plus a baseline demand (`GSHP_BASELINE_DEMAND_KW`, default 1.0 kW) to account for DHW, circulation, and standby losses even when no space heating is required.
 
 ## 5. Deployment & Integration
 

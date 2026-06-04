@@ -411,7 +411,8 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
     
     min_temp = get_env_float('GSHP_MIN_TEMP', 42.0)
     max_temp = get_env_float('GSHP_MAX_TEMP', 55.0)
-    heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135) 
+    heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135)
+    baseline_demand_kw = get_env_float('GSHP_BASELINE_DEMAND_KW', 1.0)
     sauna_demand_kw = get_env_float('SAUNA_HOT_WATER_DEMAND_KW', 6.0)
     
     initial_temp = get_env_float('GSHP_INITIAL_TEMP', 50.0)
@@ -457,8 +458,8 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
         o_temp = outside_temps[i]
         is_sauna = is_sauna_active[i]
 
-        # Calculate base heat demand (house loss)
-        demand_kw = max(0, (20.0 - o_temp) * heat_loss_k)
+        # Calculate base heat demand (house loss) plus baseline for DHW/circulation/standby
+        demand_kw = baseline_demand_kw + max(0, (20.0 - o_temp) * heat_loss_k)
         # Add sauna-induced hot water demand
         if is_sauna:
             demand_kw += sauna_demand_kw

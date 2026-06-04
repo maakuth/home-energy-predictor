@@ -423,7 +423,7 @@ class GSHPPlanTests(unittest.TestCase):
 
     def test_gshp_stops_at_max_temp(self):
         prediction_timestamps = [datetime.now()] * 4
-        outside_temps = [20.0] * 4 # No heat loss
+        outside_temps = [20.0] * 4 # No heat loss (baseline disabled for this test)
         import_prices = [0.20] * 4
         solar_forecast_kw = [0.0] * 4
         
@@ -433,6 +433,7 @@ class GSHPPlanTests(unittest.TestCase):
             "GSHP_IS_RUNNING": "true",
             "GSHP_ELECTRIC_POWER_KW": "4.0",
             "GSHP_COP": "3.5",
+            "GSHP_BASELINE_DEMAND_KW": "0.0",
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * len(prediction_timestamps)
@@ -491,7 +492,7 @@ class GSHPPlanTests(unittest.TestCase):
     def test_gshp_power_ramp(self):
         # Verify that power increases as temp increases
         prediction_timestamps = [datetime.now() + timedelta(minutes=15*i) for i in range(20)]
-        outside_temps = [20.0] * 20 # No heat loss
+        outside_temps = [20.0] * 20 # No heat loss (baseline disabled for this test)
         import_prices = [0.01] * 20 # Force start
         solar_forecast_kw = [0.0] * 20
         
@@ -502,6 +503,7 @@ class GSHPPlanTests(unittest.TestCase):
             "GSHP_POWER_MIN_KW": "3.4",
             "GSHP_POWER_MAX_KW": "4.2",
             "GSHP_IS_RUNNING": "true",
+            "GSHP_BASELINE_DEMAND_KW": "0.0",
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * len(prediction_timestamps)
@@ -545,7 +547,7 @@ class GSHPPlanTests(unittest.TestCase):
 
     def test_gshp_heating_efficiency_impact(self):
         prediction_timestamps = [datetime.now(timezone.utc)] * 2
-        outside_temps = [20.0] * 2 # No loss
+        outside_temps = [20.0] * 2 # No loss (baseline disabled for this test)
         import_prices = [0.01] * 2 # Force start
         solar_forecast_kw = [0.0] * 2
         
@@ -557,6 +559,7 @@ class GSHPPlanTests(unittest.TestCase):
             "GSHP_ELECTRIC_POWER_KW": "4.0",
             "GSHP_COP": "3.5",
             "GSHP_HEATING_EFFICIENCY": "0.4",
+            "GSHP_BASELINE_DEMAND_KW": "0.0",
             "PLAN_INTERVAL_MINUTES": "15"
         }):
             is_sauna_active = [0] * 2
@@ -605,7 +608,33 @@ class GSHPPlanTests(unittest.TestCase):
             
         # SHOULD start pre-heating because buffer_margin is 0.0 for solar, 
         # so 54.0 < (55.0 - 0.0) is true.
-        self.assertEqual(plan[0]['gshp_intent'], "START")
+        self.assertEqual(plan[0]["gshp_intent"], "START")
+
+    def test_gshp_cools_realistically_in_summer(self):
+        # Even when outside temp is 20C (no space heating need), the accumulator
+        # still cools due to DHW, circulation, and tank standby losses.
+        # Real-world data shows ~1.7C/hour cooling at 20C outside.
+        prediction_timestamps = [datetime.now(timezone.utc) + timedelta(minutes=15*i) for i in range(20)]
+        outside_temps = [20.0] * 20
+        # Prices always decrease, so preheating is never triggered (future is always cheaper)
+        import_prices = [0.30 - 0.01 * i for i in range(20)]
+        solar_forecast_kw = [0.0] * 20
+        
+        with patched_env({
+            "GSHP_INITIAL_TEMP": "45.0",
+            "GSHP_MIN_TEMP": "42.0",
+            "GSHP_MAX_TEMP": "55.0",
+            "GSHP_IS_RUNNING": "false",
+            "PLAN_INTERVAL_MINUTES": "15"
+        }):
+            plan = plan_gshp_dispatch(prediction_timestamps, [0]*20, outside_temps, import_prices, import_prices, solar_forecast_kw)
+        
+        # GSHP should stay OFF for the first few intervals
+        self.assertEqual(plan[0]["gshp_intent"], "STOP")
+        
+        # After 1 hour (4 intervals), should cool by at least 1.0C
+        # (Real data shows ~1.7C/hour; model should be in that ballpark)
+        self.assertLess(plan[3]["gshp_temp_sim"], 44.0)
 
 
 if __name__ == "__main__":
