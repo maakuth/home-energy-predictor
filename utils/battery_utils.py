@@ -14,6 +14,12 @@ from utils.ha_utils import call_ha_service, get_ha_state
 
 load_dotenv(override=True)
 
+# Battery control entity ID — configurable via environment variable
+BATTERY_CONTROL_ENTITY_ID = os.getenv(
+    'BATTERY_CONTROL_ENTITY_ID',
+    'number.hoymiles_remote_bridge_hoymiles_power_control_v5'
+)
+
 
 def is_battery_available():
     """
@@ -54,7 +60,7 @@ def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct
         
         If battery entity is unavailable, silently skips push (degradation mode).
     """
-    entity_id = 'number.hoymiles_remote_control_hoymiles_battery_power'
+    entity_id = BATTERY_CONTROL_ENTITY_ID
     
     # Check if battery is available before attempting push
     if not is_battery_available():

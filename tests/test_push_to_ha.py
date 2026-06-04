@@ -4,7 +4,10 @@ import os
 import sqlite3
 import json
 from push_to_ha import push_accuracy, push_plan
-from utils.battery_utils import push_battery_control, is_battery_available, compute_load_following_setpoint
+from utils.battery_utils import (
+    push_battery_control, is_battery_available, compute_load_following_setpoint,
+    BATTERY_CONTROL_ENTITY_ID
+)
 
 class TestPushToHA(unittest.TestCase):
     
@@ -91,7 +94,7 @@ class TestPushPlan(unittest.TestCase):
         battery_control_call = None
         for call in calls:
             kwargs = call[1]
-            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == 'number.hoymiles_remote_control_hoymiles_battery_power':
+            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == BATTERY_CONTROL_ENTITY_ID:
                 battery_control_call = call
                 break
         
@@ -99,7 +102,7 @@ class TestPushPlan(unittest.TestCase):
         
         # Verify sign reversal: battery_power_kw=2.5 (charging) → control=-2500W (charge)
         service_data = battery_control_call[1]['service_data']
-        self.assertEqual(service_data['entity_id'], 'number.hoymiles_remote_control_hoymiles_battery_power')
+        self.assertEqual(service_data['entity_id'], BATTERY_CONTROL_ENTITY_ID)
         self.assertEqual(int(service_data['value']), -2500)
 
     @patch('utils.battery_utils.is_battery_available')
@@ -135,7 +138,7 @@ class TestPushPlan(unittest.TestCase):
         battery_control_call = None
         for call in calls:
             kwargs = call[1]
-            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == 'number.hoymiles_remote_control_hoymiles_battery_power':
+            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == BATTERY_CONTROL_ENTITY_ID:
                 battery_control_call = call
                 break
         
