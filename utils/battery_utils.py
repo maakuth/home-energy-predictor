@@ -95,3 +95,78 @@ def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct
     except Exception as e:
         print(f'❌ Error pushing battery control: {e}')
         return False
+
+
+def compute_load_following_setpoint(planned_battery_kw, planned_action,
+                                   solar_kw, grid_w, battery_w,
+                                   gshp_kw=0.0, leaf_kw=0.0,
+                                   max_battery_kw=10.0):
+    """
+    Adjust planned battery setpoint based on real-time sensor readings.
+
+    For 'charge_solar': limits charge to actual solar surplus.
+    For 'discharge_load': limits discharge to actual house load.
+    For 'idle': opportunistically charges/discharges to minimize grid flow.
+    For price-arbitrage actions (charge_mixed, charge_grid, discharge_mixed,
+    discharge_export): returns the planned setpoint unchanged.
+
+    Args:
+        planned_battery_kw (float): Planned battery power in kW
+            (positive = charging, negative = discharging).
+        planned_action (str): Planned battery action string.
+        solar_kw (float): Actual solar production in kW.
+        grid_w (float): Net grid power in Watts
+            (positive = importing, negative = exporting).
+        battery_w (float): Current battery power in Watts
+            (positive = charging, negative = discharging).
+        gshp_kw (float): Actual GSHP power in kW.
+        leaf_kw (float): Actual Leaf charging power in kW.
+        max_battery_kw (float): Maximum battery power in kW.
+
+    Returns:
+        tuple: (adjusted_battery_kw, log_message)
+            adjusted_battery_kw is the new setpoint in kW.
+            log_message is a human-readable description of the adjustment
+            (empty string if no adjustment was made).
+    """
+    # Calculate actual total house load excluding battery
+    actual_load_kw = solar_kw + (grid_w / 1000.0) - (battery_w / 1000.0)
+    adjusted_battery_kw = planned_battery_kw
+    log_message = ""
+
+    if planned_action == 'charge_solar':
+        actual_surplus_kw = solar_kw - actual_load_kw
+        if actual_surplus_kw > 0:
+            adjusted_battery_kw = min(planned_battery_kw, actual_surplus_kw)
+        else:
+            adjusted_battery_kw = 0.0
+        if adjusted_battery_kw != planned_battery_kw:
+            log_message = (f'charge_solar planned {planned_battery_kw:.2f}kW -> '
+                           f'adjusted {adjusted_battery_kw:.2f}kW '
+                           f'(surplus {actual_surplus_kw:.2f}kW)')
+
+    elif planned_action == 'discharge_load':
+        planned_discharge_kw = abs(planned_battery_kw)
+        adjusted_discharge_kw = min(planned_discharge_kw, actual_load_kw)
+        adjusted_battery_kw = -adjusted_discharge_kw
+        if adjusted_battery_kw != planned_battery_kw:
+            log_message = (f'discharge_load planned {planned_battery_kw:.2f}kW -> '
+                           f'adjusted {adjusted_battery_kw:.2f}kW '
+                           f'(load {actual_load_kw:.2f}kW)')
+
+    elif planned_action == 'idle':
+        if grid_w < -500:  # Exporting >500W
+            adjusted_battery_kw = min(abs(grid_w / 1000.0), max_battery_kw)
+            log_message = (f'idle -> opportunistic charge {adjusted_battery_kw:.2f}kW '
+                           f'(export {abs(grid_w):.0f}W)')
+        elif grid_w > 500:  # Importing >500W
+            adjusted_battery_kw = -min(abs(grid_w / 1000.0), max_battery_kw)
+            log_message = (f'idle -> opportunistic discharge {abs(adjusted_battery_kw):.2f}kW '
+                           f'(import {grid_w:.0f}W)')
+        else:
+            adjusted_battery_kw = 0.0
+
+    # Clamp to physical limits
+    adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, adjusted_battery_kw))
+
+    return adjusted_battery_kw, log_message

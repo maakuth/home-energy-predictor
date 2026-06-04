@@ -4,7 +4,7 @@ import os
 import sqlite3
 import json
 from push_to_ha import push_accuracy, push_plan
-from utils.battery_utils import push_battery_control, is_battery_available
+from utils.battery_utils import push_battery_control, is_battery_available, compute_load_following_setpoint
 
 class TestPushToHA(unittest.TestCase):
     
@@ -173,6 +173,142 @@ class TestBatteryAvailability(unittest.TestCase):
         mock_get_state.return_value = {'state': 'unavailable'}
         self.assertFalse(is_battery_available())
         mock_get_state.assert_called_once_with('sensor.be_soc')
+
+
+class TestLoadFollowing(unittest.TestCase):
+    def test_charge_solar_limited_by_surplus(self):
+        """charge_solar should be limited to actual solar surplus."""
+        # Planned: charge 5kW from solar
+        # Actual: solar=3kW, load=2kW -> grid = load - solar + battery = -1kW
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=5.0,
+            planned_action='charge_solar',
+            solar_kw=3.0,
+            grid_w=-1000.0,
+            battery_w=0.0,
+            gshp_kw=0.0,
+            leaf_kw=0.0
+        )
+        self.assertAlmostEqual(adjusted, 1.0)
+        self.assertIn('1.00kW', msg)
+
+    def test_charge_solar_no_surplus(self):
+        """charge_solar should drop to 0 when there is no solar surplus."""
+        # Planned: charge 5kW
+        # Actual: solar=2kW, load=3kW -> grid = load - solar + battery = 1kW (import)
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=5.0,
+            planned_action='charge_solar',
+            solar_kw=2.0,
+            grid_w=1000.0,
+            battery_w=0.0
+        )
+        self.assertAlmostEqual(adjusted, 0.0)
+        self.assertIn('0.00kW', msg)
+
+    def test_charge_solar_follows_plan_when_enough_surplus(self):
+        """charge_solar should follow plan when surplus exceeds plan."""
+        # Planned: charge 2kW
+        # Actual: solar=5kW, load=1kW -> grid = load - solar + battery = -4kW (export)
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=2.0,
+            planned_action='charge_solar',
+            solar_kw=5.0,
+            grid_w=-4000.0,
+            battery_w=0.0
+        )
+        self.assertAlmostEqual(adjusted, 2.0)
+        self.assertEqual(msg, '')  # No adjustment needed
+
+    def test_discharge_load_limited_by_actual_load(self):
+        """discharge_load should be limited to actual house load."""
+        # Planned: discharge 5kW
+        # Actual: load=2kW, solar=0, battery already discharging 2kW
+        # grid = load - solar + battery = 2 - 0 + (-2) = 0
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=-5.0,
+            planned_action='discharge_load',
+            solar_kw=0.0,
+            grid_w=0.0,
+            battery_w=-2000.0
+        )
+        self.assertAlmostEqual(adjusted, -2.0)
+        self.assertIn('2.00kW', msg)
+
+    def test_discharge_load_follows_plan_when_load_large(self):
+        """discharge_load should follow plan when actual load exceeds plan."""
+        # Planned: discharge 2kW
+        # Actual: load=5kW, solar=0, battery already discharging 3kW
+        # grid = load - solar + battery = 5 - 0 + (-3) = 2kW (importing)
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=-2.0,
+            planned_action='discharge_load',
+            solar_kw=0.0,
+            grid_w=2000.0,
+            battery_w=-3000.0
+        )
+        self.assertAlmostEqual(adjusted, -2.0)
+        self.assertEqual(msg, '')
+
+    def test_idle_opportunistic_charge_on_export(self):
+        """idle should opportunistically charge when exporting to grid."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            solar_kw=5.0,
+            grid_w=-3000.0,
+            battery_w=0.0
+        )
+        self.assertAlmostEqual(adjusted, 3.0)
+        self.assertIn('opportunistic charge', msg)
+
+    def test_idle_opportunistic_discharge_on_import(self):
+        """idle should opportunistically discharge when importing from grid."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            solar_kw=0.0,
+            grid_w=4000.0,
+            battery_w=0.0
+        )
+        self.assertAlmostEqual(adjusted, -4.0)
+        self.assertIn('opportunistic discharge', msg)
+
+    def test_idle_stays_idle_in_deadband(self):
+        """idle should stay at 0 when grid flow is within deadband."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            solar_kw=2.0,
+            grid_w=-200.0,
+            battery_w=0.0
+        )
+        self.assertAlmostEqual(adjusted, 0.0)
+        self.assertEqual(msg, '')
+
+    def test_charge_mixed_unchanged(self):
+        """charge_mixed should not be adjusted by load following."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=5.0,
+            planned_action='charge_mixed',
+            solar_kw=2.0,
+            grid_w=0.0,
+            battery_w=0.0
+        )
+        self.assertAlmostEqual(adjusted, 5.0)
+        self.assertEqual(msg, '')
+
+    def test_clamped_to_max_battery_kw(self):
+        """Adjusted setpoint should be clamped to max_battery_kw."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            solar_kw=0.0,
+            grid_w=-15000.0,  # 15kW export
+            battery_w=0.0,
+            max_battery_kw=10.0
+        )
+        self.assertAlmostEqual(adjusted, 10.0)
 
 
 if __name__ == '__main__':
