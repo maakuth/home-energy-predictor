@@ -4,7 +4,7 @@ import os
 import sqlite3
 import json
 from push_to_ha import push_accuracy, push_plan
-from utils.battery_utils import push_battery_control
+from utils.battery_utils import push_battery_control, is_battery_available
 
 class TestPushToHA(unittest.TestCase):
     
@@ -144,6 +144,36 @@ class TestPushPlan(unittest.TestCase):
         # battery_power_kw=-3.0 (discharging) → control=3000W (discharge/provide power)
         service_data = battery_control_call[1]['service_data']
         self.assertEqual(int(service_data['value']), 3000)
+
+class TestBatteryAvailability(unittest.TestCase):
+    @patch('utils.battery_utils.get_ha_state')
+    def test_available_when_soc_sensor_online(self, mock_get_state):
+        """Battery should be available when SoC sensor has a valid state."""
+        mock_get_state.return_value = {'state': '26.6'}
+        self.assertTrue(is_battery_available())
+        mock_get_state.assert_called_once_with('sensor.be_soc')
+
+    @patch('utils.battery_utils.get_ha_state')
+    def test_unavailable_when_soc_sensor_unknown(self, mock_get_state):
+        """Battery should be unavailable when SoC sensor is unknown."""
+        mock_get_state.return_value = {'state': 'unknown'}
+        self.assertFalse(is_battery_available())
+        mock_get_state.assert_called_once_with('sensor.be_soc')
+
+    @patch('utils.battery_utils.get_ha_state')
+    def test_unavailable_when_soc_sensor_none(self, mock_get_state):
+        """Battery should be unavailable when SoC sensor returns None."""
+        mock_get_state.return_value = None
+        self.assertFalse(is_battery_available())
+        mock_get_state.assert_called_once_with('sensor.be_soc')
+
+    @patch('utils.battery_utils.get_ha_state')
+    def test_unavailable_when_soc_sensor_unavailable(self, mock_get_state):
+        """Battery should be unavailable when SoC sensor state is 'unavailable'."""
+        mock_get_state.return_value = {'state': 'unavailable'}
+        self.assertFalse(is_battery_available())
+        mock_get_state.assert_called_once_with('sensor.be_soc')
+
 
 if __name__ == '__main__':
     unittest.main()

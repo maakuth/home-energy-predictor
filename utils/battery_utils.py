@@ -17,12 +17,16 @@ load_dotenv(override=True)
 
 def is_battery_available():
     """
-    Check if battery control entity is available in Home Assistant.
+    Check if battery is available in Home Assistant.
+    
+    Uses the battery SoC sensor (sensor.be_soc) as the source of truth,
+    which is more reliable than the Hoymiles control entity that can
+    report unavailable while the battery itself is online.
     
     Returns:
-        bool: True if battery entity exists and is not unavailable, False otherwise
+        bool: True if battery SoC sensor exists and is not unavailable, False otherwise
     """
-    entity_id = 'number.hoymiles_remote_control_hoymiles_battery_power'
+    entity_id = 'sensor.be_soc'
     state = get_ha_state(entity_id)
     
     if state and state.get('state') not in ['unknown', 'unavailable', None]:
