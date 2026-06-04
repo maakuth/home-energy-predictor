@@ -70,7 +70,22 @@ Example crontab for a robust setup:
 ```
 
 ## Configuration
-Set these in `.env` (refer to `README.md` for full list):
+
+### Setting up `.env`
+1. Copy the template to create your local configuration:
+   ```bash
+   cp .env.template .env
+   ```
+2. Edit `.env` with your actual values:
+   - Database credentials (PostgreSQL)
+   - Home Assistant host and token
+   - Electricity pricing and fees
+   - Battery and GSHP parameters
+   - EV charging preferences
+
+**Important**: The `.env` file is **never committed to git** (it's in `.gitignore`). This protects your credentials and local configuration from being overwritten by agent development or CI/CD processes.
+
+### Key Configuration Parameters
 - `BATTERY_CAPACITY_KWH`: Total usable capacity. **Set to `0` to disable battery simulation entirely** — the optimizer will plan as if no battery exists, and `grid_import_kwh`/`grid_export_kwh`/estimated costs will reflect a battery-less home. GSHP and EV optimizations are unaffected (battery dispatch runs downstream of those).
 - `MAIN_FUSE_SIZE_A`: Main fuse rating per phase (default `25`). Used to enforce maximum grid import limit (`3 × fuse × 230V`). Prevents battery grid-charging from overloading the connection when EV or other large loads are already drawing power.
 - `GRID_TRANSFER_EUR_PER_KWH`: Variable transfer costs.
