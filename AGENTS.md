@@ -8,7 +8,8 @@
 - Offer to save your work to git frequently
 - Don't do heredoc hacks or other shenanigans to modify files. If there's something preventing file modification, say so and the user will help.
 - The development likely isn't running on the machine that has connectivity to the HA and psql, so don't bother trying to run it against them 
-- You can get the up to date situation of from the original system by executing pull-from-murrikka.sh
+- You can get the up to date situation of from the original system by executing pull-from-murrikka.sh, though you might already be running at murrikka. Better check the timestamps of hepo.db, etc.
+- There are a lot of tunables in .env.template, documented in ENV_VARIABLES.md. If the user asks for some model behaviour change, see if there's a tunable that could be used to implement it.
 
 ## Model Versioning (IMPORTANT)
 
