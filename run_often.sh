@@ -40,7 +40,7 @@ leaf = get_ha_state('sensor.tasmota_energy_power_3')
 # Parse values
 soc_pct = _get_float(soc)
 battery_w = _get_float(battery_power) or 0.0
-grid_w = _get_float(grid_power) or 0.0
+grid_w = (_get_float(grid_power) or 0.0) * 1000.0  # sensor reports kW, convert to W
 solar_kw = _get_float(solar) or 0.0
 gshp_kw = _get_float(gshp) or 0.0
 leaf_kw = _get_float(leaf) or 0.0
