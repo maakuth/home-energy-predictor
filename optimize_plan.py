@@ -226,6 +226,9 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     chg_p = get_env_float('BATTERY_CHARGE_PERCENTILE', 30.0)
     dis_p = get_env_float('BATTERY_DISCHARGE_PERCENTILE', 70.0)
     
+    # Self-reliance penalty: discourages grid charging when solar surplus is expected
+    self_reliance_penalty = get_env_float('BATTERY_SELF_RELIANCE_PENALTY_EUR_PER_KWH', 0.0)
+    
     # Grid connection limit (3-phase, 230V)
     main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
     max_grid_import_kw = main_fuse_a * 3 * 0.230
@@ -323,7 +326,13 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         existing_grid_import = max(net_load - discharge_to_load + committed, 0.0)
         available_grid_kwh = max(0.0, max_grid_import_kw * interval_hours - existing_grid_import)
 
-        profitable_grid_charge = (best_future_value * round_trip_eff) > current_import
+        # Apply self-reliance penalty: when solar surplus is expected,
+        # increase the effective cost of grid charging to favor waiting for solar.
+        effective_import = current_import
+        if expected_solar_surplus_kwh > 0.0 and self_reliance_penalty > 0.0:
+            effective_import += self_reliance_penalty
+
+        profitable_grid_charge = (best_future_value * round_trip_eff) > effective_import
         is_cheap_hour = current_import <= import_q_low
         
         if discharge_to_load == 0.0 and charge_limit_input_kwh > 0 and not spill_risk:
