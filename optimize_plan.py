@@ -202,7 +202,6 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     reserve_soc_pct = get_env_float('BATTERY_RESERVE_SOC_PCT', min_soc_pct)
     
     # Try to get current House Battery SoC from HA
-    # If not found, use BATTERY_INITIAL_SOC_PCT from .env
     batt_state = get_ha_state('sensor.be_soc')
     initial_soc_pct = get_env_float('BATTERY_INITIAL_SOC_PCT', 50.0)
     if batt_state and batt_state.get('state') not in ['unknown', 'unavailable']:
@@ -222,13 +221,6 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
     allow_export = get_env_bool('BATTERY_ALLOW_EXPORT', True)
     
-    # New: Configurable percentiles for more/less aggressive behavior
-    chg_p = get_env_float('BATTERY_CHARGE_PERCENTILE', 30.0)
-    dis_p = get_env_float('BATTERY_DISCHARGE_PERCENTILE', 70.0)
-    
-    # Self-reliance penalty: discourages grid charging when solar surplus is expected
-    self_reliance_penalty = get_env_float('BATTERY_SELF_RELIANCE_PENALTY_EUR_PER_KWH', 0.0)
-    
     # Grid connection limit (3-phase, 230V)
     main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
     max_grid_import_kw = main_fuse_a * 3 * 0.230
@@ -237,7 +229,6 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
     charge_eff = min(max(charge_eff, 0.01), 1.0)
     discharge_eff = min(max(discharge_eff, 0.01), 1.0)
-    round_trip_eff = charge_eff * discharge_eff
 
     min_soc_kwh = capacity_kwh * max(min_soc_pct, reserve_soc_pct) / 100.0
     max_soc_kwh = capacity_kwh * max(max_soc_pct, 0.0) / 100.0
@@ -248,11 +239,6 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     
     if committed_load_kwh is None:
         committed_load_kwh = np.zeros(horizon)
-
-    # Use configurable percentiles
-    import_q_low = np.percentile(import_prices, chg_p)
-    import_q_high = np.percentile(import_prices, dis_p)
-    export_q80 = np.percentile(export_prices, 80)
 
     battery_plan = []
 
@@ -265,95 +251,72 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         future_export = export_prices[i + 1:] if i + 1 < horizon else np.array([current_export])
         best_future_value = max(float(np.max(future_import)), float(np.max(future_export)) if allow_export else -np.inf)
 
-        # Current room before we plan solar capture
-        soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+        if i + 1 < horizon:
+            min_future_import = float(np.min(future_import))
+        else:
+            min_future_import = current_import
 
-        # Lookahead for solar surplus to avoid grid-charging when solar is coming
-        # We look ahead up to 24 hours or until the end of the horizon
+        # 1. Charge from solar surplus (always first priority)
+        charge_from_solar = 0.0
+        if net_load < 0:
+            solar_surplus = -net_load
+            soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+            charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
+            charge_from_solar = min(solar_surplus, charge_limit_input_kwh)
+            soc_kwh += charge_from_solar * charge_eff
+
+        # 2. Discharge to load (only when current price is at least as good as the best future value)
+        discharge_to_load = 0.0
+        should_discharge = current_import >= best_future_value
+        if net_load > 0 and should_discharge:
+            soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
+            discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
+            discharge_to_load = min(net_load, discharge_limit_output_kwh)
+            soc_kwh -= discharge_to_load / discharge_eff
+
+        # 3. Discharge to export (only at the best export price in the remaining horizon)
+        discharge_to_export = 0.0
+        if (allow_export and charge_from_solar == 0.0 and discharge_to_load == 0.0
+            and net_load <= 0 and current_export >= float(np.max(future_export))):
+            soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
+            discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
+            discharge_to_export = discharge_limit_output_kwh
+            soc_kwh -= discharge_to_export / discharge_eff
+
+        # 4. Grid charge (only when profitable, no cheaper future import, and solar won't fill the battery)
+        charge_from_grid = 0.0
+
+        # Lookahead for expected solar surplus
         lookahead_steps = min(int(24 / interval_hours), horizon - i - 1)
         if lookahead_steps > 0:
             future_net = net_without_battery[i+1 : i+1+lookahead_steps]
             expected_solar_surplus_kwh = np.sum(np.maximum(0, -future_net)) * interval_hours
-            
-            # IMPROVED: Proactively discharge if solar surplus is likely to fill more than 80% of our room.
-            # This ensures we have a safety buffer and clear out expensive grid power early.
-            room_threshold_kwh = (soc_room_kwh / charge_eff) * 0.8
-            expected_solar_export_kwh = max(0.0, expected_solar_surplus_kwh - room_threshold_kwh)
         else:
             expected_solar_surplus_kwh = 0.0
-            expected_solar_export_kwh = 0.0
 
-        charge_from_solar = 0.0
-        charge_from_grid = 0.0
-        discharge_to_load = 0.0
-        discharge_to_export = 0.0
+        remaining_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+        solar_can_fill = expected_solar_surplus_kwh >= (remaining_room_kwh / charge_eff)
 
-        soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
-        charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
-
-        soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
-        discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
-
-        if net_load < 0 and charge_limit_input_kwh > 0:
-            solar_surplus = -net_load
-            charge_from_solar = min(solar_surplus, charge_limit_input_kwh)
-            soc_kwh += charge_from_solar * charge_eff
-            charge_limit_input_kwh -= charge_from_solar
-            soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
-        # 2. Discharge to Load (if price is high OR we need to make room for solar)
-        # Force discharge if we expect to export solar later (Solar-Pressure)
-        is_pressure_discharge = expected_solar_export_kwh > 0.1
-        
-        # We only discharge if the price is high enough, UNLESS we have solar pressure.
-        # But even with solar pressure, it only makes sense if current_import > current_export
-        # (Since exporting later is what we are avoiding).
-        should_discharge = current_import >= import_q_high or (is_pressure_discharge and current_import > current_export)
-
-        if net_load > 0 and discharge_limit_output_kwh > 0 and should_discharge:
-            discharge_to_load = min(net_load, discharge_limit_output_kwh)
-            soc_kwh -= discharge_to_load / discharge_eff
-            discharge_limit_output_kwh -= discharge_to_load
-            soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
-            # Re-calculate room for subsequent charging logic
-            soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+        # Grid capacity calculation
+        committed = float(committed_load_kwh[i]) if i < len(committed_load_kwh) else 0.0
+        existing_grid_import = max(net_load - discharge_to_load + committed, 0.0)
+        available_grid_kwh = max(0.0, max_grid_import_kw * interval_hours - existing_grid_import)
 
         # Forward simulation: would adding grid charge now cause solar spill later?
         spill_risk = _has_spill_risk(soc_kwh, i, horizon, net_without_battery, min_soc_kwh, max_soc_kwh,
                                       charge_eff, discharge_eff, max_charge_kw, max_discharge_kw, interval_hours)
 
-        # Grid capacity calculation: how much can we still draw without blowing the main fuse?
-        committed = float(committed_load_kwh[i]) if i < len(committed_load_kwh) else 0.0
-        existing_grid_import = max(net_load - discharge_to_load + committed, 0.0)
-        available_grid_kwh = max(0.0, max_grid_import_kw * interval_hours - existing_grid_import)
+        profitable_grid_charge = (best_future_value * charge_eff) > current_import
+        is_cheapest_window = current_import <= min_future_import + 1e-9
 
-        # Apply self-reliance penalty: when solar surplus is expected,
-        # increase the effective cost of grid charging to favor waiting for solar.
-        effective_import = current_import
-        if expected_solar_surplus_kwh > 0.0 and self_reliance_penalty > 0.0:
-            effective_import += self_reliance_penalty
-
-        profitable_grid_charge = (best_future_value * round_trip_eff) > effective_import
-        is_cheap_hour = current_import <= import_q_low
-        
-        if discharge_to_load == 0.0 and charge_limit_input_kwh > 0 and not spill_risk:
-            if profitable_grid_charge and is_cheap_hour:
-                max_grid_charge_kwh = min(charge_limit_input_kwh, available_grid_kwh)
-                if max_grid_charge_kwh > 1e-4:
-                    charge_from_grid = max_grid_charge_kwh
-                    soc_kwh += charge_from_grid * charge_eff
-                    soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
-
-        if (
-            allow_export
-            and charge_from_solar == 0.0
-            and charge_from_grid == 0.0
-            and discharge_to_load == 0.0
-            and discharge_limit_output_kwh > 0
-            and current_export >= export_q80
-            and current_export >= float(np.max(future_export))
-        ):
-            discharge_to_export = discharge_limit_output_kwh
-            soc_kwh -= discharge_to_export / discharge_eff
+        if (not solar_can_fill and profitable_grid_charge and is_cheapest_window
+            and charge_from_solar == 0.0 and discharge_to_load == 0.0 and not spill_risk):
+            soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
+            charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
+            max_grid_charge_kwh = min(charge_limit_input_kwh, available_grid_kwh)
+            if max_grid_charge_kwh > 1e-4:
+                charge_from_grid = max_grid_charge_kwh
+                soc_kwh += charge_from_grid * charge_eff
 
         soc_kwh = min(max(soc_kwh, min_soc_kwh), max_soc_kwh)
 

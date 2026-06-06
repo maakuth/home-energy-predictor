@@ -47,6 +47,12 @@ All monetary values are in **EUR per kWh** unless noted otherwise. These are con
 
 Consumed by `plan_battery_dispatch()` in `optimize_plan.py`.
 
+The dispatch logic uses a **profit-only** strategy:
+1. **Solar surplus is always captured first** (`charge_solar`).
+2. **Discharge to load** only happens when the current import price is at least as high as the best future price (`discharge_load`). There is no artificial pressure to hit a target SoC.
+3. **Discharge to export** only happens at the best export price in the remaining horizon (`discharge_export`).
+4. **Grid charging** only happens when there is a profitable price delta to exploit, the current interval is the cheapest before that profitable discharge, and expected PV surplus over the next 24 h is not enough to fill the remaining battery room.
+
 | Variable | Description | Example | Notes |
 |----------|-------------|---------|-------|
 | `BATTERY_CAPACITY_KWH` | Total usable battery capacity. | `50.0` | **Set to `0` to disable battery simulation entirely.** When `0`, the optimizer outputs an all-`idle` battery plan. |
@@ -59,9 +65,6 @@ Consumed by `plan_battery_dispatch()` in `optimize_plan.py`.
 | `BATTERY_CHARGE_EFFICIENCY` | Charge conversion efficiency. | `0.95` | Clamped to `[0.01, 1.0]` in code. |
 | `BATTERY_DISCHARGE_EFFICIENCY` | Discharge conversion efficiency. | `0.95` | Clamped to `[0.01, 1.0]` in code. |
 | `BATTERY_ALLOW_EXPORT` | Whether stored energy may be sold back to the grid. | `true` | When `false`, `discharge_to_export` is blocked and only self-consumption discharge is allowed. |
-| `BATTERY_CHARGE_PERCENTILE` | Spot-price percentile threshold for "cheap" grid charging. | `25` | If the current import price is `<=` the `N`th percentile of all import prices in the horizon, the hour is considered cheap enough for grid charging. Code default is `30.0`. |
-| `BATTERY_DISCHARGE_PERCENTILE` | Spot-price percentile threshold for discharging to load. | `60` | If the current import price is `>=` the `N`th percentile, the battery is allowed to discharge to cover house load (unless blocked by other constraints). Code default is `70.0`. |
-| `BATTERY_SELF_RELIANCE_PENALTY_EUR_PER_KWH` | Artificial penalty added to the effective import price when a solar surplus is expected in the next 24 h. | `0.0` | `0.0` = pure cost optimization. Higher values discourage grid charging in favour of waiting for free solar. |
 
 ---
 
