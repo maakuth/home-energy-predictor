@@ -338,9 +338,11 @@ class OptimizePlanTests(unittest.TestCase):
         for i in range(24):
             self.assertAlmostEqual(plan[i]["charge_from_grid_kwh"], 0.0, places=5, msg=f"Hour {i} should not grid charge")
         
-        # Evening hours: should discharge to load (covered by solar charging during day)
+        # Evening hours: should discharge while energy is available.
+        # With export enabled, remaining inverter capacity may also be exported when
+        # current export is the best remaining price. Once battery hits min_soc it goes idle.
         for i in range(19, 24):
-            self.assertEqual(plan[i]["battery_action"], "discharge_load", f"Hour {i} should discharge to load")
+            self.assertIn(plan[i]["battery_action"], ("discharge_load", "discharge_mixed", "idle"), f"Hour {i} unexpected action")
 
     def test_grid_capacity_limits_battery_charge(self):
         with patched_env(
@@ -373,9 +375,10 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertEqual(plan[0]["battery_action"], "charge_grid")
         self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 4.25, places=2)
         
-        # Hour 1: should discharge to cover load
-        self.assertEqual(plan[1]["battery_action"], "discharge_load")
+        # Hour 1: should discharge to cover load and export the remaining capacity
+        self.assertEqual(plan[1]["battery_action"], "discharge_mixed")
         self.assertAlmostEqual(plan[1]["discharge_to_load_kwh"], 2.0, places=2)
+        self.assertGreater(plan[1]["discharge_to_export_kwh"], 0.0)
 
     def test_grid_charge_allowed_when_profitable_and_pv_insufficient(self):
         """Grid charging is allowed when profitable and future solar surplus won't fill the battery."""
@@ -493,6 +496,101 @@ class OptimizePlanTests(unittest.TestCase):
         # current_import == best_future_value, so discharging is allowed.
         self.assertEqual(plan[0]["battery_action"], "discharge_load")
         self.assertAlmostEqual(plan[0]["discharge_to_load_kwh"], 4.0)
+
+    def test_discharge_mixed_when_import_and_export_both_high(self):
+        """When import is high and current export is the best remaining,
+        battery should cover load AND export remaining inverter capacity."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "50",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "80",
+                "BATTERY_MAX_CHARGE_KW": "10",
+                "BATTERY_MAX_DISCHARGE_KW": "10",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+            }
+        ):
+            # High load, high prices now. Cheap prices later.
+            predictions = np.array([1.3, 1.3, 1.3])
+            solar = np.array([0.0, 0.0, 0.0])
+            import_prices = np.array([0.12, 0.06, 0.06])
+            export_prices = np.array([0.12, 0.06, 0.06])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: import 0.12 >= best_future 0.06 → discharge to load 1.3 kWh
+        # current_export 0.12 >= max_future_export 0.06 → export remaining capacity
+        self.assertEqual(plan[0]["battery_action"], "discharge_mixed")
+        self.assertAlmostEqual(plan[0]["discharge_to_load_kwh"], 1.3)
+        self.assertAlmostEqual(plan[0]["discharge_to_export_kwh"], 8.7)  # 10 - 1.3
+        self.assertAlmostEqual(plan[0]["battery_power_kw"], -10.0)
+
+    def test_export_arbitrage_when_future_import_cheaper(self):
+        """Export now at high export price when future import is cheap enough
+        to make export-now + import-later profitable."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "50",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "80",
+                "BATTERY_MAX_CHARGE_KW": "10",
+                "BATTERY_MAX_DISCHARGE_KW": "10",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+            }
+        ):
+            # No load. High export now (0.12), cheap import later (0.05).
+            # Not the best future export (0.13 tomorrow), but arbitrage is profitable.
+            predictions = np.array([0.0, 0.0, 0.0])
+            solar = np.array([0.0, 0.0, 0.0])
+            import_prices = np.array([0.12, 0.05, 0.05])
+            export_prices = np.array([0.12, 0.13, 0.10])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: current_export 0.12 is NOT best (0.13 later), but
+        # 0.12 > min_future_import 0.05 / 1.0 → arbitrage profitable
+        self.assertEqual(plan[0]["battery_action"], "discharge_export")
+        self.assertAlmostEqual(plan[0]["discharge_to_export_kwh"], 10.0)
+        self.assertAlmostEqual(plan[0]["battery_power_kw"], -10.0)
+
+    def test_no_export_when_arbitrage_not_profitable(self):
+        """If future import is not cheap enough, don't export just because
+        current export is decent."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "50",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "80",
+                "BATTERY_MAX_CHARGE_KW": "10",
+                "BATTERY_MAX_DISCHARGE_KW": "10",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+            }
+        ):
+            # Export now 0.08. Future export is better (0.09) and future import
+            # is not cheap enough (0.10) to make arbitrage profitable.
+            predictions = np.array([0.0, 0.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.10, 0.10])
+            export_prices = np.array([0.08, 0.09])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: current_export 0.08 is NOT best (0.09 later).
+        # 0.08 > 0.10 / 1.0 is False → no arbitrage. No profitable grid charge either.
+        self.assertEqual(plan[0]["battery_action"], "idle")
+        self.assertAlmostEqual(plan[0]["discharge_to_export_kwh"], 0.0)
 
 
 class GSHPPlanTests(unittest.TestCase):

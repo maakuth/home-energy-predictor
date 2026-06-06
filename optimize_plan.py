@@ -274,14 +274,21 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             discharge_to_load = min(net_load, discharge_limit_output_kwh)
             soc_kwh -= discharge_to_load / discharge_eff
 
-        # 3. Discharge to export (only at the best export price in the remaining horizon)
+        # 3. Discharge to export (when export price is best in horizon, or when
+        # export-now + import-later arbitrage is profitable)
         discharge_to_export = 0.0
-        if (allow_export and charge_from_solar == 0.0 and discharge_to_load == 0.0
-            and net_load <= 0 and current_export >= float(np.max(future_export))):
+        if allow_export and charge_from_solar == 0.0:
             soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
-            discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
-            discharge_to_export = discharge_limit_output_kwh
-            soc_kwh -= discharge_to_export / discharge_eff
+            total_discharge_limit = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
+            remaining_capacity = max(0.0, total_discharge_limit - discharge_to_load)
+
+            is_best_export = current_export >= float(np.max(future_export))
+            round_trip_eff = charge_eff * discharge_eff
+            is_export_arbitrage = current_export > (min_future_import / round_trip_eff)
+
+            if remaining_capacity > 0 and (is_best_export or is_export_arbitrage):
+                discharge_to_export = remaining_capacity
+                soc_kwh -= discharge_to_export / discharge_eff
 
         # 4. Grid charge (only when profitable, no cheaper future import, and solar won't fill the battery)
         charge_from_grid = 0.0
@@ -299,7 +306,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
         # Grid capacity calculation
         committed = float(committed_load_kwh[i]) if i < len(committed_load_kwh) else 0.0
-        existing_grid_import = max(net_load - discharge_to_load + committed, 0.0)
+        existing_grid_import = max(net_load - discharge_to_load - discharge_to_export + committed, 0.0)
         available_grid_kwh = max(0.0, max_grid_import_kw * interval_hours - existing_grid_import)
 
         # Forward simulation: would adding grid charge now cause solar spill later?
@@ -310,7 +317,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         is_cheapest_window = current_import <= min_future_import + 1e-9
 
         if (not solar_can_fill and profitable_grid_charge and is_cheapest_window
-            and charge_from_solar == 0.0 and discharge_to_load == 0.0 and not spill_risk):
+            and charge_from_solar == 0.0 and discharge_to_load == 0.0
+            and discharge_to_export == 0.0 and not spill_risk):
             soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
             charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
             max_grid_charge_kwh = min(charge_limit_input_kwh, available_grid_kwh)
