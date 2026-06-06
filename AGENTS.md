@@ -4,12 +4,16 @@
 - This is a python app that tries to predict home energy usage by an ML model
 - Implement changes using test-driven development: first add failing test, do changes, observe test passing
 - Use python virtualenv to run tests: .venv/bin/python3 -m pytest
-- DON'T do any changes to database or home assistant without explicit permission. The machine running agent probably doesn't even have access to these.
 - Offer to save your work to git frequently
 - Don't do heredoc hacks or other shenanigans to modify files. If there's something preventing file modification, say so and the user will help.
-- The development likely isn't running on the machine that has connectivity to the HA and psql, so don't bother trying to run it against them 
-- You can get the up to date situation of from the original system by executing pull-from-murrikka.sh, though you might already be running at murrikka. Better check the timestamps of hepo.db, etc.
 - There are a lot of tunables in .env.template, documented in ENV_VARIABLES.md. If the user asks for some model behaviour change, see if there's a tunable that could be used to implement it.
+
+## The environment
+- DON'T do any changes to database or home assistant without explicit permission. The machine running agent probably doesn't even have access to these.
+- MAKE SURE new tests don't interfere with existing data, in case development happens in the same working directory with the production
+- The development likely isn't running on the machine that has connectivity to the HA and psql, so don't bother trying to run it against them
+- You can get the up to date situation of from the original system by executing pull-from-murrikka.sh, though you might already be running at murrikka. Better check the timestamps of hepo.db, etc.
+
 
 ## Model Versioning (IMPORTANT)
 
@@ -100,3 +104,11 @@ ORDER BY version DESC;
   - If `bias_kw` is consistently positive, the optimizer is being too conservative with battery storage.
   - If `planned_spread` is decreasing over time, the discharge thresholds in `.env` may need adaptive adjustment based on market volatility.
   - Use model versioning to identify which changes actually improved performance
+
+## Running tests
+$ venv/bin/python3 -m pytest
+
+Normally we want to go fast, the only slow ones are SARIMA tests. If you didn't touch SARIMA stuff, you don't need to run those every time.
+Run them before commit though.
+
+$ venv/bin/python -m pytest -k 'not sarima'
