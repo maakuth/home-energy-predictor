@@ -12,9 +12,16 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps, interv
 
     # Handle if raw_today is a list of floats (like in your nordpool_total.yaml 'today' attribute)
     if all_raw and not isinstance(all_raw[0], dict):
-        # We assume these are hourly prices starting from today at 00:00
+        # Infer spacing from the list length.
+        # 96 values -> 15-min spacing, 48 -> 30-min, 24 -> hourly, etc.
+        # Partial lists (< 24 values) fall back to hourly as before.
+        num_values = len(all_raw)
+        if num_values >= 24:
+            inferred_spacing_minutes = max(1, int(round(1440.0 / num_values)))
+        else:
+            inferred_spacing_minutes = 60
         start_date = pd.to_datetime(datetime.now().date(), utc=True)
-        all_raw = [{"start": start_date + timedelta(hours=i), "value": v} for i, v in enumerate(all_raw)]
+        all_raw = [{"start": start_date + timedelta(minutes=i * inferred_spacing_minutes), "value": v} for i, v in enumerate(all_raw)]
 
     df_prices = pd.DataFrame(all_raw)
     if "start" not in df_prices.columns or "value" not in df_prices.columns:

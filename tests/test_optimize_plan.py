@@ -181,6 +181,26 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertEqual(aligned[0], 0.10)
         self.assertEqual(aligned[1], 0.20)
 
+    def test_align_interval_prices_handles_15min_float_list(self):
+        # List of floats with 15-minute spacing (96 values per day)
+        raw_today = [0.10] * 4 + [0.20] * 4 + [0.30] * 88  # 96 values total
+        now_date = datetime.now().date()
+        prediction_timestamps = [
+            pd.to_datetime(now_date, utc=True) + timedelta(minutes=0),
+            pd.to_datetime(now_date, utc=True) + timedelta(minutes=15),
+            pd.to_datetime(now_date, utc=True) + timedelta(minutes=30),
+            pd.to_datetime(now_date, utc=True) + timedelta(minutes=45),
+            pd.to_datetime(now_date, utc=True) + timedelta(minutes=60),
+        ]
+
+        aligned, is_fallback = align_interval_prices(raw_today, [], prediction_timestamps, interval_minutes=15)
+        self.assertEqual(len(aligned), 5)
+        # First hour (0-45 min) should all be 0.10
+        for i in range(4):
+            self.assertEqual(aligned[i], 0.10, f"index {i} should be 0.10")
+        # 60 min should be 0.20
+        self.assertEqual(aligned[4], 0.20)
+
     def test_align_interval_prices_24h_fallback(self):
         # Data for today 08:00
         raw_today = [
