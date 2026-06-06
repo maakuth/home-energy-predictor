@@ -5,13 +5,13 @@ import pickle
 import fcntl
 import argparse
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from sarimax_predictor import load_historical_data
+from sarimax_predictor import load_historical_data, BASELOAD_MAX_KW
 
 # SARIMA Training Module: train_sarima.py
 # Runs periodically to fit the SARIMA model on historical data.
 # Default: 14 days (for frequent runs), but 30 days recommended for weekly runs.
 
-def train_sarima(days=14):
+def train_sarima(days=14, params_path=None):
     print(f"Loading last {days} days for SARIMA training...")
     ts_data = load_historical_data(last_n_days=days)
     
@@ -19,7 +19,9 @@ def train_sarima(days=14):
         print("❌ Not enough data for SARIMA training.")
         return
 
-    params_path = 'sarima_model_params.pkl'
+    # Support environment variable override for testing
+    if params_path is None:
+        params_path = os.getenv('TEST_SARIMA_PARAMS', 'sarima_model_params.pkl')
     start_params = None
     if os.path.exists(params_path):
         try:
@@ -46,6 +48,17 @@ def train_sarima(days=14):
         
         # Use warm start if available
         results = model.fit(start_params=start_params, disp=False)
+        
+        # Validate: do a quick forecast to ensure the model isn't producing insane values
+        forecast = results.get_forecast(steps=10)
+        forecast_mean = forecast.predicted_mean
+        max_mean = float(forecast_mean.max())
+        min_mean = float(forecast_mean.min())
+        
+        if min_mean < 0 or max_mean > BASELOAD_MAX_KW:
+            print(f"⚠️ SARIMA model validation failed: forecast mean range [{min_mean:.2f}, {max_mean:.2f}] kW exceeds physical limits [0, {BASELOAD_MAX_KW}] kW.")
+            print(f"⚠️ Keeping existing params. Not overwriting {params_path}.")
+            return
         
         # Manually save ONLY the parameters and specification to keep file size tiny
         model_data = {

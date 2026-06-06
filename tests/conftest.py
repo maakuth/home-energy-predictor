@@ -32,6 +32,7 @@ def isolated_test_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TEST_PREDICTIONS_FILE", str(test_dir / "future_predictions.json"))
     monkeypatch.setenv("TEST_PLAN_FILE", str(test_dir / "optimization_plan.json"))
     monkeypatch.setenv("TEST_SARIMA_FILE", str(test_dir / "sarimax_predictions.json"))
+    monkeypatch.setenv("TEST_SARIMA_PARAMS", str(test_dir / "sarima_model_params.pkl"))
     
     # Also set for backward compatibility with code that might check these
     monkeypatch.setenv("DB_PATH", str(test_dir / "test_hepo.db"))
@@ -43,6 +44,7 @@ def isolated_test_env(monkeypatch, tmp_path):
         "predictions_file": str(test_dir / "future_predictions.json"),
         "plan_file": str(test_dir / "optimization_plan.json"),
         "sarima_file": str(test_dir / "sarimax_predictions.json"),
+        "sarima_params": str(test_dir / "sarima_model_params.pkl"),
     }
     
     # Cleanup happens automatically when tmp_path is garbage collected

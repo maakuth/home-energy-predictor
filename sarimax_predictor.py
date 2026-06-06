@@ -12,6 +12,9 @@ from utils.sqlite_utils import get_db_connection, get_db_path
 # SARIMA Prediction Module: sarimax_predictor.py
 # Updated for fast frequent execution: loads pre-trained parameters and forecasts.
 
+# Physical sanity ceiling for home baseload (kW), excluding GSHP and EV
+BASELOAD_MAX_KW = 20.0
+
 def load_historical_data(file_path='processed_data.csv', target_col='baseload_power', last_n_days=14):
     """
     Loads historical baseload data for prediction anchoring.
@@ -40,28 +43,45 @@ def load_historical_data(file_path='processed_data.csv', target_col='baseload_po
         print(f"Error loading historical data: {e}")
         return None
 
-def _get_safe_forecast(model, forecast_steps, start_params=None, max_ci_upper=100):
+def _get_safe_forecast(model, forecast_steps, start_params=None, max_ci_upper=100, max_mean_upper=BASELOAD_MAX_KW):
     """
     Fit SARIMA model and return forecast with reasonable confidence intervals.
     
     If start_params are provided, tries a warm-start fit first.
-    If the resulting CIs explode (indicating numerical instability), falls back
+    If the resulting CIs or mean explode (indicating numerical instability), falls back
     to a clean fit without warm start.
+    If the clean fit also explodes, returns None so the caller can use a safe fallback.
     """
+    def _is_reasonable(forecast):
+        ci = forecast.conf_int(alpha=0.05)
+        max_upper = ci.iloc[:, 1].max()
+        max_mean = forecast.predicted_mean.max()
+        return max_upper <= max_ci_upper and max_mean <= max_mean_upper
+
     if start_params is not None:
         try:
             results = model.fit(start_params=start_params, disp=False)
             forecast = results.get_forecast(steps=forecast_steps)
-            ci = forecast.conf_int(alpha=0.05)
-            max_upper = ci.iloc[:, 1].max()
-            if max_upper <= max_ci_upper:
+            if _is_reasonable(forecast):
                 return forecast
-            print(f"⚠️ SARIMA warm-start CIs exploded (max upper={max_upper:.1f}), refitting without warm start...")
+            max_upper = forecast.conf_int(alpha=0.05).iloc[:, 1].max()
+            max_mean = forecast.predicted_mean.max()
+            print(f"⚠️ SARIMA warm-start CIs/mean exploded (max upper={max_upper:.1f}, max mean={max_mean:.1f}), refitting without warm start...")
         except Exception as e:
             print(f"⚠️ SARIMA warm-start fit failed: {e}, refitting without warm start...")
     
-    results = model.fit(disp=False)
-    return results.get_forecast(steps=forecast_steps)
+    try:
+        results = model.fit(disp=False)
+        forecast = results.get_forecast(steps=forecast_steps)
+        if _is_reasonable(forecast):
+            return forecast
+        max_upper = forecast.conf_int(alpha=0.05).iloc[:, 1].max()
+        max_mean = forecast.predicted_mean.max()
+        print(f"⚠️ SARIMA fallback fit also exploded (max upper={max_upper:.1f}, max mean={max_mean:.1f}). Using safe fallback.")
+    except Exception as e:
+        print(f"⚠️ SARIMA fallback fit failed: {e}. Using safe fallback.")
+    
+    return None
 
 
 def _clamp_ci(val, low, high, historical_std=None):
@@ -70,8 +90,13 @@ def _clamp_ci(val, low, high, historical_std=None):
         max_reasonable = val + 3 * historical_std + 5
     else:
         max_reasonable = max(50.0, val * 5)
+    # Absolute sanity ceiling for home baseload
+    max_reasonable = min(max_reasonable, BASELOAD_MAX_KW)
     upper = min(float(high), max_reasonable)
     lower = max(float(low), 0.0)
+    # Ensure upper >= lower and upper >= val
+    upper = max(upper, lower, float(val))
+    lower = min(lower, upper, float(val))
     return lower, upper
 
 
@@ -108,10 +133,22 @@ def predict_sarimax(ts_data, forecast_steps=96, params_path='sarima_model_params
         )
         forecast = _get_safe_forecast(model, forecast_steps)
     
-    forecast_mean = forecast.predicted_mean
-    forecast_ci = forecast.conf_int(alpha=0.05)
+    if forecast is None:
+        # Safe fallback: flat forecast at historical mean
+        historical_mean = float(ts_data.mean()) if len(ts_data) > 0 else 0.0
+        last_ts = ts_data.index[-1] if len(ts_data) > 0 else pd.Timestamp.now(tz='UTC')
+        ts = pd.date_range(start=last_ts + pd.Timedelta(minutes=15), periods=forecast_steps, freq='15min', tz='UTC')
+        forecast_mean = pd.Series([historical_mean] * forecast_steps, index=ts)
+        forecast_ci = pd.DataFrame({
+            'lower baseload_power': [max(0.0, historical_mean * 0.5)] * forecast_steps,
+            'upper baseload_power': [min(BASELOAD_MAX_KW, historical_mean * 1.5 + 5)] * forecast_steps
+        }, index=ts)
+    else:
+        forecast_mean = forecast.predicted_mean
+        forecast_ci = forecast.conf_int(alpha=0.05)
     
-    forecast_mean = np.clip(forecast_mean, 0, None)
+    # Final safety caps: baseload must be >= 0 and <= physical ceiling
+    forecast_mean = np.clip(forecast_mean, 0, BASELOAD_MAX_KW)
     
     return forecast_mean, forecast_ci
 
@@ -197,7 +234,8 @@ def archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=None)
         print(f"⚠️ Error archiving SARIMA to SQLite: {e}")
 
 def main():
-    params_path = 'sarima_model_params.pkl'
+    # Support environment variable override for testing
+    params_path = os.getenv('TEST_SARIMA_PARAMS', 'sarima_model_params.pkl')
 
     if not os.path.exists(params_path):
         print(f"⚠️ No SARIMA parameters found at {params_path}. Please run train_sarima.py first.")
@@ -230,11 +268,22 @@ def main():
     forecast_steps = 96 # 24 hours
     print(f"Forecasting {forecast_steps} steps ahead using SARIMA...")
     forecast = _get_safe_forecast(model, forecast_steps, start_params=model_data['params'])
-    forecast_mean = forecast.predicted_mean
-    forecast_ci = forecast.conf_int(alpha=0.05)
+    if forecast is None:
+        # Safe fallback: flat forecast at historical mean
+        historical_mean = float(ts_data.mean()) if len(ts_data) > 0 else 0.0
+        last_ts = ts_data.index[-1] if len(ts_data) > 0 else pd.Timestamp.now(tz='UTC')
+        ts = pd.date_range(start=last_ts + pd.Timedelta(minutes=15), periods=forecast_steps, freq='15min', tz='UTC')
+        forecast_mean = pd.Series([historical_mean] * forecast_steps, index=ts)
+        forecast_ci = pd.DataFrame({
+            'lower baseload_power': [max(0.0, historical_mean * 0.5)] * forecast_steps,
+            'upper baseload_power': [min(BASELOAD_MAX_KW, historical_mean * 1.5 + 5)] * forecast_steps
+        }, index=ts)
+    else:
+        forecast_mean = forecast.predicted_mean
+        forecast_ci = forecast.conf_int(alpha=0.05)
     
-    # Ensure no negative predictions
-    forecast_mean = np.clip(forecast_mean, 0, None)
+    # Final safety caps: baseload must be >= 0 and <= physical ceiling
+    forecast_mean = np.clip(forecast_mean, 0, BASELOAD_MAX_KW)
     
     # 5. Save & Archive
     save_benchmark_results(forecast_mean, forecast_ci, historical_std=historical_std)
