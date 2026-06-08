@@ -158,53 +158,58 @@ def _compute_opportunity_cost(sim_soc, start_idx, horizon, net_without_battery,
                               import_prices, export_prices, allow_export,
                               min_soc_kwh, max_soc_kwh,
                               charge_eff, discharge_eff,
-                              max_charge_kw, max_discharge_kw, interval_hours):
-    """Forward-simulate battery greedily from start_idx and compute the mean
-    value (EUR per stored kWh) of future discharges.
+                              max_charge_kw, max_discharge_kw, interval_hours,
+                              max_lookahead_hours=8.0):
+    """Compute the marginal value (EUR per output kWh) of keeping stored energy.
 
-    Returns 0.0 if the battery never discharges in the simulation,
-    which signals the caller to fall back to existing logic.
+    Looks at future intervals with net load within the lookahead window,
+    computes the maximum discharge value at each, sorts by value, and returns
+    the value of the marginal opportunity that would be lost if we had less
+    energy.
+
+    The lookahead window is capped to avoid far-future cheap intervals
+    (where forecasts are less reliable) from inappropriately lowering the
+    threshold and encouraging early, low-profit discharge.
+
+    Returns 0.0 if there are no future discharge opportunities.
     """
-    total_revenue = 0.0
-    total_discharged_kwh = 0.0
-    soc = sim_soc
-
-    for j in range(start_idx, horizon):
-        net_j = float(net_without_battery[j])
-
-        # 1. Charge from solar surplus
-        if net_j < 0:
-            solar_surplus = -net_j
-            room = max(0.0, max_soc_kwh - soc)
-            charge_limit = min(max_charge_kw * interval_hours, room / charge_eff)
-            charge = min(solar_surplus, charge_limit)
-            soc += charge * charge_eff
-
-        # 2. Discharge to load
-        if net_j > 0:
-            soc_available = max(0.0, soc - min_soc_kwh)
-            discharge_limit = min(max_discharge_kw * interval_hours, soc_available * discharge_eff)
-            discharge_to_load = min(net_j, discharge_limit)
-            if discharge_to_load > 0:
-                revenue = discharge_to_load * float(import_prices[j])
-                total_revenue += revenue
-                total_discharged_kwh += discharge_to_load
-                soc -= discharge_to_load / discharge_eff
-
-        # 3. Discharge to export (remaining inverter capacity)
-        if allow_export and net_j >= 0:
-            soc_available = max(0.0, soc - min_soc_kwh)
-            remaining_limit = min(max_discharge_kw * interval_hours, soc_available * discharge_eff)
-            discharge_to_export = max(0.0, remaining_limit)
-            if discharge_to_export > 0:
-                revenue = discharge_to_export * float(export_prices[j])
-                total_revenue += revenue
-                total_discharged_kwh += discharge_to_export
-                soc -= discharge_to_export / discharge_eff
-
-    if total_discharged_kwh < 1e-9:
+    total_available_output_kwh = max(0.0, (sim_soc - min_soc_kwh) * discharge_eff)
+    if total_available_output_kwh < 1e-9:
         return 0.0
-    return total_revenue / total_discharged_kwh
+
+    max_lookahead_intervals = int(max_lookahead_hours / interval_hours)
+    end_idx = min(start_idx + max_lookahead_intervals, horizon)
+
+    opportunities = []
+
+    for j in range(start_idx, end_idx):
+        net_j = float(net_without_battery[j])
+        if net_j <= 0:
+            # Solar surplus: stored energy would displace free solar charging
+            continue
+
+        max_total_discharge = max_discharge_kw * interval_hours
+        max_load_discharge = min(net_j, max_total_discharge)
+        if max_load_discharge > 0:
+            opportunities.append((float(import_prices[j]), max_load_discharge))
+
+        if allow_export:
+            remaining_capacity = max(0.0, max_total_discharge - max_load_discharge)
+            if remaining_capacity > 0:
+                opportunities.append((float(export_prices[j]), remaining_capacity))
+
+    if not opportunities:
+        return 0.0
+
+    opportunities.sort(key=lambda x: x[0], reverse=True)
+
+    remaining = total_available_output_kwh
+    for value, kwh in opportunities:
+        if remaining <= kwh + 1e-9:
+            return value
+        remaining -= kwh
+
+    return 0.0
 
 
 def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
@@ -356,7 +361,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             is_best_export = current_export >= float(np.max(future_export))
             round_trip_eff = charge_eff * discharge_eff
             if opportunity_cost > 0.0:
-                is_export_arbitrage = (current_export * discharge_eff) >= opportunity_cost
+                is_export_arbitrage = current_export >= opportunity_cost
             else:
                 is_export_arbitrage = current_export > (min_future_import / round_trip_eff)
 
