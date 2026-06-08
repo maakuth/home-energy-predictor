@@ -612,6 +612,51 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertEqual(plan[0]["battery_action"], "idle")
         self.assertAlmostEqual(plan[0]["discharge_to_export_kwh"], 0.0)
 
+    def test_battery_preserves_capacity_for_expensive_night(self):
+        """Battery should not dump energy at cheap evening prices when
+        expensive night hours are ahead."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "90",
+                "BATTERY_MAX_CHARGE_KW": "10",
+                "BATTERY_MAX_DISCHARGE_KW": "10",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+            }
+        ):
+            # 8 x 15-min intervals. Constant 1.0 kWh load per interval, no solar.
+            # Prices ramp up to a peak, then fall.
+            predictions = np.array([1.0] * 8)
+            solar = np.array([0.0] * 8)
+            import_prices = np.array([0.13, 0.15, 0.18, 0.22, 0.25, 0.24, 0.20, 0.10])
+            export_prices = np.array([0.13, 0.15, 0.18, 0.22, 0.25, 0.24, 0.20, 0.10])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "15"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # The first four intervals (0.13-0.22) are cheap compared to the mean
+        # value of keeping energy for the expensive night peak (0.24-0.25).
+        # The battery should stay idle and preserve its full SOC.
+        for i in range(4):
+            self.assertEqual(plan[i]["battery_action"], "idle",
+                             f"Interval {i} (price={import_prices[i]}) should not discharge")
+            self.assertAlmostEqual(plan[i]["discharge_to_export_kwh"], 0.0, places=5,
+                                   msg=f"Interval {i} should not export")
+            self.assertAlmostEqual(plan[i]["discharge_to_load_kwh"], 0.0, places=5,
+                                   msg=f"Interval {i} should not discharge to load")
+
+        # At the peak interval (0.25) the battery should discharge.
+        self.assertIn(plan[4]["battery_action"], ("discharge_mixed", "discharge_load", "discharge_export"))
+
+        # Because it stayed idle during the cheap ramp-up, SOC just before the
+        # peak should still be high (initial 9.0 kWh, almost untouched).
+        self.assertGreaterEqual(plan[3]["soc_kwh"], 8.0,
+                                "SOC should be fully preserved for the peak price interval")
+
 
 class GSHPPlanTests(unittest.TestCase):
     def test_gshp_starts_at_min_temp(self):
@@ -870,6 +915,97 @@ class GSHPPlanTests(unittest.TestCase):
         # After 1 hour (4 intervals), should cool by at least 1.0C
         # (Real data shows ~1.7C/hour; model should be in that ballpark)
         self.assertLess(plan[3]["gshp_temp_sim"], 44.0)
+
+
+    @patch('optimize_plan.get_ha_state')
+    def test_ha_allow_export_on_overrides_env_false(self, mock_ha):
+        # HA switch ON should allow export even when env says false
+        def ha_side_effect(entity_id):
+            if entity_id == 'input_boolean.battery_allow_export':
+                return {"state": "on"}
+            return None
+        mock_ha.side_effect = ha_side_effect
+
+        with patched_env({
+            "BATTERY_CAPACITY_KWH": "40",
+            "BATTERY_MIN_SOC_PCT": "10",
+            "BATTERY_MAX_SOC_PCT": "90",
+            "BATTERY_INITIAL_SOC_PCT": "80",
+            "BATTERY_MAX_CHARGE_KW": "10",
+            "BATTERY_MAX_DISCHARGE_KW": "10",
+            "BATTERY_CHARGE_EFFICIENCY": "1.0",
+            "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+            "BATTERY_ALLOW_EXPORT": "false",
+            "PLAN_INTERVAL_MINUTES": "60",
+        }):
+            # High export price, should discharge to export if allowed
+            predictions = np.array([1.0, 1.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.10, 0.10])
+            export_prices = np.array([0.50, 0.50])
+            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # With 80% SOC and high export prices, we should see discharge_export
+        actions = [p["battery_action"] for p in plan]
+        self.assertIn("discharge_export", actions)
+
+    @patch('optimize_plan.get_ha_state')
+    def test_ha_allow_export_off_overrides_env_true(self, mock_ha):
+        # HA switch OFF should block export even when env says true
+        def ha_side_effect(entity_id):
+            if entity_id == 'input_boolean.battery_allow_export':
+                return {"state": "off"}
+            return None
+        mock_ha.side_effect = ha_side_effect
+
+        with patched_env({
+            "BATTERY_CAPACITY_KWH": "40",
+            "BATTERY_MIN_SOC_PCT": "10",
+            "BATTERY_MAX_SOC_PCT": "90",
+            "BATTERY_INITIAL_SOC_PCT": "80",
+            "BATTERY_MAX_CHARGE_KW": "10",
+            "BATTERY_MAX_DISCHARGE_KW": "10",
+            "BATTERY_CHARGE_EFFICIENCY": "1.0",
+            "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+            "BATTERY_ALLOW_EXPORT": "true",
+            "PLAN_INTERVAL_MINUTES": "60",
+        }):
+            predictions = np.array([1.0, 1.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.10, 0.10])
+            export_prices = np.array([0.50, 0.50])
+            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # discharge_export should NOT appear when HA switch is off
+        actions = [p["battery_action"] for p in plan]
+        self.assertNotIn("discharge_export", actions)
+
+    @patch('optimize_plan.get_ha_state')
+    def test_ha_allow_export_unavailable_falls_back_to_env(self, mock_ha):
+        # Unavailable HA switch should fall back to env value
+        mock_ha.return_value = None
+
+        with patched_env({
+            "BATTERY_CAPACITY_KWH": "40",
+            "BATTERY_MIN_SOC_PCT": "10",
+            "BATTERY_MAX_SOC_PCT": "90",
+            "BATTERY_INITIAL_SOC_PCT": "80",
+            "BATTERY_MAX_CHARGE_KW": "10",
+            "BATTERY_MAX_DISCHARGE_KW": "10",
+            "BATTERY_CHARGE_EFFICIENCY": "1.0",
+            "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+            "BATTERY_ALLOW_EXPORT": "false",
+            "PLAN_INTERVAL_MINUTES": "60",
+        }):
+            predictions = np.array([1.0, 1.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.10, 0.10])
+            export_prices = np.array([0.50, 0.50])
+            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # With env false and HA unavailable, discharge_export should be blocked
+        actions = [p["battery_action"] for p in plan]
+        self.assertNotIn("discharge_export", actions)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from utils.ha_utils import get_ha_state
+from utils.ha_utils import get_ha_state, parse_ha_bool
 from utils.price_utils import fetch_market_prices, align_interval_prices
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, get_db_path
@@ -154,6 +154,59 @@ def _has_spill_risk(soc_kwh, start_idx, horizon, net_without_battery, min_soc_kw
     return False
 
 
+def _compute_opportunity_cost(sim_soc, start_idx, horizon, net_without_battery,
+                              import_prices, export_prices, allow_export,
+                              min_soc_kwh, max_soc_kwh,
+                              charge_eff, discharge_eff,
+                              max_charge_kw, max_discharge_kw, interval_hours):
+    """Forward-simulate battery greedily from start_idx and compute the mean
+    value (EUR per stored kWh) of future discharges.
+
+    Returns 0.0 if the battery never discharges in the simulation,
+    which signals the caller to fall back to existing logic.
+    """
+    total_revenue = 0.0
+    total_discharged_kwh = 0.0
+    soc = sim_soc
+
+    for j in range(start_idx, horizon):
+        net_j = float(net_without_battery[j])
+
+        # 1. Charge from solar surplus
+        if net_j < 0:
+            solar_surplus = -net_j
+            room = max(0.0, max_soc_kwh - soc)
+            charge_limit = min(max_charge_kw * interval_hours, room / charge_eff)
+            charge = min(solar_surplus, charge_limit)
+            soc += charge * charge_eff
+
+        # 2. Discharge to load
+        if net_j > 0:
+            soc_available = max(0.0, soc - min_soc_kwh)
+            discharge_limit = min(max_discharge_kw * interval_hours, soc_available * discharge_eff)
+            discharge_to_load = min(net_j, discharge_limit)
+            if discharge_to_load > 0:
+                revenue = discharge_to_load * float(import_prices[j])
+                total_revenue += revenue
+                total_discharged_kwh += discharge_to_load
+                soc -= discharge_to_load / discharge_eff
+
+        # 3. Discharge to export (remaining inverter capacity)
+        if allow_export and net_j >= 0:
+            soc_available = max(0.0, soc - min_soc_kwh)
+            remaining_limit = min(max_discharge_kw * interval_hours, soc_available * discharge_eff)
+            discharge_to_export = max(0.0, remaining_limit)
+            if discharge_to_export > 0:
+                revenue = discharge_to_export * float(export_prices[j])
+                total_revenue += revenue
+                total_discharged_kwh += discharge_to_export
+                soc -= discharge_to_export / discharge_eff
+
+    if total_discharged_kwh < 1e-9:
+        return 0.0
+    return total_revenue / total_discharged_kwh
+
+
 def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
     """
     Create a no-op battery plan when battery is disabled.
@@ -195,7 +248,7 @@ def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_pri
     return no_battery_plan
 
 
-def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
+def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None, allow_export=None):
     capacity_kwh = get_env_float('BATTERY_CAPACITY_KWH', 40.0)
     min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
     max_soc_pct = get_env_float('BATTERY_MAX_SOC_PCT', 90.0)
@@ -219,7 +272,12 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     max_discharge_kw = get_env_float('BATTERY_MAX_DISCHARGE_KW', 10.0)
     charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
     discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
-    allow_export = get_env_bool('BATTERY_ALLOW_EXPORT', True)
+    
+    if allow_export is None:
+        allow_export_entity = os.getenv('BATTERY_ALLOW_EXPORT_ENTITY', 'input_boolean.battery_allow_export')
+        ha_state = get_ha_state(allow_export_entity)
+        allow_export = parse_ha_bool(ha_state, default=get_env_bool('BATTERY_ALLOW_EXPORT', True))
+        print(f"Battery allow_export from HA ({allow_export_entity}): {allow_export}")
     
     # Grid connection limit (3-phase, 230V)
     main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
@@ -265,9 +323,22 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             charge_from_solar = min(solar_surplus, charge_limit_input_kwh)
             soc_kwh += charge_from_solar * charge_eff
 
-        # 2. Discharge to load (only when current price is at least as good as the best future value)
+        # Compute opportunity cost of keeping energy vs. discharging now
+        opportunity_cost = _compute_opportunity_cost(
+            soc_kwh, i + 1, horizon, net_without_battery,
+            import_prices, export_prices, allow_export,
+            min_soc_kwh, max_soc_kwh,
+            charge_eff, discharge_eff,
+            max_charge_kw, max_discharge_kw, interval_hours
+        )
+
+        # 2. Discharge to load (only when current price is at least as good as
+        # the opportunity cost of keeping the energy)
         discharge_to_load = 0.0
-        should_discharge = current_import >= best_future_value
+        if opportunity_cost > 0.0:
+            should_discharge = current_import >= opportunity_cost
+        else:
+            should_discharge = current_import >= best_future_value
         if net_load > 0 and should_discharge:
             soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
             discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
@@ -275,7 +346,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             soc_kwh -= discharge_to_load / discharge_eff
 
         # 3. Discharge to export (when export price is best in horizon, or when
-        # export-now + import-later arbitrage is profitable)
+        # export-now is at least as valuable as the opportunity cost of keeping it)
         discharge_to_export = 0.0
         if allow_export and charge_from_solar == 0.0:
             soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
@@ -284,7 +355,10 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
 
             is_best_export = current_export >= float(np.max(future_export))
             round_trip_eff = charge_eff * discharge_eff
-            is_export_arbitrage = current_export > (min_future_import / round_trip_eff)
+            if opportunity_cost > 0.0:
+                is_export_arbitrage = (current_export * discharge_eff) >= opportunity_cost
+            else:
+                is_export_arbitrage = current_export > (min_future_import / round_trip_eff)
 
             if remaining_capacity > 0 and (is_best_export or is_export_arbitrage):
                 discharge_to_export = remaining_capacity
@@ -710,9 +784,15 @@ def optimize():
     # Committed loads (EV + Leaf) consume grid capacity but are not powered from house battery
     committed_load_kwh = (planned_ev_kw + planned_leaf_kw) * get_plan_interval_hours()
     
+    # Fetch live battery-export toggle from Home Assistant (falls back to .env)
+    allow_export_entity = os.getenv('BATTERY_ALLOW_EXPORT_ENTITY', 'input_boolean.battery_allow_export')
+    allow_export_state = get_ha_state(allow_export_entity)
+    allow_export = parse_ha_bool(allow_export_state, default=get_env_bool('BATTERY_ALLOW_EXPORT', True))
+    print(f"Battery allow_export from HA ({allow_export_entity}): {allow_export}")
+    
     # Use battery optimization if available, otherwise fall back to no-battery plan
     if is_battery_enabled():
-        battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
+        battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh, allow_export=allow_export)
     else:
         battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
 
