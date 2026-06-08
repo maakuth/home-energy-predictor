@@ -68,12 +68,12 @@ def train_sarima(days=14, params_path=None):
             'last_index': ts_data.index.max()
         }
         
-        with open('sarima_model_params.pkl', 'wb') as f:
+        with open(params_path, 'wb') as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             pickle.dump(model_data, f)
             fcntl.flock(f, fcntl.LOCK_UN)
             
-        print(f"✅ SARIMA parameters saved to sarima_model_params.pkl ({len(results.params)} params)")
+        print(f"✅ SARIMA parameters saved to {params_path} ({len(results.params)} params)")
         
     except Exception as e:
         print(f"❌ SARIMA Training Error: {e}")

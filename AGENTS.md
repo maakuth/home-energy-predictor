@@ -3,7 +3,13 @@
 ## General Development Guidelines
 - This is a python app that tries to predict home energy usage by an ML model
 - Implement changes using test-driven development: first add failing test, do changes, observe test passing
-- Use python virtualenv to run tests: .venv/bin/python3 -m pytest
+- Use python virtualenv to run tests: `venv/bin/python3 -m pytest`
+- If the venv breaks (e.g., after a system Python upgrade), recreate it with:
+  ```bash
+  rm -rf venv
+  python3 -m venv venv
+  venv/bin/pip install -r requirements.txt
+  ```
 - Offer to save your work to git frequently
 - Don't do heredoc hacks or other shenanigans to modify files. If there's something preventing file modification, say so and the user will help.
 - There are a lot of tunables in .env.template, documented in ENV_VARIABLES.md. If the user asks for some model behaviour change, see if there's a tunable that could be used to implement it.
