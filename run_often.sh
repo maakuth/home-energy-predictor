@@ -42,8 +42,8 @@ soc_pct = _get_float(soc)
 battery_w = _get_float(battery_power) or 0.0
 grid_w = (_get_float(grid_power) or 0.0) * 1000.0  # sensor reports kW, convert to W
 solar_kw = _get_float(solar) or 0.0
-gshp_kw = _get_float(gshp) or 0.0
-leaf_kw = _get_float(leaf) or 0.0
+gshp_kw = (_get_float(gshp) or 0.0) / 1000.0  # sensor reports W, convert to kW
+leaf_kw = (_get_float(leaf) or 0.0) / 1000.0  # sensor reports W, convert to kW
 
 soc_str = f'{soc_pct:.1f}' if soc_pct is not None else 'unavailable'
 print(f'Battery SoC: {soc_str}%')
