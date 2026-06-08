@@ -212,6 +212,56 @@ def _compute_opportunity_cost(sim_soc, start_idx, horizon, net_without_battery,
     return 0.0
 
 
+def _compute_reserved_kwh(sim_soc, start_idx, horizon, net_without_battery,
+                        import_prices, export_prices, allow_export,
+                        min_soc_kwh, discharge_eff,
+                        max_discharge_kw, interval_hours,
+                        threshold_price, max_lookahead_hours=8.0):
+    """Compute how much stored energy must be reserved for future opportunities
+    that are strictly better than threshold_price.
+
+    Returns the amount of output kWh that should be kept for strictly better
+    future opportunities.
+    """
+    total_available_output_kwh = max(0.0, (sim_soc - min_soc_kwh) * discharge_eff)
+    if total_available_output_kwh < 1e-9:
+        return 0.0
+
+    max_lookahead_intervals = int(max_lookahead_hours / interval_hours)
+    end_idx = min(start_idx + max_lookahead_intervals, horizon)
+
+    opportunities = []
+
+    for j in range(start_idx, end_idx):
+        net_j = float(net_without_battery[j])
+        if net_j <= 0:
+            continue
+
+        max_total_discharge = max_discharge_kw * interval_hours
+        max_load_discharge = min(net_j, max_total_discharge)
+        if max_load_discharge > 0:
+            opportunities.append((float(import_prices[j]), max_load_discharge))
+
+        if allow_export:
+            remaining_capacity = max(0.0, max_total_discharge - max_load_discharge)
+            if remaining_capacity > 0:
+                opportunities.append((float(export_prices[j]), remaining_capacity))
+
+    if not opportunities:
+        return 0.0
+
+    opportunities.sort(key=lambda x: x[0], reverse=True)
+
+    reserved = 0.0
+    for value, kwh in opportunities:
+        if value > threshold_price + 1e-9:
+            reserved += kwh
+        else:
+            break
+
+    return min(reserved, total_available_output_kwh)
+
+
 def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
     """
     Create a no-op battery plan when battery is disabled.
@@ -337,8 +387,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             max_charge_kw, max_discharge_kw, interval_hours
         )
 
-        # 2. Discharge to load (only when current price is at least as good as
-        # the opportunity cost of keeping the energy)
+        # 2. Discharge to load (partial — only the amount that doesn't sacrifice
+        # strictly better future opportunities)
         discharge_to_load = 0.0
         if opportunity_cost > 0.0:
             should_discharge = current_import >= opportunity_cost
@@ -346,16 +396,26 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             should_discharge = current_import >= best_future_value
         if net_load > 0 and should_discharge:
             soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
-            discharge_limit_output_kwh = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
-            discharge_to_load = min(net_load, discharge_limit_output_kwh)
+            discharge_limit_output_kwh = min(max_discharge_kw * interval_hours,
+                                             soc_available_kwh * discharge_eff)
+            reserved_for_import = _compute_reserved_kwh(
+                soc_kwh, i + 1, horizon, net_without_battery,
+                import_prices, export_prices, allow_export,
+                min_soc_kwh, discharge_eff,
+                max_discharge_kw, interval_hours,
+                current_import
+            )
+            dischargeable_kwh = max(0.0, soc_available_kwh * discharge_eff - reserved_for_import)
+            discharge_to_load = min(net_load, discharge_limit_output_kwh, dischargeable_kwh)
             soc_kwh -= discharge_to_load / discharge_eff
 
-        # 3. Discharge to export (when export price is best in horizon, or when
-        # export-now is at least as valuable as the opportunity cost of keeping it)
+        # 3. Discharge to export (partial — only when profitable and only the
+        # excess that doesn't sacrifice strictly better future export opportunities)
         discharge_to_export = 0.0
         if allow_export and charge_from_solar == 0.0:
             soc_available_kwh = max(0.0, soc_kwh - min_soc_kwh)
-            total_discharge_limit = min(max_discharge_kw * interval_hours, soc_available_kwh * discharge_eff)
+            total_discharge_limit = min(max_discharge_kw * interval_hours,
+                                          soc_available_kwh * discharge_eff)
             remaining_capacity = max(0.0, total_discharge_limit - discharge_to_load)
 
             is_best_export = current_export >= float(np.max(future_export))
@@ -366,7 +426,15 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
                 is_export_arbitrage = current_export > (min_future_import / round_trip_eff)
 
             if remaining_capacity > 0 and (is_best_export or is_export_arbitrage):
-                discharge_to_export = remaining_capacity
+                reserved_for_export = _compute_reserved_kwh(
+                    soc_kwh, i + 1, horizon, net_without_battery,
+                    import_prices, export_prices, allow_export,
+                    min_soc_kwh, discharge_eff,
+                    max_discharge_kw, interval_hours,
+                    current_export
+                )
+                exportable_kwh = max(0.0, soc_available_kwh * discharge_eff - reserved_for_export)
+                discharge_to_export = min(remaining_capacity, exportable_kwh)
                 soc_kwh -= discharge_to_export / discharge_eff
 
         # 4. Grid charge (only when profitable, no cheaper future import, and solar won't fill the battery)
