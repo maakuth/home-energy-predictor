@@ -65,6 +65,7 @@ The dispatch logic uses a **profit-only** strategy:
 | `BATTERY_CHARGE_EFFICIENCY` | Charge conversion efficiency. | `0.95` | Clamped to `[0.01, 1.0]` in code. |
 | `BATTERY_DISCHARGE_EFFICIENCY` | Discharge conversion efficiency. | `0.95` | Clamped to `[0.01, 1.0]` in code. |
 | `BATTERY_ALLOW_EXPORT` | Whether stored energy may be sold back to the grid. | `true` | When `false`, `discharge_to_export` is blocked and only self-consumption discharge is allowed. |
+| `BATTERY_ALLOW_EXPORT_ENTITY` | Home Assistant boolean entity ID that overrides `BATTERY_ALLOW_EXPORT` at runtime. | `input_boolean.battery_allow_export` | The switch state (`on`/`off`) takes precedence over the env variable. If the entity is unavailable, the env value is used as fallback. |
 
 ---
 

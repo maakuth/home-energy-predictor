@@ -43,6 +43,25 @@ def call_ha_service(domain, service, service_data=None, return_response=True):
         print(f'❌ Service call failed for {domain}.{service}: {e}')
     return None
 
+def parse_ha_bool(state_data, default=False):
+    """Parse a Home Assistant entity state as a boolean.
+
+    Handles common HA boolean representations:
+      'on', 'true', 'yes', '1'  -> True
+      'off', 'false', 'no', '0' -> False
+
+    Falls back to `default` if state_data is None, missing, or unparseable.
+    """
+    if state_data is None:
+        return bool(default)
+    raw = str(state_data.get('state', '')).strip().lower()
+    if raw in {'on', 'true', 'yes', '1'}:
+        return True
+    if raw in {'off', 'false', 'no', '0'}:
+        return False
+    return bool(default)
+
+
 def push_ha_state(entity_id, state, attributes=None):
     """Push a state and attributes to a Home Assistant sensor."""
     url = f'{HA_HOST}/api/states/{entity_id}'
