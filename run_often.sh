@@ -32,7 +32,7 @@ def _get_float(state):
 # Read current states from HA
 soc = get_ha_state('sensor.be_soc')
 battery_power = get_ha_state('sensor.be_stat_batt_power')
-grid_power = get_ha_state('sensor.sahkokauppa_nyt')
+grid_power = get_ha_state('sensor.sahkokauppa_20s')
 solar = get_ha_state('sensor.solarh_63038_real_power_kw')
 gshp = get_ha_state('sensor.mlp_teho')
 leaf = get_ha_state('sensor.tasmota_energy_power_3')

@@ -1,0 +1,188 @@
+Jun 08 08:00:18 murrikka run_frequent.sh[1054659]: Loading pre-trained SARIMA parameters...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054659]: Reconstructing SARIMA model and updating state...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054659]: Forecasting 96 steps ahead using SARIMA...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054659]: ✅ SARIMA forecast with CI saved to sarimax_predictions.json
+Jun 08 08:00:18 murrikka run_frequent.sh[1054659]: ✅ Archived 96 SARIMA points with CI to hepo.db
+Jun 08 08:00:18 murrikka run_frequent.sh[1054584]: [5/5] Optimizing & Pushing Plan...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Loading predictions...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Blending XGBoost with SARIMA (50/50 weight)...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Fetching market prices...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Using market prices from sensor.average_electricity_price_today (Inclusive of fees: False)
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: EV SoC unknown. Falling back to fixed 4.0h duration.
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: House Battery SoC from HA: 36.3%
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Battery Config: Capacity=50.0kWh, MinSOC=10.0%, Reserve=10.0%
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Optimization Plan from 2026-06-08 05:00:00+00:00 to 2026-06-09 20:00:00+00:00:
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Interval: 15 minutes
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: GSHP Initial State: 55.0°C, STOPPED
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Fireplace: OFF
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: Time        | Baseload | GSHP kW | Grid kW | Solar | SOC% | P-tile | Intent | Acc Sim
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: ------------|----------|---------|---------|-------|------|--------|--------|--------
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 08:00 |      0.9 |     0.0 |     0.0 |  5.04 | 38.3 |  72.0% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 08:15 |      1.1 |     0.0 |     0.0 |  5.04 | 40.1 |  76.4% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 08:30 |      0.9 |     0.0 |     0.0 |  6.58 | 42.8 |  75.2% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 08:45 |      1.2 |     0.0 |     0.0 |  6.58 | 45.4 |  70.1% | STOP   |  52.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 09:00 |      1.1 |     0.0 |     0.0 |  6.58 | 48.0 |  77.7% | STOP   |  51.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 09:15 |      1.2 |     0.0 |     0.0 |  6.58 | 50.6 |  68.8% | STOP   |  50.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 09:30 |      1.6 |     0.0 |     0.0 |  7.76 | 53.5 |  63.7% | STOP   |  50.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 09:45 |      1.3 |     0.0 |     0.0 |  7.76 | 56.5 |  56.7% | STOP   |  49.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 10:00 |      1.3 |     0.0 |     0.8 |  7.76 | 59.6 |  62.4% | STOP   |  48.7
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 10:15 |      1.7 |     0.0 |     0.8 |  7.76 | 62.5 |  58.0% | STOP   |  48.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 10:30 |      1.2 |     0.0 |     0.8 |  8.30 | 65.8 |  53.5% | STOP   |  47.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 10:45 |      1.7 |     0.0 |     0.8 |  8.30 | 69.0 |  42.7% | STOP   |  46.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 11:00 |      1.1 |     0.0 |     0.8 |  8.30 | 72.4 |  49.7% | STOP   |  45.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 11:15 |      0.8 |     0.0 |     0.8 |  8.30 | 75.9 |  48.4% | STOP   |  45.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 11:30 |      1.0 |     0.0 |     0.8 |  8.12 | 79.3 |  39.5% | STOP   |  44.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 11:45 |      1.4 |     0.0 |     0.8 |  8.12 | 82.5 |  33.1% | STOP   |  43.7
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 12:00 |      1.6 |     0.0 |     0.8 |  8.12 | 85.6 |  41.4% | STOP   |  43.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 12:15 |      1.5 |     0.0 |     0.8 |  8.12 | 88.7 |  38.2% | STOP   |  42.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 12:30 |      1.3 |     0.0 |    -2.8 |  7.59 | 90.0 |  19.7% | STOP   |  41.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 12:45 |      1.1 |     3.4 |    -2.3 |  7.59 | 90.0 |  14.0% | START  |  43.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 13:00 |      1.2 |     3.5 |   -12.1 |  7.59 | 84.7 |  36.9% | START  |  47.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 13:15 |      1.4 |     3.7 |     0.8 |  7.59 | 85.9 |  35.7% | START  |  52.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 13:30 |      2.0 |     0.0 |     0.8 |  6.91 | 88.2 |  29.3% | STOP   |  51.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 13:45 |      2.0 |     0.0 |    -0.4 |  6.91 | 90.0 |  23.6% | STOP   |  51.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 14:00 |      2.0 |     0.0 |   -14.1 |  6.91 | 84.7 |  22.3% | STOP   |  50.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 14:15 |      1.5 |     0.0 |     0.8 |  6.91 | 87.3 |  28.0% | STOP   |  49.7
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 14:30 |      2.0 |     0.0 |     0.8 |  5.79 | 89.1 |  26.8% | STOP   |  49.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 14:45 |      1.5 |     0.0 |    -1.6 |  5.79 | 90.0 |  24.8% | STOP   |  48.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 15:00 |      1.2 |     3.6 |   -10.2 |  5.79 | 84.7 |  15.9% | START  |  50.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 15:15 |      1.8 |     3.8 |     0.8 |  5.79 | 84.8 |  17.2% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 15:30 |      0.9 |     0.0 |     0.8 |  4.65 | 86.6 |  34.4% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 15:45 |      0.7 |     0.0 |     0.8 |  4.65 | 88.5 |  43.9% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 16:00 |      1.2 |     3.3 |     0.8 |  4.65 | 88.5 |  18.5% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 16:15 |      1.2 |     0.0 |     0.5 |  4.65 | 90.0 |  31.8% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 16:30 |      1.4 |     0.0 |   -11.2 |  3.39 | 84.7 |  45.2% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 16:45 |      1.3 |     0.0 |     0.8 |  3.39 | 85.7 |  55.4% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 17:00 |      1.4 |     3.9 |    -7.3 |  3.39 | 80.5 |  30.6% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 17:15 |      1.0 |     0.0 |     0.8 |  3.39 | 81.6 |  46.5% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 17:30 |      0.9 |     2.8 |    -7.7 |  2.21 | 76.4 |  51.0% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 17:45 |      1.0 |     0.0 |     0.8 |  2.21 | 76.9 |  61.1% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 18:00 |      1.1 |     2.8 |    -7.5 |  2.21 | 71.7 |  52.2% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 18:15 |      1.0 |     0.0 |     0.8 |  2.21 | 72.2 |  59.9% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 18:30 |      1.0 |     0.0 |     0.0 |  1.26 | 72.3 |  67.5% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 18:45 |      1.0 |     0.0 |     0.0 |  1.26 | 72.5 |  79.0% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 19:00 |      1.0 |     3.9 |    -6.4 |  1.26 | 67.2 |  65.6% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 19:15 |      1.2 |     0.0 |     0.0 |  1.26 | 67.2 |  73.9% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 19:30 |      1.0 |     2.8 |    -6.9 |  0.68 | 62.0 |  80.9% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 19:45 |      1.2 |     0.0 |    -9.4 |  0.68 | 56.7 |  94.9% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 20:00 |      1.1 |     2.8 |    -6.8 |  0.68 | 51.5 |  83.4% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 20:15 |      1.0 |     0.0 |    -9.7 |  0.68 | 46.2 |  96.2% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 20:30 |      1.2 |     0.0 |    -9.1 |  0.22 | 40.9 |  97.5% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 20:45 |      1.2 |     0.0 |    -9.0 |  0.22 | 35.7 |  98.7% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 21:00 |      1.1 |     0.0 |    -9.1 |  0.22 | 30.4 |  93.6% | STOP   |  52.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 21:15 |      1.1 |     0.0 |    -9.1 |  0.22 | 25.1 |  89.8% | STOP   |  51.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 21:30 |      1.1 |     0.0 |    -8.9 |  0.05 | 19.9 |  84.7% | STOP   |  50.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 21:45 |      1.2 |     0.0 |    -8.9 |  0.05 | 14.6 |  86.0% | STOP   |  50.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 22:00 |      1.1 |     0.0 |    -7.7 |  0.05 | 10.0 |  91.1% | STOP   |  49.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 22:15 |      1.1 |     0.0 |     1.1 |  0.05 | 10.0 |  91.1% | STOP   |  48.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 22:30 |      1.1 |     0.0 |     1.1 |  0.00 | 10.0 |  87.3% | STOP   |  47.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 22:45 |      1.1 |     0.0 |     1.1 |  0.00 | 10.0 |  82.2% | STOP   |  47.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 23:00 |      1.1 |     0.0 |     1.1 |  0.00 | 10.0 |  88.5% | STOP   |  46.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 23:15 |      1.1 |     0.0 |     1.1 |  0.00 | 10.0 |  80.3% | STOP   |  45.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 23:30 |      1.0 |     0.0 |     1.0 |  0.00 | 10.0 |  71.3% | STOP   |  45.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-08 23:45 |      1.1 |     0.0 |     1.1 |  0.00 | 10.0 |  54.8% | STOP   |  44.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 00:00 |      1.4 |     0.0 |     1.4 |  0.00 | 10.0 |  65.0% | STOP   |  43.7
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 00:15 |      1.4 |     0.0 |     1.4 |  0.00 | 10.0 |  47.8% | STOP   |  43.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 00:30 |      1.1 |     0.0 |     1.1 |  0.00 | 10.0 |  40.8% | STOP   |  42.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 00:45 |      0.9 |     0.0 |     1.7 |  0.00 | 10.0 |  26.1% | STOP   |  41.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 01:00 |      0.8 |     3.4 |     4.2 |  0.00 | 10.0 |  11.5% | START  |  43.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 01:15 |      1.0 |     3.5 |     8.7 |  0.00 | 10.0 |   7.0% | START  |  47.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 01:30 |      1.0 |     0.0 |     5.3 |  0.00 | 10.0 |   5.1% | STOP   |  46.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 01:45 |      1.0 |     0.0 |     5.3 |  0.00 | 10.0 |   3.2% | STOP   |  46.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 02:00 |      0.9 |     0.0 |     5.1 |  0.00 | 10.0 |   4.5% | STOP   |  45.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 02:15 |      1.1 |     0.0 |     5.3 |  0.00 | 10.0 |   6.4% | STOP   |  44.7
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 02:30 |      1.1 |     0.0 |     5.3 |  0.01 | 10.0 |   8.3% | STOP   |  44.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 02:45 |      0.9 |     0.0 |     5.2 |  0.01 | 10.0 |   8.9% | STOP   |  43.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 03:00 |      2.2 |     0.0 |     6.5 |  0.01 | 10.0 |   1.9% | STOP   |  42.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 03:15 |      2.1 |     0.0 |     6.3 |  0.01 | 10.0 |   2.5% | STOP   |  41.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 03:30 |      1.6 |     3.4 |     9.1 |  0.09 | 10.0 |   9.6% | START  |  43.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 03:45 |      1.1 |     0.0 |     1.0 |  0.09 | 10.0 |  11.5% | STOP   |  42.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 04:00 |      1.1 |     0.0 |     5.3 |  0.09 | 10.0 |   1.3% | STOP   |  41.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 04:15 |      1.1 |     3.4 |     8.7 |  0.09 | 10.0 |   5.7% | START  |  43.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 04:30 |      1.1 |     0.0 |     0.8 |  0.26 | 10.0 |  10.8% | STOP   |  42.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 04:45 |      1.1 |     0.0 |     0.8 |  0.26 | 10.0 |  13.4% | STOP   |  41.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 05:00 |      1.1 |     3.4 |     8.5 |  0.26 | 10.0 |   0.6% | START  |  43.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 05:15 |      1.0 |     0.0 |     5.0 |  0.26 | 10.0 |   3.8% | STOP   |  42.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 05:30 |      0.9 |     0.0 |     0.0 |  0.82 | 10.0 |  12.7% | STOP   |  41.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 05:45 |      1.0 |     3.4 |     3.6 |  0.82 | 10.0 |  15.3% | START  |  43.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 06:00 |      0.8 |     3.5 |    17.2 |  0.82 | 14.5 |   0.0% | START  |  47.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 06:15 |      1.0 |     3.8 |     4.0 |  0.82 | 14.5 |  10.2% | START  |  52.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 06:30 |      1.0 |     0.0 |     0.0 |  1.71 | 14.9 |  21.7% | STOP   |  52.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 06:45 |      1.0 |     0.0 |     0.0 |  1.71 | 15.2 |  66.9% | STOP   |  51.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 07:00 |      1.0 |     3.8 |    17.2 |  1.71 | 19.9 |   7.6% | START  |  53.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 07:15 |      1.3 |     3.5 |     3.0 |  1.71 | 19.9 |  21.0% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 07:30 |      1.2 |     0.0 |     0.0 |  2.69 | 20.6 |  59.2% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 07:45 |      1.2 |     0.0 |     0.0 |  2.69 | 21.3 |  73.2% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 08:00 |      1.2 |     0.0 |     0.0 |  2.69 | 22.1 |  72.0% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 08:15 |      1.2 |     0.0 |     0.0 |  2.69 | 22.8 |  76.4% | STOP   |  52.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 08:30 |      1.2 |     0.0 |     0.0 |  3.43 | 23.9 |  75.2% | STOP   |  51.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 08:45 |      1.2 |     0.0 |     0.0 |  3.43 | 25.0 |  70.1% | STOP   |  50.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 09:00 |      1.2 |     0.0 |     0.0 |  3.43 | 26.0 |  77.7% | STOP   |  50.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 09:15 |      1.2 |     0.0 |     0.0 |  3.43 | 27.1 |  68.8% | STOP   |  49.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 09:30 |      1.2 |     0.0 |     0.0 |  4.10 | 28.5 |  63.7% | STOP   |  48.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 09:45 |      1.2 |     0.0 |     0.0 |  4.10 | 29.9 |  56.7% | STOP   |  47.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 10:00 |      1.2 |     0.0 |     0.8 |  4.10 | 31.3 |  62.4% | STOP   |  47.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 10:15 |      1.2 |     0.0 |     0.8 |  4.10 | 32.7 |  58.0% | STOP   |  46.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 10:30 |      1.2 |     0.0 |     0.8 |  4.94 | 34.5 |  53.5% | STOP   |  45.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 10:45 |      1.2 |     0.0 |     0.8 |  4.94 | 36.3 |  42.7% | STOP   |  45.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 11:00 |      1.2 |     0.0 |     0.8 |  4.94 | 38.1 |  49.7% | STOP   |  44.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 11:15 |      1.2 |     0.0 |     0.8 |  4.94 | 39.8 |  48.4% | STOP   |  43.7
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 11:30 |      1.2 |     0.0 |     0.8 |  5.15 | 41.7 |  39.5% | STOP   |  43.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 11:45 |      1.2 |     0.0 |     0.8 |  5.15 | 43.6 |  33.1% | STOP   |  42.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 12:00 |      1.2 |     0.0 |     0.8 |  5.15 | 45.4 |  41.4% | STOP   |  41.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 12:15 |      1.2 |     3.4 |     0.8 |  5.15 | 45.7 |  38.2% | START  |  43.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 12:30 |      1.2 |     3.5 |     0.8 |  5.10 | 45.9 |  19.7% | START  |  47.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 12:45 |      1.2 |     3.7 |     0.8 |  5.10 | 45.9 |  14.0% | START  |  52.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 13:00 |      1.2 |     1.9 |     0.8 |  5.10 | 46.9 |  36.9% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 13:15 |      1.2 |     0.0 |     0.8 |  5.10 | 48.7 |  35.7% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 13:30 |      1.2 |     0.0 |     0.8 |  5.19 | 50.6 |  29.3% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 13:45 |      1.2 |     0.0 |     0.8 |  5.19 | 52.5 |  23.6% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 14:00 |      1.2 |     0.0 |     0.8 |  5.19 | 54.4 |  22.3% | STOP   |  52.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 14:15 |      1.2 |     0.0 |     0.8 |  5.19 | 56.3 |  28.0% | STOP   |  51.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 14:30 |      1.2 |     0.0 |     0.8 |  4.68 | 58.0 |  26.8% | STOP   |  50.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 14:45 |      1.2 |     0.0 |     0.8 |  4.68 | 59.7 |  24.8% | STOP   |  50.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 15:00 |      1.2 |     3.7 |    11.0 |  4.68 | 64.4 |  15.9% | START  |  51.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 15:15 |      1.2 |     2.3 |     0.8 |  4.68 | 65.0 |  17.2% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 15:30 |      1.2 |     0.0 |     0.8 |  4.05 | 66.4 |  34.4% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 15:45 |      1.2 |     0.0 |     0.8 |  4.05 | 67.7 |  43.9% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 16:00 |      1.2 |     3.3 |    11.2 |  4.05 | 72.5 |  18.5% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 16:15 |      1.2 |     0.0 |     0.8 |  4.05 | 73.9 |  31.8% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 16:30 |      1.2 |     0.0 |     0.8 |  3.12 | 74.8 |  45.2% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 16:45 |      1.2 |     0.0 |     0.8 |  3.12 | 75.7 |  55.4% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 17:00 |      1.2 |     3.9 |    12.7 |  3.12 | 80.5 |  30.6% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 17:15 |      1.2 |     0.0 |     0.8 |  3.12 | 81.4 |  46.5% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 17:30 |      1.2 |     2.8 |    12.7 |  2.03 | 86.2 |  51.0% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 17:45 |      1.2 |     0.0 |     0.8 |  2.03 | 86.6 |  61.1% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 18:00 |      1.2 |     2.8 |     9.9 |  2.03 | 90.0 |  52.2% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 18:15 |      1.2 |     0.0 |    -0.1 |  2.03 | 90.0 |  59.9% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 18:30 |      1.2 |     0.0 |    -0.0 |  1.20 | 90.0 |  67.5% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 18:45 |      1.2 |     0.0 |    -0.0 |  1.20 | 90.0 |  79.0% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 19:00 |      1.1 |     3.9 |     3.8 |  1.20 | 90.0 |  65.6% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 19:15 |      1.1 |     0.0 |    -0.1 |  1.20 | 90.0 |  73.9% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 19:30 |      1.1 |     2.8 |     3.4 |  0.48 | 90.0 |  80.9% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 19:45 |      1.1 |     0.0 |     0.6 |  0.48 | 90.0 |  94.9% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 20:00 |      1.1 |     2.8 |     3.4 |  0.48 | 90.0 |  83.4% | START  |  55.0
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 20:15 |      1.1 |     0.0 |     0.6 |  0.48 | 90.0 |  96.2% | STOP   |  54.3
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 20:30 |      1.1 |     0.0 |     1.0 |  0.15 | 90.0 |  97.5% | STOP   |  53.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 20:45 |      1.3 |     0.0 |    -8.9 |  0.15 | 84.7 |  98.7% | STOP   |  52.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 21:00 |      1.3 |     0.0 |    -8.9 |  0.15 | 79.5 |  93.6% | STOP   |  52.2
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 21:15 |      1.3 |     0.0 |     1.1 |  0.15 | 79.5 |  89.8% | STOP   |  51.5
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 21:30 |      1.3 |     0.0 |     1.3 |  0.03 | 79.5 |  84.7% | STOP   |  50.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 21:45 |      1.3 |     0.0 |     1.3 |  0.03 | 79.5 |  86.0% | STOP   |  50.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 22:00 |      1.3 |     0.0 |    -8.7 |  0.03 | 74.2 |  91.1% | STOP   |  49.4
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 22:15 |      1.3 |     0.0 |    -8.7 |  0.03 | 68.9 |  91.1% | STOP   |  48.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 22:30 |      1.3 |     0.0 |     1.3 |  0.00 | 68.9 |  87.3% | STOP   |  47.9
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 22:45 |      1.3 |     3.6 |    14.9 |  0.00 | 73.7 |  82.2% | START  |  49.6
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: 06-09 23:00 |      1.3 |     3.9 |    -4.8 |  0.00 | 68.4 |  88.5% | START  |  54.8
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: ✅ Plan saved to optimization_plan.json
+Jun 08 08:00:18 murrikka run_frequent.sh[1054965]: ✅ Archived 157 optimized points to hepo.db
+Jun 08 08:00:18 murrikka run_frequent.sh[1054979]: Loading optimization plan...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054979]: Pushing optimization plan to Home Assistant...
+Jun 08 08:00:18 murrikka run_frequent.sh[1054979]: ✅ Plan successfully pushed!
+Jun 08 08:00:18 murrikka run_frequent.sh[1054979]: ✅ GSHP Intent pushed: STOP
+Jun 08 08:00:18 murrikka run_frequent.sh[1054979]: ✅ Leaf Intent pushed: OFF
+Jun 08 08:00:18 murrikka run_frequent.sh[1054979]: ✅ Battery Control: -4123W (charge_solar) [SoC 38.3%]
+Jun 08 08:00:18 murrikka run_frequent.sh[1054979]: ✅ Accuracy metrics pushed: MAE=1.258, Version=1.5.1
+Jun 08 08:00:18 murrikka run_frequent.sh[1054584]: === Update Complete: Mon  8 Jun 08:00:18 EEST 2026 ===
+Jun 08 08:00:18 murrikka systemd[3258]: Finished home-energy-predictor-frequent.service - Predict energy use in home assistant.
+Jun 08 08:00:18 murrikka systemd[3258]: home-energy-predictor-frequent.service: Consumed 5min 53.292s CPU time, 1.4G memory peak.

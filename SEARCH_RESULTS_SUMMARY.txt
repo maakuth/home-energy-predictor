@@ -1,0 +1,299 @@
+================================================================================
+SEARCH COMPLETE: HEPO Load Power & Battery Impact Analysis
+================================================================================
+
+FILES EXAMINED:
+- extract_data.py (153 lines) - Sensor extraction from Home Assistant
+- process_data.py (159 lines) - Data processing and feature engineering  
+- train_model.py (106 lines) - XGBoost model training
+- predict_future.py (482 lines) - Future predictions and anchors
+- optimize_plan.py (799 lines, partial) - Battery dispatch optimization
+- analyze_performance.py (447 lines) - Performance analysis
+- test_gshp_analysis.py (83 lines) - Unit tests for load calculations
+- README.md (85 lines) - Documentation on battery integration
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. LOAD POWER CALCULATION (process_data.py, lines 49-61)
+   ───────────────────────────────────────────────────
+
+   Current Formula:
+   ┌─────────────────────────────────────────────────────────┐
+   │ total_home_power = grid_power + solar_actual            │
+   │ baseload_power = total_home_power - gshp_power - leaf   │
+   └─────────────────────────────────────────────────────────┘
+
+   Assumption: Battery-free system (or battery is ignored)
+   
+   What's SUBTRACTED:
+   ✓ GSHP (Ground Source Heat Pump) - explicitly removed
+   ✓ Leaf (Nissan Leaf EV) - explicitly removed
+   
+   What's NOT subtracted:
+   ✗ AAHP (Air-to-Air Heat Pump) - treated as part of load
+   ✗ Mummun - unknown appliance, treated as part of load
+   ✗ Battery power - NOT EXTRACTED FROM SENSORS (CRITICAL)
+
+
+2. WHERE GRID_POWER, SOLAR_POWER, AND BATTERY_POWER SHOULD INTERACT
+   ──────────────────────────────────────────────────────────────
+
+   Sensors Currently Extracted:
+   ✓ grid_power: sensor.sahkokauppa_nyt (kW)
+   ✓ solar_actual: sensor.solarh_63038_real_power_kw (kW)
+   ✓ gshp_power: sensor.mlp_teho (W)
+   ✓ leaf_power: sensor.tasmota_energy_power_3 (W)
+   ✓ aahp_living_power: sensor.saikaan_olohuone_current_power (W)
+   ✓ aahp_cabin_power: sensor.mokkimokin_ilp_power (W)
+   ✓ mummun_power: from sensor.mummun_energy (energy→power conversion)
+   ✗ battery_power: NOT extracted (only be_soc read at real-time)
+   ✗ battery_soc_history: NOT extracted
+
+   Impact Analysis:
+   ┌──────────────────────────────────────────────────────────┐
+   │ Without Battery:                                         │
+   │ Home Load = Grid Import + Solar Production ✓ CORRECT   │
+   │                                                          │
+   │ With Battery (Current Code):                            │
+   │ Home Load = Grid Import + Solar Production ✗ WRONG     │
+   │ Missing: - Battery Discharge + Battery Charge           │
+   │                                                          │
+   │ With Battery (If Battery Sensor Existed):              │
+   │ Home Load = Grid Import + Solar - Battery Net Power ✓  │
+   │ = Grid + Solar - (Discharge - Charge)                  │
+   └──────────────────────────────────────────────────────────┘
+
+
+3. BATTERY IMPACT ON MEASUREMENTS (THE CRITICAL ISSUE)
+   ─────────────────────────────────────────────────
+
+   Example Scenario 1: Battery Charging from Solar
+   ─────────────────────────────────────────────
+   Reality:
+     Grid: -2 kW (exporting surplus)
+     Solar: +5 kW (producing)
+     Battery: Charging +3 kW
+     Home Load: 0 kW (only battery is charging)
+
+   Current Formula Says:
+     total_home_power = -2 + 5 = +3 kW ✗ WRONG
+     (Claims home is using 3 kW)
+
+   Should Be (with battery correction):
+     total_home_power = -2 + 5 - 3 = 0 kW ✓ CORRECT
+     (Home is using 0 kW)
+
+   ---
+
+   Example Scenario 2: Battery Discharging to Home
+   ───────────────────────────────────────────────
+   Reality:
+     Grid: +1 kW (importing)
+     Solar: +0.5 kW (producing)
+     Battery: Discharging +2 kW
+     Home Load: 3.5 kW
+
+   Current Formula Says:
+     total_home_power = 1 + 0.5 = 1.5 kW ✗ WRONG
+     (Claims home is using 1.5 kW)
+
+   Should Be (with battery correction):
+     total_home_power = 1 + 0.5 + 2 = 3.5 kW ✓ CORRECT
+     (Home is using 3.5 kW)
+
+
+4. MODEL TRAINING IMPACT (train_model.py)
+   ──────────────────────────────────────
+
+   Target Variable:
+     baseload_power (calculated WITHOUT battery power)
+
+   Features Used:
+     - baseload_lag_1h: Previous hour's baseload
+     - baseload_lag_24h: Yesterday's same-time baseload
+     - 20+ other features (weather, temporal, etc.)
+
+   Problem If Battery Exists:
+     ┌──────────────────────────────────────────────────┐
+     │ Model trains on WRONG baseload values           │
+     │ (calculated as grid + solar - gshp - leaf,      │
+     │  but should exclude battery discharge too)      │
+     │                                                  │
+     │ Result: Model learns INFLATED baseload patterns │
+     │ Predictions: SYSTEMATICALLY OVERESTIMATE        │
+     └──────────────────────────────────────────────────┘
+
+
+5. REAL-TIME PREDICTION IMPACT (predict_future.py)
+   ─────────────────────────────────────────────────
+
+   Lag Calculation (lines 194-224):
+   ────────────────────────────────
+   def get_baseload_at_lag(hours_back):
+       total = get_nearest(total_df, target_ts)        # grid_power
+       solar = get_nearest(solar_df, target_ts)        # solar_actual
+       gshp = get_nearest(gshp_df, target_ts) / 1000   # gshp_power
+       leaf = get_nearest(leaf_df, target_ts) / 1000   # leaf_power
+       
+       return max(0.0, total + solar - gshp - leaf)    # baseload
+       
+   ✗ No battery_power subtraction
+   ✗ Uses same formula as process_data.py
+   ✗ If battery exists, this produces WRONG lag features
+
+   Both get_baseload_at_lag() locations must be updated:
+   1. In train_model.py (indirectly, via processed_data.csv)
+   2. In predict_future.py (real-time calculation, lines 194-224)
+
+
+6. BATTERY OPTIMIZATION (optimize_plan.py)
+   ──────────────────────────────────────
+
+   Status: Battery IS simulated during optimization
+   ────────────────────────────────────────────────
+   - Simulates charge_from_solar, charge_from_grid
+   - Simulates discharge_to_load, discharge_to_export
+   - Computes battery_power_kw (line 278)
+   - Stores battery_action and SOC tracking
+
+   BUT: This is SIMULATION, not based on measured history
+   ────────────────────────────────────────────────────
+   - Battery dispatch uses PREDICTED load
+   - Not validated against actual battery behavior
+   - Historical battery power is NOT measured
+   - Can't learn patterns for SOC-dependent optimization
+
+
+7. PERFORMANCE ANALYSIS (analyze_performance.py)
+   ─────────────────────────────────────────────
+
+   Current Calculation (lines 40-42):
+   ─────────────────────────────────
+   actual_usage = total_power + solar_actual - gshp_actual - leaf_actual
+   
+   ✗ Still assumes battery-free load
+   ✗ If battery exists, actual_usage is WRONG
+   ✗ Predictions vs actuals comparison is BIASED
+   ✗ MAE and bias metrics are UNRELIABLE
+
+   Battery Performance Evaluation (lines 141-216):
+   ───────────────────────────────────────────────
+   Compares planned battery actions against actual consumption
+   But actual consumption formula is WRONG if battery exists
+
+
+================================================================================
+WHAT THE README SAYS SHOULD HAPPEN
+================================================================================
+
+From README.md lines 79-84 (Future Battery Integration section):
+
+"Update load calculation in process_data.py — currently:
+   total_home_power = grid_power + solar_actual
+   
+ With a battery, subtract battery's net discharge:
+   total_home_power = grid_power + solar_actual 
+                    - (battery_discharge_power - battery_charge_power)"
+
+✓ This is EXACTLY what needs to happen
+✓ README acknowledges battery power affects measurements
+✓ README describes the fix needed
+
+
+================================================================================
+ASSUMPTIONS MADE IN CURRENT CODE
+================================================================================
+
+1. No home battery exists (or can be ignored)
+   └─ True for current system, FALSE when battery installed
+
+2. All home consumption comes from grid import or solar production
+   └─ True without battery, FALSE with battery
+
+3. GSHP and Leaf are the only loads worth separating
+   └─ Reasonable, but AAHP and mummun also extracted
+
+4. Baseload = grid + solar - major_loads
+   └─ Correct formula for battery-free scenario
+
+5. Battery is only simulated during optimization
+   └─ TRUE: Battery is planned but not measured in history
+
+6. Historical data doesn't need battery power
+   └─ FALSE: Needed for accurate model when battery installed
+
+7. Battery SOC only needs real-time reading
+   └─ Mostly true for optimization, false for analysis/learning
+
+
+================================================================================
+CRITICAL GAPS & MISSING SENSORS
+================================================================================
+
+Currently NOT Extracted:
+1. battery_power (charge/discharge rate) - CRITICAL
+2. battery_soc_history (state of charge over time)
+3. battery_temperature
+4. inverter_status or mode
+5. battery_voltage, battery_current
+
+These Would Be Needed:
+- To correctly calculate baseload when battery exists
+- To train model on battery-aware patterns
+- To validate battery dispatch optimization
+- To track battery health and degradation
+- To detect anomalies (e.g., battery malfunction)
+
+
+================================================================================
+SUMMARY OF FINDINGS
+================================================================================
+
+The system currently works CORRECTLY for battery-free scenarios but will
+FAIL SILENTLY if a home battery is installed without code updates.
+
+The failure mode:
+  1. Battery power not measured → baseload calculated WRONG
+  2. Model trained on wrong baseload → learns inflated patterns
+  3. Predictions OVERESTIMATE home consumption
+  4. Battery optimizer over-discharges → premature SOC loss
+  5. Analysis shows inflated MAE → system seems broken
+
+This is NOT a bug in the current code - it's by design for a battery-free
+system. But the architecture is FRAGILE for battery integration.
+
+The fix required is straightforward and documented in README.md:
+  1. Extract battery_power sensor
+  2. Update process_data.py formula (1 line)
+  3. Update predict_future.py formula (1 location)
+  4. Retrain model on corrected history
+  5. Validate with performance analysis
+
+
+================================================================================
+DOCUMENTS GENERATED
+================================================================================
+
+1. /workspace/SENSOR_POWER_ANALYSIS.md
+   - Comprehensive technical analysis
+   - Detailed explanations of all formulas
+   - Example scenarios with numbers
+   - Implications and recommendations
+
+2. /workspace/LOAD_CALCULATION_FLOWCHART.md
+   - Visual data flow diagram
+   - Formula reference card
+   - Known issues with current approach
+   - Testing strategy
+   - Power balance examples
+
+3. /tmp/SEARCH_RESULTS_SUMMARY.txt (this file)
+   - Executive summary
+   - Key findings
+   - Critical gaps
+   - Quick reference
+
+
+================================================================================
