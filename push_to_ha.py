@@ -87,6 +87,33 @@ def push_plan():
     })
     print(f'✅ Leaf Intent pushed: {current_leaf_intent}')
 
+    # Push effective cost signal
+    current_effective_cost = plan[0].get('effective_cost', 0.0)
+    push_ha_state('sensor.hepo_effective_cost', f"{current_effective_cost:.4f}", {
+        'friendly_name': 'HEPO Effective Cost',
+        'unit_of_measurement': 'EUR/kWh',
+        'icon': 'mdi:cash'
+    })
+    print(f'✅ Effective Cost pushed: {current_effective_cost:.4f} EUR/kWh')
+
+    # Push low cost signal (boolean)
+    low_cost_percentile = float(os.getenv('LOW_COST_PERCENTILE', '30.0'))
+    effective_costs = [p.get('effective_cost', 0.0) for p in plan]
+    if len(effective_costs) > 0:
+        import numpy as np
+        threshold = np.percentile(effective_costs, low_cost_percentile)
+        low_cost_signal = 'ON' if current_effective_cost <= threshold else 'OFF'
+    else:
+        threshold = 0.0
+        low_cost_signal = 'OFF'
+    push_ha_state('sensor.hepo_low_cost_signal', low_cost_signal, {
+        'friendly_name': 'HEPO Low Cost Signal',
+        'icon': 'mdi:flash',
+        'low_cost_threshold': round(threshold, 4) if len(effective_costs) > 0 else None,
+        'percentile': low_cost_percentile
+    })
+    print(f'✅ Low Cost Signal pushed: {low_cost_signal} (threshold={threshold:.4f})')
+
     # Push battery power control (positive = discharge, negative = charge)
     # Sign reversed: battery_power_kw is positive for charging, but control is from home perspective
     battery_power_kw = plan[0].get('battery_power_kw', 0.0)

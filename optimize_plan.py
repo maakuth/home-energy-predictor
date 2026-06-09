@@ -262,6 +262,34 @@ def _compute_reserved_kwh(sim_soc, start_idx, horizon, net_without_battery,
     return min(reserved, total_available_output_kwh)
 
 
+def compute_effective_cost(entry):
+    """
+    Compute the marginal cost (EUR/kWh) of adding an extra load at this interval.
+
+    This accounts for battery optimization, solar surplus, and grid exchange:
+    - If grid is importing: extra load increases import → cost = import_price
+    - If grid is exporting: extra load reduces export → cost = export_price
+    - If battery is discharging (no grid exchange): extra load displaces battery
+      energy → cost = import_price (conservative replacement cost)
+    - If battery is charging from solar (no grid exchange): extra load reduces
+      solar charging → cost = 0 (solar is free)
+    - If idle with solar surplus: extra load consumes surplus → cost = 0
+    - If idle with no surplus: extra load causes import → cost = import_price
+    """
+    if entry['grid_import_kwh'] > 0:
+        return float(entry['import_unit_price'])
+    elif entry['grid_export_kwh'] > 0:
+        return float(entry['export_unit_price'])
+    elif 'discharge' in entry['battery_action']:
+        return float(entry['import_unit_price'])
+    elif 'charge' in entry['battery_action']:
+        return 0.0
+    elif entry.get('net_load_without_battery_kwh', 0) < 0:
+        return 0.0
+    else:
+        return float(entry['import_unit_price'])
+
+
 def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
     """
     Create a no-op battery plan when battery is disabled.
@@ -909,7 +937,7 @@ def optimize():
             f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {p_tile:5.1f}% | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
         )
         
-        final_plan.append({
+        entry = {
             'timestamp': ts.isoformat(),
             'predicted_baseload_kw': p_baseload_kw,
             'sarima_lower_95': float(sarima_lower.iloc[i]) if not np.isnan(sarima_lower.iloc[i]) else None,
@@ -932,7 +960,9 @@ def optimize():
             'gshp_intent': g['gshp_intent'],
             'gshp_temp_simulated': g['gshp_temp_sim'],
             **b,
-        })
+        }
+        entry['effective_cost'] = compute_effective_cost(entry)
+        final_plan.append(entry)
         
     # Support environment variable override for testing
     plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')

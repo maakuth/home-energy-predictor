@@ -107,6 +107,7 @@ Consumed by `optimize()` in `optimize_plan.py`.
 | Variable | Description | Example | Notes |
 |----------|-------------|---------|-------|
 | `PLAN_INTERVAL_MINUTES` | Time granularity of the optimization horizon. | `15` | minutes. Affects battery kWh calculations, GSHP temperature simulation, and EV slot counting. |
+| `LOW_COST_PERCENTILE` | Percentile threshold for the low cost signal. | `30.0` | Intervals with effective cost below this percentile are marked as low cost. Used by `push_to_ha.py` to generate the `sensor.hepo_low_cost_signal` boolean. |
 
 ---
 

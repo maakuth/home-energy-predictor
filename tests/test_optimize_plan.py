@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 
-from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices, plan_gshp_dispatch, optimize
+from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices, plan_gshp_dispatch, optimize, compute_effective_cost
 import sqlite3
 import os
 import json
@@ -661,6 +661,113 @@ class OptimizePlanTests(unittest.TestCase):
         # should still have enough energy left to cover the 0.25 peak.
         self.assertGreaterEqual(plan[4]["soc_kwh"], 2.0,
                                 "SOC should be preserved enough to cover the peak price interval")
+
+
+class EffectiveCostTests(unittest.TestCase):
+    def test_effective_cost_when_grid_importing(self):
+        """When grid is importing, extra load increases import → cost = import_price."""
+        entry = {
+            'grid_import_kwh': 1.0,
+            'grid_export_kwh': 0.0,
+            'battery_action': 'discharge_load',
+            'import_unit_price': 0.20,
+            'export_unit_price': 0.10,
+            'net_load_without_battery_kwh': 2.0,
+        }
+        self.assertAlmostEqual(compute_effective_cost(entry), 0.20)
+
+    def test_effective_cost_when_grid_exporting(self):
+        """When grid is exporting, extra load reduces export → cost = export_price."""
+        entry = {
+            'grid_import_kwh': 0.0,
+            'grid_export_kwh': 1.0,
+            'battery_action': 'charge_solar',
+            'import_unit_price': 0.20,
+            'export_unit_price': 0.10,
+            'net_load_without_battery_kwh': -3.0,
+        }
+        self.assertAlmostEqual(compute_effective_cost(entry), 0.10)
+
+    def test_effective_cost_when_battery_discharging_no_grid(self):
+        """When battery discharges and net grid is zero, cost = import_price (conservative)."""
+        entry = {
+            'grid_import_kwh': 0.0,
+            'grid_export_kwh': 0.0,
+            'battery_action': 'discharge_load',
+            'import_unit_price': 0.25,
+            'export_unit_price': 0.10,
+            'net_load_without_battery_kwh': 1.0,
+        }
+        self.assertAlmostEqual(compute_effective_cost(entry), 0.25)
+
+    def test_effective_cost_when_charging_from_solar_no_grid(self):
+        """When battery charges from solar and net grid is zero, solar is free → cost = 0."""
+        entry = {
+            'grid_import_kwh': 0.0,
+            'grid_export_kwh': 0.0,
+            'battery_action': 'charge_solar',
+            'import_unit_price': 0.20,
+            'export_unit_price': 0.10,
+            'net_load_without_battery_kwh': -2.0,
+        }
+        self.assertAlmostEqual(compute_effective_cost(entry), 0.0)
+
+    def test_effective_cost_when_idle_with_solar_surplus(self):
+        """When idle with solar surplus, extra load consumes free solar → cost = 0."""
+        entry = {
+            'grid_import_kwh': 0.0,
+            'grid_export_kwh': 0.0,
+            'battery_action': 'idle',
+            'import_unit_price': 0.20,
+            'export_unit_price': 0.10,
+            'net_load_without_battery_kwh': -1.0,
+        }
+        self.assertAlmostEqual(compute_effective_cost(entry), 0.0)
+
+    def test_effective_cost_when_idle_no_surplus(self):
+        """When idle with no surplus, extra load causes import → cost = import_price."""
+        entry = {
+            'grid_import_kwh': 0.0,
+            'grid_export_kwh': 0.0,
+            'battery_action': 'idle',
+            'import_unit_price': 0.20,
+            'export_unit_price': 0.10,
+            'net_load_without_battery_kwh': 0.0,
+        }
+        self.assertAlmostEqual(compute_effective_cost(entry), 0.20)
+
+    def test_effective_cost_on_realistic_plan_entries(self):
+        """effective_cost should be computable on realistic full plan entries."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "50",
+                "BATTERY_MAX_CHARGE_KW": "2",
+                "BATTERY_MAX_DISCHARGE_KW": "2",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+                "PLAN_INTERVAL_MINUTES": "60",
+            }
+        ):
+            predictions = np.array([1.0, 1.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.10, 0.30])
+            export_prices = np.array([0.05, 0.20])
+            plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        for entry in plan:
+            # Simulate the full entry as built by optimize()
+            full_entry = {
+                'import_unit_price': 0.10,
+                'export_unit_price': 0.05,
+                **entry,
+            }
+            cost = compute_effective_cost(full_entry)
+            self.assertIsInstance(cost, float)
+            self.assertGreaterEqual(cost, 0.0)
 
 
 class GSHPPlanTests(unittest.TestCase):

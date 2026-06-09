@@ -148,6 +148,142 @@ class TestPushPlan(unittest.TestCase):
         service_data = battery_control_call[1]['service_data']
         self.assertEqual(int(service_data['value']), 3000)
 
+    @patch('push_to_ha.push_ha_state')
+    @patch('utils.battery_utils.is_battery_available')
+    @patch('utils.battery_utils.call_ha_service')
+    def test_push_effective_cost(self, mock_service, mock_battery_available, mock_push):
+        """Test that effective_cost sensor is pushed to HA."""
+        mock_battery_available.return_value = True
+        mock_service.return_value = {}
+        
+        plan_data = [
+            {
+                'predicted_usage_kwh': 0.5,
+                'effective_cost': 0.08,
+                'gshp_intent': 'STOP',
+                'leaf_intent': 'OFF',
+                'battery_power_kw': 0.0,
+                'battery_action': 'idle',
+                'soc_pct': 50.0
+            }
+        ]
+        plan_data.extend([plan_data[0].copy() for _ in range(95)])
+        
+        with open(self.plan_file, 'w') as f:
+            json.dump(plan_data, f)
+        
+        push_plan()
+        
+        # Find the effective_cost push call
+        effective_cost_call = None
+        for call in mock_push.call_args_list:
+            args, kwargs = call
+            if args[0] == 'sensor.hepo_effective_cost':
+                effective_cost_call = call
+                break
+        
+        self.assertIsNotNone(effective_cost_call, "effective_cost sensor push not found")
+        self.assertEqual(effective_cost_call[0][1], '0.0800')
+        self.assertEqual(effective_cost_call[0][2]['unit_of_measurement'], 'EUR/kWh')
+
+    @patch('push_to_ha.push_ha_state')
+    @patch('utils.battery_utils.is_battery_available')
+    @patch('utils.battery_utils.call_ha_service')
+    def test_push_low_cost_signal_on(self, mock_service, mock_battery_available, mock_push):
+        """Test that low_cost_signal is ON when current cost is below threshold."""
+        mock_battery_available.return_value = True
+        mock_service.return_value = {}
+        
+        # Create a plan with varying effective_cost: most are 0.20, first is 0.05
+        plan_data = [
+            {
+                'predicted_usage_kwh': 0.5,
+                'effective_cost': 0.05,
+                'gshp_intent': 'STOP',
+                'leaf_intent': 'OFF',
+                'battery_power_kw': 0.0,
+                'battery_action': 'idle',
+                'soc_pct': 50.0
+            }
+        ]
+        # Rest are expensive
+        for _ in range(95):
+            plan_data.append({
+                'predicted_usage_kwh': 0.5,
+                'effective_cost': 0.20,
+                'gshp_intent': 'STOP',
+                'leaf_intent': 'OFF',
+                'battery_power_kw': 0.0,
+                'battery_action': 'idle',
+                'soc_pct': 50.0
+            })
+        
+        with open(self.plan_file, 'w') as f:
+            json.dump(plan_data, f)
+        
+        push_plan()
+        
+        # Find the low_cost_signal push call
+        low_cost_call = None
+        for call in mock_push.call_args_list:
+            args, kwargs = call
+            if args[0] == 'sensor.hepo_low_cost_signal':
+                low_cost_call = call
+                break
+        
+        self.assertIsNotNone(low_cost_call, "low_cost_signal sensor push not found")
+        self.assertEqual(low_cost_call[0][1], 'ON')
+        self.assertEqual(low_cost_call[0][2]['icon'], 'mdi:flash')
+        self.assertIsNotNone(low_cost_call[0][2]['low_cost_threshold'])
+
+    @patch('push_to_ha.push_ha_state')
+    @patch('utils.battery_utils.is_battery_available')
+    @patch('utils.battery_utils.call_ha_service')
+    def test_push_low_cost_signal_off(self, mock_service, mock_battery_available, mock_push):
+        """Test that low_cost_signal is OFF when current cost is above threshold."""
+        mock_battery_available.return_value = True
+        mock_service.return_value = {}
+        
+        # Create a plan with varying effective_cost: most are 0.05, first is 0.20
+        plan_data = [
+            {
+                'predicted_usage_kwh': 0.5,
+                'effective_cost': 0.20,
+                'gshp_intent': 'STOP',
+                'leaf_intent': 'OFF',
+                'battery_power_kw': 0.0,
+                'battery_action': 'idle',
+                'soc_pct': 50.0
+            }
+        ]
+        # Rest are cheap
+        for _ in range(95):
+            plan_data.append({
+                'predicted_usage_kwh': 0.5,
+                'effective_cost': 0.05,
+                'gshp_intent': 'STOP',
+                'leaf_intent': 'OFF',
+                'battery_power_kw': 0.0,
+                'battery_action': 'idle',
+                'soc_pct': 50.0
+            })
+        
+        with open(self.plan_file, 'w') as f:
+            json.dump(plan_data, f)
+        
+        push_plan()
+        
+        # Find the low_cost_signal push call
+        low_cost_call = None
+        for call in mock_push.call_args_list:
+            args, kwargs = call
+            if args[0] == 'sensor.hepo_low_cost_signal':
+                low_cost_call = call
+                break
+        
+        self.assertIsNotNone(low_cost_call, "low_cost_signal sensor push not found")
+        self.assertEqual(low_cost_call[0][1], 'OFF')
+
 class TestBatteryAvailability(unittest.TestCase):
     @patch('utils.battery_utils.get_ha_state')
     def test_available_when_soc_sensor_online(self, mock_get_state):
