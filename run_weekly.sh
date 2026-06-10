@@ -5,7 +5,7 @@ set -e
 cd "."
 
 # Activate virtual environment
-source venv/bin/activate
+source .venv/bin/activate
 
 # Use a lockfile to prevent race conditions with run_frequent.sh
 (
