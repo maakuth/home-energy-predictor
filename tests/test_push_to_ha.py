@@ -6,6 +6,7 @@ import json
 from push_to_ha import push_accuracy, push_plan
 from utils.battery_utils import (
     push_battery_control, is_battery_available, compute_load_following_setpoint,
+    get_current_plan_entry,
     BATTERY_CONTROL_ENTITY_ID
 )
 
@@ -312,6 +313,58 @@ class TestBatteryAvailability(unittest.TestCase):
         mock_get_state.return_value = {'state': 'unavailable'}
         self.assertFalse(is_battery_available())
         mock_get_state.assert_called_once_with('sensor.be_soc')
+
+
+class TestGetCurrentPlanEntry(unittest.TestCase):
+    def test_matches_current_interval(self):
+        """Should return the entry whose timestamp matches the current 15-min slot."""
+        from datetime import datetime, timezone
+        now = datetime(2026, 6, 10, 9, 46, 30, tzinfo=timezone.utc)
+        plan = [
+            {'timestamp': '2026-06-10T09:30:00+00:00', 'battery_action': 'charge_solar'},
+            {'timestamp': '2026-06-10T09:45:00+00:00', 'battery_action': 'discharge_export'},
+            {'timestamp': '2026-06-10T10:00:00+00:00', 'battery_action': 'idle'},
+        ]
+        with patch('utils.battery_utils.datetime') as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            result = get_current_plan_entry(plan)
+            # 09:46:30 rounds down to 09:45 slot
+            self.assertEqual(result['battery_action'], 'discharge_export')
+
+    def test_matches_exact_boundary(self):
+        """At exact 15-min boundary, should return that slot."""
+        from datetime import datetime, timezone
+        now = datetime(2026, 6, 10, 9, 45, 0, tzinfo=timezone.utc)
+        plan = [
+            {'timestamp': '2026-06-10T09:30:00+00:00', 'battery_action': 'charge_solar'},
+            {'timestamp': '2026-06-10T09:45:00+00:00', 'battery_action': 'discharge_export'},
+        ]
+        with patch('utils.battery_utils.datetime') as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            result = get_current_plan_entry(plan)
+            self.assertEqual(result['battery_action'], 'discharge_export')
+
+    def test_fallback_to_first(self):
+        """If no entry matches current time, fallback to plan[0]."""
+        from datetime import datetime, timezone
+        now = datetime(2026, 6, 10, 9, 46, 30, tzinfo=timezone.utc)
+        plan = [
+            {'timestamp': '2026-06-10T10:00:00+00:00', 'battery_action': 'idle'},
+        ]
+        with patch('utils.battery_utils.datetime') as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+            mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
+            result = get_current_plan_entry(plan)
+            self.assertEqual(result['battery_action'], 'idle')
+
+    def test_empty_plan(self):
+        """Empty plan should return None."""
+        self.assertIsNone(get_current_plan_entry([]))
 
 
 class TestLoadFollowing(unittest.TestCase):

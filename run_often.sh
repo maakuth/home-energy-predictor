@@ -13,7 +13,7 @@ echo "=== HEPO Quick Update: $(date) ==="
 # Pull current sensor states, apply load-following, and push battery control
 python3 -c "
 from utils.ha_utils import get_ha_state
-from utils.battery_utils import push_battery_control, compute_load_following_setpoint
+from utils.battery_utils import push_battery_control, compute_load_following_setpoint, get_current_plan_entry
 import json
 
 def _get_float(state):
@@ -57,11 +57,14 @@ except FileNotFoundError:
     print('⚠️ No optimization_plan.json found')
     plan = None
 
-if plan and plan[0]:
-    current = plan[0]
-    planned_battery_kw = current.get('battery_power_kw', 0.0)
-    planned_action = current.get('battery_action', 'idle')
-    planned_soc = current.get('soc_pct')
+if plan:
+    current = get_current_plan_entry(plan)
+    if current is None:
+        print('⚠️ No current plan entry found')
+        current = None
+    planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
+    planned_action = current.get('battery_action', 'idle') if current else 'idle'
+    planned_soc = current.get('soc_pct') if current else None
 
     adjusted_battery_kw, log_msg = compute_load_following_setpoint(
         planned_battery_kw=planned_battery_kw,

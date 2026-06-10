@@ -337,13 +337,16 @@ def predict():
         print('Error: Model files not found. Run train_model.py first.')
         return
 
-    # Determine prediction window: from next interval until end of available solar horizon.
+    # Determine prediction window: from current interval until end of available solar horizon.
     now = datetime.now().astimezone() # Use aware datetime, local tz
     interval = max(PREDICTION_INTERVAL_MINUTES, 1)
-    minutes_to_next = interval - (now.minute % interval)
-    if minutes_to_next == interval and now.second == 0 and now.microsecond == 0:
-        minutes_to_next = 0
-    start_time = (now + timedelta(minutes=minutes_to_next)).replace(second=0, microsecond=0)
+    # Round down to the current interval boundary so the plan includes the current slot.
+    # This ensures run_often/push_to_ha always find the correct current entry.
+    start_time = now.replace(
+        minute=(now.minute // interval) * interval,
+        second=0,
+        microsecond=0
+    )
     
     # Find the latest timestamp in solar data (usually end of tomorrow)
     # If solar data is short, limit to what we have

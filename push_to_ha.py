@@ -2,7 +2,7 @@ import json
 import sqlite3
 import os
 from utils.ha_utils import push_ha_state
-from utils.battery_utils import push_battery_control
+from utils.battery_utils import push_battery_control, get_current_plan_entry
 from utils.sqlite_utils import get_db_connection, db_exists
 
 def push_accuracy():
@@ -71,24 +71,29 @@ def push_plan():
     if push_ha_state('sensor.hepo_optimization_plan', f"{total_energy:.2f}", attributes):
         print('✅ Plan successfully pushed!')
 
+    # Find the current plan entry (not just plan[0], which may be a future interval)
+    current = get_current_plan_entry(plan)
+    if current is None:
+        current = plan[0]
+
     # Push current GSHP intent
-    current_gshp_intent = plan[0].get('gshp_intent', 'STOP')
+    current_gshp_intent = current.get('gshp_intent', 'STOP')
     attributes_gshp = {
         'friendly_name': 'HEPO GSHP Intent',
-        'simulated_temp': plan[0].get('gshp_temp_simulated')
+        'simulated_temp': current.get('gshp_temp_simulated')
     }
     push_ha_state('sensor.hepo_gshp_intent', current_gshp_intent, attributes_gshp)
     print(f'✅ GSHP Intent pushed: {current_gshp_intent}')
 
     # Push Leaf charging intent
-    current_leaf_intent = plan[0].get('leaf_intent', 'OFF')
+    current_leaf_intent = current.get('leaf_intent', 'OFF')
     push_ha_state('sensor.hepo_leaf_charging_intent', current_leaf_intent, {
         'friendly_name': 'HEPO Leaf Charging Intent'
     })
     print(f'✅ Leaf Intent pushed: {current_leaf_intent}')
 
     # Push effective cost signal
-    current_effective_cost = plan[0].get('effective_cost', 0.0)
+    current_effective_cost = current.get('effective_cost', 0.0)
     push_ha_state('sensor.hepo_effective_cost', f"{current_effective_cost:.4f}", {
         'friendly_name': 'HEPO Effective Cost',
         'unit_of_measurement': 'EUR/kWh',
@@ -116,12 +121,12 @@ def push_plan():
 
     # Push battery power control (positive = discharge, negative = charge)
     # Sign reversed: battery_power_kw is positive for charging, but control is from home perspective
-    battery_power_kw = plan[0].get('battery_power_kw', 0.0)
+    battery_power_kw = current.get('battery_power_kw', 0.0)
     battery_control_w = int(-battery_power_kw * 1000)  # Reverse sign, kW→W
     push_battery_control(
         battery_power_w=battery_control_w,
-        battery_action=plan[0].get('battery_action', 'idle'),
-        battery_soc_pct=plan[0].get('soc_pct')
+        battery_action=current.get('battery_action', 'idle'),
+        battery_soc_pct=current.get('soc_pct')
     )
 
     # Also push 24h usage as a standalone sensor for easier history tracking

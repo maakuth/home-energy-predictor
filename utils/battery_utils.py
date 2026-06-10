@@ -9,6 +9,7 @@ silently continues without error (degradation mode for testing).
 """
 
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 from utils.ha_utils import call_ha_service, get_ha_state
 
@@ -19,6 +20,42 @@ BATTERY_CONTROL_ENTITY_ID = os.getenv(
     'BATTERY_CONTROL_ENTITY_ID',
     'number.hoymiles_remote_bridge_hoymiles_power_control_v5'
 )
+
+
+def get_current_plan_entry(plan, interval_minutes=15):
+    """
+    Find the plan entry that matches the current time interval.
+
+    The plan is generated at 15-minute intervals. This function finds the
+    entry whose timestamp falls within the current 15-minute slot, to avoid
+    executing the wrong interval's plan (e.g., using the 10:00 plan at 09:46).
+
+    Args:
+        plan (list): List of dict entries, each with 'timestamp' key (ISO format).
+        interval_minutes (int): Plan interval in minutes (default 15).
+
+    Returns:
+        dict or None: The matching plan entry, or None if plan is empty.
+                      Falls back to plan[0] if no entry matches current time.
+    """
+    if not plan:
+        return None
+
+    now = datetime.now().astimezone()
+    current_slot = now.replace(
+        minute=(now.minute // interval_minutes) * interval_minutes,
+        second=0,
+        microsecond=0
+    )
+    for entry in plan:
+        if 'timestamp' not in entry:
+            continue
+        ts = datetime.fromisoformat(entry['timestamp'])
+        if ts.replace(second=0, microsecond=0) == current_slot:
+            return entry
+
+    # Fallback: return the first entry if no timestamp matches
+    return plan[0]
 
 
 def is_battery_available():
