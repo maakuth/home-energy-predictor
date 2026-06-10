@@ -218,10 +218,10 @@ class OptimizePlanTests(unittest.TestCase):
         # Should be flagged as fallback
         self.assertTrue(is_fallback[0])
 
-    def test_solar_surplus_charges_battery_as_charge_solar(self):
+    def test_solar_surplus_charges_battery_when_storing_is_better(self):
         with patched_env(
             {
-                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_CAPACITY_KWH": "5",
                 "BATTERY_MIN_SOC_PCT": "10",
                 "BATTERY_MAX_SOC_PCT": "90",
                 "BATTERY_INITIAL_SOC_PCT": "50",
@@ -232,17 +232,61 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_ALLOW_EXPORT": "true",
             }
         ):
-            # 3.0 kWh solar surplus
-            predictions = np.array([0.0])
-            solar = np.array([3.0])
-            import_prices = np.array([0.20])
-            export_prices = np.array([0.10])
+            # 3.0 kWh solar surplus, but future load at 0.20 makes storing worthwhile
+            # Battery is 5kWh at 50% = 2.5kWh, room = 2.0kWh, so it charges from solar
+            # Current import is NOT the cheapest, so grid charge won't happen
+            predictions = np.array([0.0, 2.0])
+            solar = np.array([3.0, 0.0])
+            import_prices = np.array([0.20, 0.20])
+            export_prices = np.array([0.20, 0.20])
 
             with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
                 plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         self.assertEqual(plan[0]["battery_action"], "charge_solar")
         self.assertAlmostEqual(plan[0]["charge_from_solar_kwh"], 2.0) # limited by 2kW charge rate
+
+    def test_high_price_solar_exported_instead_of_charging(self):
+        """When export prices are high and round-trip efficiency makes storing
+        solar less valuable than exporting, solar should go to grid."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "30",
+                "BATTERY_MAX_CHARGE_KW": "2",
+                "BATTERY_MAX_DISCHARGE_KW": "2",
+                "BATTERY_CHARGE_EFFICIENCY": "0.95",
+                "BATTERY_DISCHARGE_EFFICIENCY": "0.95",
+                "BATTERY_ALLOW_EXPORT": "true",
+            }
+        ):
+            # Interval 0: high export (0.24), solar surplus 3.0 kWh
+            # Interval 1: cheap import (0.10), load 2.0 kWh
+            # Interval 2: high import (0.25), load 2.0 kWh
+            predictions = np.array([0.0, 2.0, 2.0])
+            solar = np.array([3.0, 0.0, 0.0])
+            import_prices = np.array([0.24, 0.10, 0.25])
+            export_prices = np.array([0.24, 0.10, 0.25])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: battery at 3.0 kWh (30%), available output = 1.9 kWh
+        # opportunity_cost = 0.25 (only enough for interval 2)
+        # store_value = 0.25 * 0.95 * 0.95 = 0.2256
+        # current_export = 0.24 > 0.2256
+        # So solar should be exported, not stored
+        self.assertEqual(plan[0]["battery_action"], "idle")
+        self.assertAlmostEqual(plan[0]["charge_from_solar_kwh"], 0.0)
+        self.assertAlmostEqual(plan[0]["grid_export_kwh"], 3.0)  # solar goes to grid
+
+        # Interval 1: cheap import, should grid charge
+        self.assertEqual(plan[1]["battery_action"], "charge_grid")
+
+        # Interval 2: high import, should discharge
+        self.assertEqual(plan[2]["battery_action"], "discharge_load")
 
     def test_high_import_price_discharges_battery_as_discharge_load(self):
         with patched_env(

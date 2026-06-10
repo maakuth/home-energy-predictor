@@ -397,16 +397,32 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         else:
             min_future_import = current_import
 
-        # 1. Charge from solar surplus (always first priority)
+        # Precompute opportunity cost before solar charging
+        opportunity_cost_pre_solar = _compute_opportunity_cost(
+            soc_kwh, i + 1, horizon, net_without_battery,
+            import_prices, export_prices, allow_export,
+            min_soc_kwh, max_soc_kwh,
+            charge_eff, discharge_eff,
+            max_charge_kw, max_discharge_kw, interval_hours
+        )
+
+        # 1. Charge from solar surplus (when it's better than exporting)
         charge_from_solar = 0.0
         if net_load < 0:
             solar_surplus = -net_load
             soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
             charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
-            charge_from_solar = min(solar_surplus, charge_limit_input_kwh)
+
+            # If current export price is better than storing, export solar instead
+            round_trip_eff = charge_eff * discharge_eff
+            if allow_export and current_export > opportunity_cost_pre_solar * round_trip_eff:
+                charge_from_solar = 0.0
+            else:
+                charge_from_solar = min(solar_surplus, charge_limit_input_kwh)
+
             soc_kwh += charge_from_solar * charge_eff
 
-        # Compute opportunity cost of keeping energy vs. discharging now
+        # Recompute opportunity cost after solar charging for discharge decisions
         opportunity_cost = _compute_opportunity_cost(
             soc_kwh, i + 1, horizon, net_without_battery,
             import_prices, export_prices, allow_export,
