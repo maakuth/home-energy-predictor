@@ -47,10 +47,10 @@ All monetary values are in **EUR per kWh** unless noted otherwise. These are con
 
 Consumed by `plan_battery_dispatch()` in `optimize_plan.py`.
 
-The dispatch logic uses a **profit-only** strategy:
-1. **Solar surplus is always captured first** (`charge_solar`).
-2. **Discharge to load** only happens when the current import price is at least as high as the best future price (`discharge_load`). There is no artificial pressure to hit a target SoC.
-3. **Discharge to export** only happens at the best export price in the remaining horizon (`discharge_export`).
+The dispatch logic uses a **profit-only** strategy with **marginal opportunity cost ranking**:
+1. **Solar surplus** is captured (`charge_solar`) **only when storing is more valuable than exporting**. If the current export price exceeds `opportunity_cost × round_trip_efficiency`, the solar is exported to grid instead. This enables grid-arbitrage strategies (export solar at peak, charge cheap grid later).
+2. **Discharge to load** happens when the current import price is at least as good as the marginal opportunity cost. The battery only discharges the *excess* energy not needed for strictly better future peaks, creating a gradual ramp rather than binary on/off.
+3. **Discharge to export** happens when the current export price is the best in the remaining horizon or when it meets the arbitrage threshold. Like load discharge, it is limited to the excess energy beyond what is reserved for better opportunities.
 4. **Grid charging** only happens when there is a profitable price delta to exploit, the current interval is the cheapest before that profitable discharge, and expected PV surplus over the next 24 h is not enough to fill the remaining battery room.
 
 | Variable | Description | Example | Notes |

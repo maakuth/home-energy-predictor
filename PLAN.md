@@ -54,10 +54,12 @@ HEPO (Home Energy Prediction & Optimization) is an ML-powered system designed to
 The system executes a 24-48 hour optimization plan every 15-60 minutes (`predict_future.py` + `optimize_plan.py`).
 
 ### Battery Dispatch Strategy
-- **CHARGE_SOLAR:** Priority 1; capture excess PV generation.
+The optimizer uses a **marginal opportunity-cost ranking** (8-hour lookahead window) to decide dispatch actions. This creates gradual power ramps rather than binary on/off blocks.
+
+- **CHARGE_SOLAR:** Capture excess PV generation **only when storing is more valuable than exporting**. If the current export price exceeds `opportunity_cost × round_trip_efficiency`, the solar is exported to grid instead. This enables grid-arbitrage strategies (export solar at peak, charge cheap grid later).
 - **CHARGE_GRID:** Charge during cheap price windows if the "round-trip" profit (future_price * efficiency > current_price) is positive.
-- **DISCHARGE_LOAD:** Offset house consumption during high-price peaks.
-- **DISCHARGE_EXPORT:** Sell energy back to the grid during extreme price spikes (if `BATTERY_ALLOW_EXPORT` is enabled).
+- **DISCHARGE_LOAD:** Offset house consumption during high-price peaks. The battery only discharges the *excess* energy beyond what is reserved for strictly better future peaks. This preserves peak capacity while monetizing stranded energy.
+- **DISCHARGE_EXPORT:** Sell energy back to the grid during extreme price spikes (if `BATTERY_ALLOW_EXPORT` is enabled). Like load discharge, it is limited to the excess energy not needed for better opportunities.
 
 ### GSHP (Heat Pump) Dispatch Strategy
 - **Thermal Buffering:** Increases setpoint/runs the pump when prices are in the bottom 30th percentile or when solar surplus is available.

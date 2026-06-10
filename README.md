@@ -93,10 +93,14 @@ Example crontab for a robust setup:
 - `DATA_RESAMPLE_INTERVAL`: Typically `15min`.
 
 ### Battery Optimization Logic
-The battery optimizer uses a 24-hour forward simulation to decide whether grid charging is safe:
-1. **Spill-Risk Check**: Before charging from the grid, it simulates the battery forward with *only* solar charging. If the battery would hit 100% SOC while solar is still spilling, grid charging is blocked for that interval. This prevents paying for grid energy that would just displace free solar later.
-2. **Profitability Check**: If no spill risk exists, grid charging is only allowed when `(best_future_price × round_trip_efficiency) > current_import_price`, respecting the full asymmetric price spread (grid fees, taxes, VAT on import; deductions on export).
-3. **Fuse Limit Check**: Even if profitable, grid charging is clamped to the remaining import capacity after accounting for house load, GSHP, EV, and Leaf loads: `available = max_fuse_kw − committed_import`.
+The battery optimizer uses a **24-hour forward simulation** with a **marginal opportunity-cost ranking** to make dispatch decisions. Unlike a simple "charge when cheap, discharge when expensive" strategy, it computes the *marginal value* of keeping every stored kWh for future use, and only discharges/export when the current price is at least as good as that value. This creates **gradual ramps** in battery power rather than binary on/off blocks.
+
+Key features:
+1. **Partial Discharge/Export**: When the current price is profitable but not the *best* in the horizon, the battery only discharges the "excess" energy not needed for strictly better future peaks. This preserves peak capacity while monetizing stranded energy.
+2. **Solar Export**: Solar surplus is **not** automatically captured. The optimizer compares `current_export_price` vs `opportunity_cost × round_trip_efficiency`. When exporting is better, PV goes to the grid instead of the battery, freeing room for later cheap grid charging.
+3. **Spill-Risk Check**: Before charging from the grid, it simulates the battery forward with *only* solar charging. If the battery would hit 100% SOC while solar is still spilling, grid charging is blocked for that interval. This prevents paying for grid energy that would just displace free solar later.
+4. **Profitability Check**: If no spill risk exists, grid charging is only allowed when `(best_future_price × round_trip_efficiency) > current_import_price`, respecting the full asymmetric price spread (grid fees, taxes, VAT on import; deductions on export).
+5. **Fuse Limit Check**: Even if profitable, grid charging is clamped to the remaining import capacity after accounting for house load, GSHP, EV, and Leaf loads: `available = max_fuse_kw − committed_import`.
 
 ## Future Battery Integration
 When the physical battery is installed, switch from simulation to real control by:
