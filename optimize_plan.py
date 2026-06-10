@@ -331,7 +331,7 @@ def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_pri
     return no_battery_plan
 
 
-def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None, allow_export=None):
+def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None, allow_export=None, max_lookahead_hours=8.0):
     capacity_kwh = get_env_float('BATTERY_CAPACITY_KWH', 40.0)
     min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
     max_soc_pct = get_env_float('BATTERY_MAX_SOC_PCT', 90.0)
@@ -403,7 +403,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             import_prices, export_prices, allow_export,
             min_soc_kwh, max_soc_kwh,
             charge_eff, discharge_eff,
-            max_charge_kw, max_discharge_kw, interval_hours
+            max_charge_kw, max_discharge_kw, interval_hours,
+            max_lookahead_hours=max_lookahead_hours
         )
 
         # 1. Charge from solar surplus (when it's better than exporting)
@@ -428,7 +429,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
             import_prices, export_prices, allow_export,
             min_soc_kwh, max_soc_kwh,
             charge_eff, discharge_eff,
-            max_charge_kw, max_discharge_kw, interval_hours
+            max_charge_kw, max_discharge_kw, interval_hours,
+            max_lookahead_hours=max_lookahead_hours
         )
 
         # 2. Discharge to load (partial — only the amount that doesn't sacrifice
@@ -447,7 +449,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
                 import_prices, export_prices, allow_export,
                 min_soc_kwh, discharge_eff,
                 max_discharge_kw, interval_hours,
-                current_import
+                current_import,
+                max_lookahead_hours=max_lookahead_hours
             )
             dischargeable_kwh = max(0.0, soc_available_kwh * discharge_eff - reserved_for_import)
             discharge_to_load = min(net_load, discharge_limit_output_kwh, dischargeable_kwh)
@@ -475,7 +478,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
                     import_prices, export_prices, allow_export,
                     min_soc_kwh, discharge_eff,
                     max_discharge_kw, interval_hours,
-                    current_export
+                    current_export,
+                    max_lookahead_hours=max_lookahead_hours
                 )
                 exportable_kwh = max(0.0, soc_available_kwh * discharge_eff - reserved_for_export)
                 discharge_to_export = min(remaining_capacity, exportable_kwh)
@@ -736,13 +740,23 @@ def optimize():
         return
 
     print('Fetching market prices...')
-    market_prices, is_fallback_price, price_source, is_inclusive = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
+    market_prices, is_fallback_price, price_source, is_inclusive, tomorrow_valid = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
     if market_prices is None:
         print('Error: Could not fetch market prices from Home Assistant sensors.')
         return
 
     print(f'Using market prices from {price_source} (Inclusive of fees: {is_inclusive})')
     import_prices, export_prices = build_tariff_prices(market_prices, is_inclusive)
+
+    # Determine opportunity-cost lookahead window based on spot price availability
+    from datetime import datetime, timedelta, time
+    now = datetime.now()
+    if tomorrow_valid:
+        end_of_price_horizon = datetime.combine(now.date() + timedelta(days=1), time.max)
+    else:
+        end_of_price_horizon = datetime.combine(now.date(), time.max)
+    max_lookahead_hours = (end_of_price_horizon - now).total_seconds() / 3600.0
+    print(f"Spot price horizon: tomorrow_valid={tomorrow_valid}, max_lookahead_hours={max_lookahead_hours:.1f}h")
 
     solar_array = np.array(prediction_solar, dtype=float)
 
@@ -909,7 +923,7 @@ def optimize():
     
     # Use battery optimization if available, otherwise fall back to no-battery plan
     if is_battery_enabled():
-        battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh, allow_export=allow_export)
+        battery_plan = plan_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh, allow_export=allow_export, max_lookahead_hours=max_lookahead_hours)
     else:
         battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
 

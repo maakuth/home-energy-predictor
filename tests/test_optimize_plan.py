@@ -49,7 +49,7 @@ class OptimizeArchivingTests(unittest.TestCase):
     def test_optimize_archives_to_db(self, mock_db, mock_prices, mock_ha):
         # Mocking external calls
         mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
-        mock_prices.return_value = ([0.1], [0], "Nordpool", False)
+        mock_prices.return_value = ([0.1], [0], "Nordpool", False, False)
         mock_ha.return_value = {"state": "50.0"} # acc_temp
         
         # Run optimize
@@ -705,6 +705,50 @@ class OptimizePlanTests(unittest.TestCase):
         # should still have enough energy left to cover the 0.25 peak.
         self.assertGreaterEqual(plan[4]["soc_kwh"], 2.0,
                                 "SOC should be preserved enough to cover the peak price interval")
+
+    def test_lookahead_window_respects_max_lookahead_hours(self):
+        """When a distant peak is beyond the max_lookahead_hours, the battery
+        should not reserve energy for it."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "90",
+                "BATTERY_MAX_CHARGE_KW": "10",
+                "BATTERY_MAX_DISCHARGE_KW": "10",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "true",
+            }
+        ):
+            # 24 hourly intervals: price 0.30 for first 8h, 0.10 for next 8h, 0.50 for last 8h
+            predictions = np.array([1.0] * 24)
+            solar = np.array([0.0] * 24)
+            import_prices = np.array([0.30] * 8 + [0.10] * 8 + [0.50] * 8)
+            export_prices = np.array([0.30] * 8 + [0.10] * 8 + [0.50] * 8)
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                # With max_lookahead_hours=8, the 0.50 peak is beyond the window
+                # so the battery sees only 0.30 and discharges at hour 0
+                plan_short = plan_battery_dispatch(
+                    predictions, solar, import_prices, export_prices,
+                    max_lookahead_hours=8.0
+                )
+                # With max_lookahead_hours=24, the 0.50 peak is visible
+                # so the battery preserves energy for the peak and stays idle at hour 0
+                plan_long = plan_battery_dispatch(
+                    predictions, solar, import_prices, export_prices,
+                    max_lookahead_hours=24.0
+                )
+
+        # Short lookahead: battery discharges at hour 0 because it only sees 0.30 ahead
+        self.assertGreater(plan_short[0]["discharge_to_load_kwh"], plan_long[0]["discharge_to_load_kwh"],
+                           "Short lookahead should discharge more at hour 0")
+        # Short lookahead: battery ends up needing to charge from grid at hour 8 (cheap price)
+        # because it discharged too early. Long lookahead preserves energy.
+        self.assertGreater(plan_short[8]["charge_from_grid_kwh"], plan_long[8]["charge_from_grid_kwh"],
+                           "Short lookahead should charge from grid at cheap hour 8")
 
 
 class EffectiveCostTests(unittest.TestCase):

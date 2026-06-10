@@ -43,7 +43,7 @@ class TestEVLogic(unittest.TestCase):
         # Prices: [0.01, 0.10, 0.05, 0.20]
         # Cheapest is 0 (Away), then 2 (Away), then 1 (Home), then 3 (Home).
         mock_build_tariff.return_value = (np.array([0.01, 0.10, 0.05, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
-        mock_fetch_prices.return_value = ([0.01, 0.10, 0.05, 0.20], [0,0,0,0], "Mock", False)
+        mock_fetch_prices.return_value = ([0.01, 0.10, 0.05, 0.20], [0,0,0,0], "Mock", False, False)
         
         mock_ha.return_value = {"state": "unknown"} # for various sensors
         
@@ -72,7 +72,7 @@ class TestEVLogic(unittest.TestCase):
             json.dump(self.predictions_data, f)
 
         mock_build_tariff.return_value = (np.array([0.01, 0.10, 0.05, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
-        mock_fetch_prices.return_value = ([0.01, 0.10, 0.05, 0.20], [0,0,0,0], "Mock", False)
+        mock_fetch_prices.return_value = ([0.01, 0.10, 0.05, 0.20], [0,0,0,0], "Mock", False, False)
         mock_ha.return_value = {"state": "unknown"}
         
         with patch.dict(os.environ, {"EV_CHARGE_HOURS": "1.0", "PLAN_INTERVAL_MINUTES": "15"}):
@@ -100,7 +100,7 @@ class TestEVLogic(unittest.TestCase):
             json.dump(self.predictions_data, f)
 
         mock_build_tariff.return_value = (np.array([0.10, 0.05, 0.08, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
-        mock_fetch_prices.return_value = ([0.10, 0.05, 0.08, 0.20], [0,0,0,0], "Mock", False)
+        mock_fetch_prices.return_value = ([0.10, 0.05, 0.08, 0.20], [0,0,0,0], "Mock", False, False)
         
         mock_ha.return_value = {"state": "20"} # EV SoC = 20%
         
@@ -128,7 +128,7 @@ class TestEVLogic(unittest.TestCase):
             json.dump(self.predictions_data, f)
 
         mock_build_tariff.return_value = (np.array([0.10, 0.05, 0.08, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
-        mock_fetch_prices.return_value = ([0.10, 0.05, 0.08, 0.20], [0,0,0,0], "Mock", False)
+        mock_fetch_prices.return_value = ([0.10, 0.05, 0.08, 0.20], [0,0,0,0], "Mock", False, False)
         
         mock_ha.return_value = {"state": "85"} # SoC already above target
         

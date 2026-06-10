@@ -93,6 +93,10 @@ def fetch_market_prices(prediction_timestamps, interval_minutes=15):
             if aligned is not None:
                 # Flag if this sensor is known to include additional costs
                 is_inclusive = (sensor == "sensor.nordpool_total")
-                return aligned, is_fallback, sensor, is_inclusive
+                # Check tomorrow_valid for Nordpool sensors
+                tomorrow_valid = False
+                if sensor in ["sensor.nordpool_kwh_fi_eur_3_10_0", "sensor.nordpool_total"]:
+                    tomorrow_valid = bool(attrs.get("tomorrow_valid", False))
+                return aligned, is_fallback, sensor, is_inclusive, tomorrow_valid
 
-    return None, None, None, False
+    return None, None, None, False, False
