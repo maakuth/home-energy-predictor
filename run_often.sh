@@ -32,6 +32,9 @@ grid_power = get_ha_state('sensor.sahkokauppa_20s')
 solar = get_ha_state('sensor.solarh_63038_real_power_kw')
 gshp = get_ha_state('sensor.mlp_teho')
 leaf = get_ha_state('sensor.tasmota_energy_power_3')
+p1 = get_ha_state('sensor.current_phase_1')
+p2 = get_ha_state('sensor.current_phase_2')
+p3 = get_ha_state('sensor.current_phase_3')
 
 # Parse values
 soc_pct = _get_float(soc)
@@ -40,6 +43,9 @@ grid_w = (_get_float(grid_power) or 0.0) * 1000.0  # sensor reports kW, convert 
 solar_kw = _get_float(solar) or 0.0
 gshp_kw = (_get_float(gshp) or 0.0) / 1000.0  # sensor reports W, convert to kW
 leaf_kw = (_get_float(leaf) or 0.0) / 1000.0  # sensor reports W, convert to kW
+i_p1 = _get_float(p1)
+i_p2 = _get_float(p2)
+i_p3 = _get_float(p3)
 
 soc_str = f'{soc_pct:.1f}' if soc_pct is not None else 'unavailable'
 print(f'Battery SoC: {soc_str}%')
@@ -48,6 +54,9 @@ print(f'Grid Power: {grid_w:.0f}W')
 print(f'Solar: {solar_kw:.2f}kW')
 print(f'GSHP: {gshp_kw:.2f}kW')
 print(f'Leaf: {leaf_kw:.2f}kW')
+
+phase_str = f'L1: {i_p1 if i_p1 is not None else \"?\"}, L2: {i_p2 if i_p2 is not None else \"?\"}, L3: {i_p3 if i_p3 is not None else \"?\"}'
+print(f'Phase Currents: {phase_str}')
 
 # Load current plan
 try:
@@ -73,7 +82,8 @@ if plan:
         grid_w=grid_w,
         battery_w=battery_w,
         gshp_kw=gshp_kw,
-        leaf_kw=leaf_kw
+        leaf_kw=leaf_kw,
+        phase_currents=[i_p1, i_p2, i_p3]
     )
 
     if log_msg:

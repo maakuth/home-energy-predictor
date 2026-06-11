@@ -140,10 +140,22 @@ def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct
         return False
 
 
+def get_env_float(name, default):
+    """Safely get a float from environment variable."""
+    raw = os.getenv(name)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError:
+        return float(default)
+
+
 def compute_load_following_setpoint(planned_battery_kw, planned_action,
                                    solar_kw, grid_w, battery_w,
                                    gshp_kw=0.0, leaf_kw=0.0,
-                                   max_battery_kw=10.0):
+                                   max_battery_kw=10.0,
+                                   phase_currents=None):
     """
     Adjust planned battery setpoint based on real-time sensor readings.
 
@@ -152,6 +164,9 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
     For 'idle': opportunistically charges/discharges to minimize grid flow.
     For price-arbitrage actions (charge_mixed, charge_grid, discharge_mixed,
     discharge_export): returns the planned setpoint unchanged.
+
+    Additionally, caps the setpoint to prevent exceeding the main fuse limit
+    on any of the three phases (if phase_currents are provided).
 
     Args:
         planned_battery_kw (float): Planned battery power in kW
@@ -165,6 +180,8 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
         gshp_kw (float): Actual GSHP power in kW.
         leaf_kw (float): Actual Leaf charging power in kW.
         max_battery_kw (float): Maximum battery power in kW.
+        phase_currents (list of float, optional): Current flow (Amps) per phase
+            at the utility meter (positive = import, negative = export).
 
     Returns:
         tuple: (adjusted_battery_kw, log_message)
@@ -208,6 +225,53 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
                            f'(import {grid_w:.0f}W)')
         else:
             adjusted_battery_kw = 0.0
+
+    # Phase current capping
+    if phase_currents and any(c is not None for c in phase_currents):
+        # Check all phases for fuse limit (25A default)
+        main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
+        
+        # Power limits in Watts
+        # For a 3-phase inverter, we assume power is distributed equally.
+        # So each phase gets 1/3 of the total battery power.
+        # Current change on one phase = (ΔP_total / 3) / 230V
+        # => ΔP_total = ΔI_phase * 3 * 230V
+        
+        phase_caps_w = []
+        for i, Ip in enumerate(phase_currents):
+            if Ip is None: continue
+            
+            # Max power increase (charging more) before hitting import fuse limit
+            # Ip + (P_extra / 3) / 230 <= fuse
+            # P_extra <= (fuse - Ip) * 3 * 230
+            # P_max = P_current + P_extra
+            p_max_p = battery_w + (main_fuse_a - Ip) * 3 * 230.0
+            
+            # Max power decrease (discharging more) before hitting export fuse limit
+            # Ip + (P_extra / 3) / 230 >= -fuse
+            # P_extra >= (-fuse - Ip) * 3 * 230
+            # P_min = P_current + P_extra
+            p_min_p = battery_w + (-main_fuse_a - Ip) * 3 * 230.0
+            
+            phase_caps_w.append((p_min_p, p_max_p))
+            
+        if phase_caps_w:
+            combined_min_w = max([c[0] for c in phase_caps_w])
+            combined_max_w = min([c[1] for c in phase_caps_w])
+            
+            # Convert to kW for comparison with adjusted_battery_kw
+            combined_min_kw = combined_min_w / 1000.0
+            combined_max_kw = combined_max_w / 1000.0
+            
+            old_setpoint = adjusted_battery_kw
+            adjusted_battery_kw = max(combined_min_kw, min(combined_max_kw, adjusted_battery_kw))
+            
+            if abs(adjusted_battery_kw - old_setpoint) > 0.01:
+                cap_msg = f" (phase cap: {combined_min_kw:.2f}..{combined_max_kw:.2f}kW)"
+                if log_message:
+                    log_message += cap_msg
+                else:
+                    log_message = f"Phase cap applied: {old_setpoint:.2f}kW -> {adjusted_battery_kw:.2f}kW{cap_msg}"
 
     # Clamp to physical limits
     adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, adjusted_battery_kw))

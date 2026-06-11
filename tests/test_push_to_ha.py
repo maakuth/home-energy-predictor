@@ -502,6 +502,112 @@ class TestLoadFollowing(unittest.TestCase):
         )
         self.assertAlmostEqual(adjusted, 10.0)
 
+class TestPhaseCapping(unittest.TestCase):
+    def test_no_phase_cap_needed(self):
+        """Should not cap if currents are well within limits."""
+        # planned 5kW charge, phase currents 10A each (fuse 25A)
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=5.0,
+            planned_action='charge_mixed',
+            solar_kw=0.0,
+            grid_w=5000.0,
+            battery_w=5000.0,
+            phase_currents=[10.0, 10.0, 10.0]
+        )
+        self.assertAlmostEqual(adjusted, 5.0)
+        self.assertEqual(msg, '')
+
+    def test_import_phase_cap(self):
+        """Should cap charge if one phase hits import limit."""
+        # planned 10kW charge (approx 14.5A per phase)
+        # current Ip = 20A. If we add 10kW charge, Ip becomes 20 + 14.5 = 34.5A (>25A)
+        # Max extra current allowed: 25 - 20 = 5A
+        # Max extra power: 5A * 3 * 230V = 3450W
+        # Current battery_w = 10000W
+        # Max allowed P = 10000 + 3450 = 13450W (wait, Ip includes current battery contribution)
+        # If Ip = 20A and battery_w = 5kW (approx 7.2A per phase)
+        # Then non-battery load on phase is 20 - 7.2 = 12.8A
+        # Max battery contribution: 25 - 12.8 = 12.2A
+        # Max battery power: 12.2 * 3 * 230 = 8418W = 8.42kW
+        
+        # Test case: Ip=20A, battery_w=0, planned=10kW charge
+        # Max extra: (25 - 20) * 3 * 230 = 3450W = 3.45kW
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=10.0,
+            planned_action='charge_mixed',
+            solar_kw=0.0,
+            grid_w=10000.0,
+            battery_w=0.0,
+            phase_currents=[20.0, 10.0, 10.0]
+        )
+        self.assertAlmostEqual(adjusted, 3.45)
+        self.assertIn('phase cap', msg)
+
+    def test_export_phase_cap(self):
+        """Should cap discharge if one phase hits export limit."""
+        # planned 10kW discharge (-14.5A per phase)
+        # Ip = -20A (exporting). Max allowed export -25A.
+        # Max extra export current: -25 - (-20) = -5A
+        # Max extra export power: -5A * 3 * 230V = -3450W = -3.45kW
+        # Current battery_w = 0
+        # New setpoint should be -3.45kW
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=-10.0,
+            planned_action='discharge_export',
+            solar_kw=0.0,
+            grid_w=-10000.0,
+            battery_w=0.0,
+            phase_currents=[-20.0, -10.0, -10.0]
+        )
+        self.assertAlmostEqual(adjusted, -3.45)
+        self.assertIn('phase cap', msg)
+
+    def test_forced_discharge_to_assist_import_overload(self):
+        """Should discharge as much as possible (up to limit) if phase is overloaded."""
+        # Ip = 30A (exceeding 25A fuse). battery_w = 0.
+        # Max P_extra = (25 - 30) * 3 * 230 = -3450W = -3.45kW
+        # So it MUST discharge AT LEAST 3.45kW.
+        # Since grid_w is 20kW, opportunistic discharge wants to do 10kW.
+        # 10kW is within the "safe" range (any discharge >= 3.45kW is safe for import limit).
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            solar_kw=0.0,
+            grid_w=20000.0,
+            battery_w=0.0,
+            phase_currents=[30.0, 10.0, 10.0]
+        )
+        self.assertAlmostEqual(adjusted, -10.0) # Opportunistic discharge takes it further
+        # No Phase cap msg because opportunistic discharge already made it safe
+
+    def test_forced_discharge_from_zero(self):
+        """Should force discharge if house load exceeds fuse and no opportunistic discharge happens."""
+        # Ip = 30A, but grid_w is small (maybe sensors are inconsistent or we are in a deadband)
+        # We'll use a planned_action that doesn't have opportunistic discharge to be sure.
+        # Actually, let's just use idle with grid_w in deadband.
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            solar_kw=0.0,
+            grid_w=200.0, # Within idle deadband (500W)
+            battery_w=0.0,
+            phase_currents=[30.0, 10.0, 10.0]
+        )
+        self.assertAlmostEqual(adjusted, -3.45)
+        self.assertIn('Phase cap applied', msg)
+
+    def test_partial_phase_data(self):
+        """Should handle None in phase currents."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=5.0,
+            planned_action='charge_mixed',
+            solar_kw=0.0,
+            grid_w=5000.0,
+            battery_w=0.0,
+            phase_currents=[20.0, None, 10.0]
+        )
+        self.assertAlmostEqual(adjusted, 3.45) # Still caps based on phase 1
+
 
 if __name__ == '__main__':
     unittest.main()
