@@ -66,6 +66,7 @@ The dispatch logic uses a **profit-only** strategy with **marginal opportunity c
 | `BATTERY_DISCHARGE_EFFICIENCY` | Discharge conversion efficiency. | `0.95` | Clamped to `[0.01, 1.0]` in code. |
 | `BATTERY_ALLOW_EXPORT` | Whether stored energy may be sold back to the grid. | `true` | When `false`, `discharge_to_export` is blocked and only self-consumption discharge is allowed. |
 | `BATTERY_ALLOW_EXPORT_ENTITY` | Home Assistant boolean entity ID that overrides `BATTERY_ALLOW_EXPORT` at runtime. | `input_boolean.battery_allow_export` | The switch state (`on`/`off`) takes precedence over the env variable. If the entity is unavailable, the env value is used as fallback. |
+| `BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH` | Minimum price margin (EUR/kWh) to trigger near-term arbitrage grid charging. | `0.005` | Set to `0.0` for aggressive local arbitrage (capture all profitable 15-min spreads). Set to `0.005` (default) to avoid cycling for micro-gains. Only affects grid charging; discharge decisions are unaffected. |
 
 ---
 

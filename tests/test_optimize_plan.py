@@ -750,6 +750,141 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertGreater(plan_short[8]["charge_from_grid_kwh"], plan_long[8]["charge_from_grid_kwh"],
                            "Short lookahead should charge from grid at cheap hour 8")
 
+    def test_local_arbitrage_15min_spread(self):
+        """Battery should grid-charge in cheap period to discharge in imminent expensive period,
+        even if a cheaper period exists further out. Near-term opportunities take precedence."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "10",  # At minimum
+                "BATTERY_MAX_CHARGE_KW": "5",
+                "BATTERY_MAX_DISCHARGE_KW": "5",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "false",
+                "BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH": "0.005",
+            }
+        ):
+            # Three 15-min intervals: cheap (0.091), expensive (0.119), cheaper (0.050)
+            # Load 1.0 kWh each interval
+            predictions = np.array([1.0, 1.0, 1.0])
+            solar = np.array([0.0, 0.0, 0.0])
+            import_prices = np.array([0.091, 0.119, 0.050])
+            export_prices = np.array([0.050, 0.050, 0.050])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "15"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0 (cheap 0.091): should grid-charge to prepare for expensive interval 1
+        # Margin check: 0.119 - 0.091 = 0.028 > 0.005, so profitable
+        self.assertEqual(plan[0]["battery_action"], "charge_grid",
+                        "Interval 0 should grid-charge for profitable near-term discharge")
+        self.assertGreater(plan[0]["charge_from_grid_kwh"], 0.0)
+
+        # Interval 1 (expensive 0.119): should discharge to load (profitable vs 0.091)
+        # After charging in interval 0, SOC should be sufficient
+        self.assertIn(plan[1]["battery_action"], ("discharge_load", "discharge_mixed", "idle"),
+                      "Interval 1 (expensive) should discharge or prepare")
+
+    def test_grid_charge_sized_to_near_term_need(self):
+        """Grid charge should be sized to actual near-term load, not max power."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "20",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "10",  # At minimum
+                "BATTERY_MAX_CHARGE_KW": "10",
+                "BATTERY_MAX_DISCHARGE_KW": "10",
+                "BATTERY_CHARGE_EFFICIENCY": "0.95",
+                "BATTERY_DISCHARGE_EFFICIENCY": "0.95",
+                "BATTERY_ALLOW_EXPORT": "false",
+                "BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH": "0.005",
+            }
+        ):
+            # Hourly intervals: cheap now (0.05), expensive soon (0.20), cheap later (0.05)
+            # Load 2.0 kWh/h for 2h, then no load
+            predictions = np.array([2.0, 2.0, 0.0])
+            solar = np.array([0.0, 0.0, 0.0])
+            import_prices = np.array([0.05, 0.20, 0.05])
+            export_prices = np.array([0.03, 0.10, 0.03])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: should charge enough for interval 1's load (~2 kWh output needed)
+        # Accounting for round-trip efficiency: 2.0 / (0.95 * 0.95) ≈ 2.22 kWh input
+        self.assertEqual(plan[0]["battery_action"], "charge_grid")
+        # Should be less than max_charge (10 kWh) and sized to need
+        self.assertGreater(plan[0]["charge_from_grid_kwh"], 1.0)
+        self.assertLess(plan[0]["charge_from_grid_kwh"], 5.0,
+                       "Charge should be sized to near-term need, not max power")
+
+    def test_prefer_nearer_cheap_window_over_distant(self):
+        """When no near-term expensive load, don't charge at distant cheap intervals."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "50",
+                "BATTERY_MAX_CHARGE_KW": "5",
+                "BATTERY_MAX_DISCHARGE_KW": "5",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "false",
+                "BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH": "0.005",
+            }
+        ):
+            # Prices: 0.05 (cheap), 0.20 (expensive), 0.20, 0.03 (cheaper, far away)
+            # No load at all
+            predictions = np.array([0.0, 0.0, 0.0, 0.0])
+            solar = np.array([0.0, 0.0, 0.0, 0.0])
+            import_prices = np.array([0.05, 0.20, 0.20, 0.03])
+            export_prices = np.array([0.03, 0.10, 0.10, 0.02])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0 (0.05): no profitable near-term discharge (no load before 0.03)
+        # Should NOT grid-charge just because 0.03 exists in future without pressure
+        self.assertEqual(plan[0]["battery_action"], "idle",
+                        "Should not charge at cheap interval without near-term discharge need")
+        self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 0.0, places=5)
+
+    def test_no_charge_on_unprofitable_spread(self):
+        """Reject small unprofitable spreads (round-trip cost > profit)."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "10",  # At minimum
+                "BATTERY_MAX_CHARGE_KW": "5",
+                "BATTERY_MAX_DISCHARGE_KW": "5",
+                "BATTERY_CHARGE_EFFICIENCY": "0.95",
+                "BATTERY_DISCHARGE_EFFICIENCY": "0.95",
+                "BATTERY_ALLOW_EXPORT": "false",
+                "BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH": "0.005",
+            }
+        ):
+            # Tiny 1% spread: 0.100 -> 0.101. With ~5% round-trip loss, unprofitable.
+            # Load 1.0 kWh in interval 1.
+            predictions = np.array([1.0, 1.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.100, 0.101])
+            export_prices = np.array([0.050, 0.051])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: spread is too small to overcome round-trip loss
+        self.assertEqual(plan[0]["battery_action"], "idle",
+                        "Should not charge on unprofitable micro-spread")
+        self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 0.0, places=5)
+
 
 class EffectiveCostTests(unittest.TestCase):
     def test_effective_cost_when_grid_importing(self):

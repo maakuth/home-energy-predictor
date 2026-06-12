@@ -262,6 +262,54 @@ def _compute_reserved_kwh(sim_soc, start_idx, horizon, net_without_battery,
     return min(reserved, total_available_output_kwh)
 
 
+def _find_near_term_discharge_need(
+    start_idx, horizon, net_without_battery,
+    import_prices, export_prices, allow_export,
+    min_soc_kwh, discharge_eff, max_discharge_kw,
+    interval_hours, margin_eur_per_kwh=0.0, max_lookahead_hours=4.0
+):
+    """
+    Find profitable discharge opportunities before the next cheaper import window.
+    
+    Returns (output_kwh_needed, last_profitable_idx):
+      - output_kwh_needed: total kWh discharge value needed (output after discharge_eff applied)
+      - last_profitable_idx: last interval where discharge is profitable
+    
+    The lookahead is capped to max_lookahead_hours to avoid distant cheap intervals
+    from triggering unnecessary early charging.
+    
+    Profitable discharge at interval j (from current interval's perspective):
+    - If future import_prices[j] > current_import: we save money by discharging then
+    - But only if j is before the next cheaper window (where we'd rather save energy)
+    """
+    current_import = import_prices[start_idx]
+    
+    # Find next cheaper import (within lookahead window)
+    max_lookahead_intervals = int(max_lookahead_hours / interval_hours)
+    next_cheaper_idx = min(start_idx + max_lookahead_intervals, horizon)
+    
+    for j in range(start_idx + 1, next_cheaper_idx):
+        if import_prices[j] < current_import - margin_eur_per_kwh - 1e-9:
+            next_cheaper_idx = j
+            break
+    
+    # Sum profitable load discharge up to next_cheaper_idx
+    # Discharge is profitable if the future price is HIGHER than current (we avoid paying that high price)
+    total_output_needed = 0.0
+    last_profitable_idx = start_idx
+    
+    for j in range(start_idx + 1, next_cheaper_idx):
+        net_j = float(net_without_battery[j])
+        if net_j > 0:  # Load exists
+            # Profitable if import_prices[j] > current_import (future is more expensive)
+            if import_prices[j] > current_import + margin_eur_per_kwh + 1e-9:
+                max_discharge_load = min(net_j, max_discharge_kw * interval_hours)
+                total_output_needed += max_discharge_load
+                last_profitable_idx = j
+    
+    return total_output_needed, last_profitable_idx
+
+
 def compute_effective_cost(entry):
     """
     Compute the marginal cost (EUR/kWh) of adding an extra load at this interval.
@@ -511,12 +559,46 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         profitable_grid_charge = (best_future_value * charge_eff) > current_import
         is_cheapest_window = current_import <= min_future_import + 1e-9
 
-        if (not solar_can_fill and profitable_grid_charge and is_cheapest_window
+        # New: Near-term arbitrage logic
+        margin_eur = get_env_float('BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH', 0.005)
+        output_needed, _ = _find_near_term_discharge_need(
+            i, horizon, net_without_battery,
+            import_prices, export_prices, allow_export,
+            min_soc_kwh, discharge_eff, max_discharge_kw,
+            interval_hours, margin_eur, max_lookahead_hours=4.0
+        )
+        has_profitable_near_term = output_needed > 1e-6
+        
+        # Also check if current is strictly cheapest within the near-term lookahead window
+        # (not just tied, but actually cheaper than all future near-term prices)
+        max_lookahead_intervals = int(4.0 / interval_hours)
+        end_idx = min(i + max_lookahead_intervals, horizon)
+        min_near_term_future = float(np.min(import_prices[i+1:end_idx])) if i+1 < end_idx else current_import
+        is_strictly_cheapest_in_near_term = current_import < min_near_term_future - 1e-9
+
+        if (not solar_can_fill and profitable_grid_charge 
+            and (is_cheapest_window or has_profitable_near_term)
             and charge_from_solar == 0.0 and discharge_to_load == 0.0
             and discharge_to_export == 0.0 and not spill_risk):
+            
+            # Decide how much to charge based on context
+            if has_profitable_near_term and not is_strictly_cheapest_in_near_term:
+                # Near-term arbitrage with future cheaper/equal option: size to near-term need only
+                needed_output_kwh = output_needed
+                available_after_discharge = max(0.0, (soc_kwh - min_soc_kwh) * discharge_eff)
+                shortfall_output_kwh = max(0.0, needed_output_kwh - available_after_discharge)
+                # Convert back to input kWh through round-trip efficiency
+                needed_input_kwh = shortfall_output_kwh / (charge_eff * discharge_eff) if charge_eff * discharge_eff > 0.01 else 0.0
+            else:
+                # Classic cheapest-window charging: fill remaining room
+                # Triggered when is_cheapest_window=True (globally cheapest)
+                # or when has_profitable_near_term=True AND is strictly cheapest in near-term window
+                needed_input_kwh = max(0.0, max_soc_kwh - soc_kwh) / charge_eff if charge_eff > 0.01 else 0.0
+            
             soc_room_kwh = max(0.0, max_soc_kwh - soc_kwh)
-            charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff)
-            max_grid_charge_kwh = min(charge_limit_input_kwh, available_grid_kwh)
+            charge_limit_input_kwh = min(max_charge_kw * interval_hours, soc_room_kwh / charge_eff if charge_eff > 0.01 else 0.0)
+            max_grid_charge_kwh = min(charge_limit_input_kwh, available_grid_kwh, needed_input_kwh)
+            
             if max_grid_charge_kwh > 1e-4:
                 charge_from_grid = max_grid_charge_kwh
                 soc_kwh += charge_from_grid * charge_eff
