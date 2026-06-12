@@ -59,6 +59,21 @@ class TestBatteryPlannerReplay(unittest.TestCase):
 class TestBatteryPlannerReplayParametrized:
     """Parametrized replay tests for each fixture and planner combination."""
     
+    @staticmethod
+    def _print_planner_score(result, fixture_name, planner_name):
+        """Print a summary of planner performance."""
+        print(f"\n{'='*60}")
+        print(f"Planner Score: {planner_name} on {fixture_name}")
+        print(f"{'='*60}")
+        print(f"  Intervals run:      {result['intervals_run']}")
+        print(f"  Baseline cost:      {result['cost_no_battery_eur']:.2f} EUR")
+        print(f"  With battery:       {result['cost_with_battery_eur']:.2f} EUR")
+        print(f"  Savings:            {result['savings_eur']:.2f} EUR")
+        print(f"  Savings %:          {result['savings_pct']:.1f}%")
+        print(f"  Final SoC:          {result['final_soc_pct']:.1f}%")
+        print(f"  SoC violations:     {result['soc_violations']}")
+        print(f"{'='*60}\n")
+    
     def test_planner_replay_no_violations(self, fixture_path, planner_name):
         """Planner should respect SoC constraints throughout simulation."""
         fixture = load_fixture(fixture_path)
@@ -86,6 +101,9 @@ class TestBatteryPlannerReplayParametrized:
         assert result['soc_violations'] == 0, \
             f"SoC constraint violations: {result['soc_violation_details']}"
         assert result['intervals_run'] > 0, "No intervals were simulated"
+        
+        # Print planner score
+        self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
     def test_planner_replay_finite_cost(self, fixture_path, planner_name):
         """Planner output should not produce NaN or infinite costs."""
@@ -115,6 +133,9 @@ class TestBatteryPlannerReplayParametrized:
             f"Cost with battery is not finite: {result['cost_with_battery_eur']}"
         assert np.isfinite(result['cost_no_battery_eur']), \
             f"Baseline cost is not finite: {result['cost_no_battery_eur']}"
+        
+        # Print planner score
+        self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
     def test_planner_replay_not_worse_than_baseline(self, fixture_path, planner_name):
         """Planner cost should not significantly exceed no-battery baseline.
@@ -150,6 +171,9 @@ class TestBatteryPlannerReplayParametrized:
         
         assert planner_cost <= max_acceptable_cost, \
             f"Planner cost {planner_cost:.2f} EUR exceeds baseline by 10%: {baseline_cost:.2f} EUR"
+        
+        # Print planner score
+        self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
     def test_planner_output_structure(self, fixture_path, planner_name):
         """Planner output should have correct structure and valid values."""

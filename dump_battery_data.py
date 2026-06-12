@@ -219,8 +219,86 @@ def fetch_predictions(start_time=None, end_time=None):
     return preds
 
 
+def fetch_nordpool_prices_from_ha(start_time, end_time, verbose=False):
+    """Fetch historical Nordpool prices from HA PostgreSQL database.
+    
+    Queries the states table for sensor.nordpool_total history.
+    """
+    prices = []
+    
+    try:
+        import psycopg2
+        from utils.db_utils import fetch_states_history
+    except ImportError:
+        if verbose:
+            print(f"  ℹ️ PostgreSQL client not available for HA price history")
+        return prices
+    
+    try:
+        # Fetch nordpool price history
+        delta = end_time - start_time
+        hours = delta.total_seconds() / 3600.0
+        
+        hist_data = fetch_states_history(['sensor.nordpool_total'], hours=hours)
+        
+        if 'sensor.nordpool_total' not in hist_data or hist_data['sensor.nordpool_total'] is None:
+            if verbose:
+                print(f"  ℹ️ No nordpool_total history found in HA")
+            return prices
+        
+        df = hist_data['sensor.nordpool_total']
+        if df.empty:
+            return prices
+        
+        # Parse the state values (they're stored as JSON or as numbers)
+        import json
+        
+        for ts, row in df.iterrows():
+            try:
+                state_value = row.get('state', 0.0)
+                
+                # Try to convert directly (if it's a number string)
+                try:
+                    import_price = float(state_value)
+                except (ValueError, TypeError):
+                    # If that fails, it might be JSON. Try to parse it
+                    try:
+                        data = json.loads(state_value)
+                        import_price = float(data.get('current_price', data))
+                    except:
+                        continue
+                
+                # Skip if outside time range (shouldn't happen but be safe)
+                if ts < start_time or ts > end_time:
+                    continue
+                
+                prices.append({
+                    'timestamp': ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
+                    'import_price': import_price,
+                    'export_price': max(0, import_price - 0.05),  # Typical spread
+                })
+            except (ValueError, KeyError, TypeError):
+                continue
+        
+        if verbose and prices:
+            print(f"  ✓ Loaded {len(prices)} price records from HA Nordpool history")
+        
+        return prices
+    
+    except Exception as e:
+        if verbose:
+            print(f"  ℹ️ Error fetching prices from HA: {e}")
+        return prices
+
+
 def fetch_market_prices_range(start_time, end_time, verbose=False):
-    """Fetch market prices for the given time range."""
+    """Fetch market prices for the given time range.
+    
+    Tries multiple sources in order:
+    1. future_predictions.json file
+    2. SQLite predictions table (import/export prices)
+    3. HA PostgreSQL states table (sensor.nordpool_total)
+    """
     prices = []
     
     if verbose:
@@ -248,10 +326,10 @@ def fetch_market_prices_range(start_time, end_time, verbose=False):
                         continue
                 
                 if verbose and prices:
-                    print(f"  ✓ Loaded {len(prices)} price records from predictions")
+                    print(f"  ✓ Loaded {len(prices)} price records from predictions file")
                     return prices
         
-        # If no prices in predictions file, try to get from database
+        # Try to get from SQLite predictions table
         try:
             conn = get_db_connection()
             cur = conn.cursor()
@@ -282,13 +360,25 @@ def fetch_market_prices_range(start_time, end_time, verbose=False):
                     })
                 
                 if verbose and prices:
-                    print(f"  ✓ Loaded {len(prices)} price records from database")
+                    print(f"  ✓ Loaded {len(prices)} price records from SQLite predictions table")
+                    cur.close()
+                    conn.close()
+                    return prices
             
             cur.close()
             conn.close()
         except Exception as db_err:
             if verbose:
-                print(f"  ℹ️ Could not fetch from database: {db_err}")
+                print(f"  ℹ️ Could not fetch from SQLite: {db_err}")
+        
+        # Try to get from HA PostgreSQL (sensor.nordpool_total historical data)
+        try:
+            prices = fetch_nordpool_prices_from_ha(start_time, end_time, verbose=verbose)
+            if prices:
+                return prices
+        except Exception as ha_err:
+            if verbose:
+                print(f"  ℹ️ Could not fetch from HA PostgreSQL: {ha_err}")
         
         if not prices and verbose:
             print(f"  ℹ️ No market prices found")
@@ -321,7 +411,11 @@ def synthesize_predictions(measurements, start_time, end_time, verbose=False):
     df_meas['timestamp'] = pd.to_datetime(df_meas['timestamp'], utc=True)
     df_meas = df_meas.sort_values('timestamp').set_index('timestamp')
     
-    # For each measurement, create a forecast "made 24 hours earlier"
+    # Generate realistic price variation (Nordic Pool typical range)
+    # Daily factor: varies by day for realistic market movement
+    num_days = (df_meas.index[-1] - df_meas.index[0]).days + 1
+    day_factors = np.random.normal(1.0, 0.15, num_days)  # Some days expensive, some cheap
+    
     for i, (ts, row) in enumerate(df_meas.iterrows()):
         # This measurement is the forecast target
         target_ts = ts
@@ -342,12 +436,24 @@ def synthesize_predictions(measurements, start_time, end_time, verbose=False):
         predicted_usage = actual_usage + bias_kw + random_error
         predicted_usage = max(0, predicted_usage)
         
-        # Synthesize realistic market prices (0.05-0.30 EUR/kWh range)
-        # Vary by hour of day (higher at peak hours)
+        # Synthesize realistic Nordic Pool market prices
         hour = ts.hour
-        base_price = 0.10
-        peak_multiplier = 1 + 0.8 * np.sin((hour - 6) * np.pi / 12) if 6 <= hour <= 18 else 0.8
-        import_price = max(0.05, base_price * peak_multiplier)
+        day_of_period = (ts - df_meas.index[0]).days
+        
+        # Base hourly pattern (peak during daytime, low at night)
+        if 6 <= hour <= 22:
+            base_hourly = 0.15 + 0.08 * np.sin((hour - 6) * np.pi / 16)
+        else:
+            base_hourly = 0.08
+        
+        # Add day-to-day variation
+        day_factor = day_factors[min(day_of_period, len(day_factors) - 1)]
+        
+        # Add small random noise for intraday variability
+        np.random.seed(int(ts.timestamp()))
+        noise = np.random.normal(0, 0.01)
+        
+        import_price = max(0.05, base_hourly * day_factor + noise)
         export_price = max(0, import_price - 0.05)
         
         # Get solar data if available, default to 0 if missing
