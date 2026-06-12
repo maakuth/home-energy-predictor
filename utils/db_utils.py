@@ -71,7 +71,8 @@ def fetch_states_history(entity_ids, hours=1, start_time=None):
             df = pd.DataFrame(entries)
             df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
             df['state'] = pd.to_numeric(df['state'], errors='coerce')
-            results[eid] = df.dropna().sort_values('timestamp').drop(columns=['ts'])
+            # Set timestamp as index to ensure proper datetime-based filtering
+            results[eid] = df.dropna().sort_values('timestamp').set_index('timestamp').drop(columns=['ts'])
 
         return results
 

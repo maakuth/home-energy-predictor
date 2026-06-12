@@ -236,13 +236,14 @@ def predict():
 
             # 1h lag
             target_ts_1h = datetime.now(timezone.utc) - timedelta(hours=1)
-            temp_df = leaf_df.set_index('timestamp')
+            # fetch_states_history now returns DataFrames with timestamp as index
+            temp_df = leaf_df if isinstance(leaf_df.index, pd.DatetimeIndex) else leaf_df.set_index('timestamp')
             idx = temp_df.index.get_indexer([target_ts_1h], method='nearest')[0]
             leaf_lag_1h = float(temp_df.iloc[idx]['state']) if idx != -1 else 0.0
 
             # 24h energy proxy (kWh)
             # Power is in Watts. Average power * 24 hours / 1000 = kWh
-            leaf_energy_24h = (leaf_df['state'].astype(float).mean() * 24.0) / 1000.0
+            leaf_energy_24h = (temp_df['state'].astype(float).mean() * 24.0) / 1000.0
 
             return leaf_lag_1h, leaf_energy_24h
         except Exception as e:
