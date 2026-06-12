@@ -576,10 +576,17 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         min_near_term_future = float(np.min(import_prices[i+1:end_idx])) if i+1 < end_idx else current_import
         is_strictly_cheapest_in_near_term = current_import < min_near_term_future - 1e-9
 
-        if (not solar_can_fill and profitable_grid_charge 
-            and (is_cheapest_window or has_profitable_near_term)
-            and charge_from_solar == 0.0 and discharge_to_load == 0.0
-            and discharge_to_export == 0.0 and not spill_risk):
+        # Grid charging decision: allow both global cheapest and near-term arbitrage scenarios
+        # For near-term arbitrage: allow grid charging even if solar exists, because we want
+        # to prepare for an upcoming expensive period that's sooner than solar can fill
+        allow_grid_charge_near_term = has_profitable_near_term and discharge_to_load == 0.0 and discharge_to_export == 0.0
+        allow_grid_charge_global = (not solar_can_fill and is_cheapest_window and discharge_to_load == 0.0 
+                                    and discharge_to_export == 0.0)
+        
+        if (profitable_grid_charge 
+            and (allow_grid_charge_near_term or allow_grid_charge_global)
+            and discharge_to_load == 0.0 and discharge_to_export == 0.0
+            and not spill_risk):
             
             # Decide how much to charge based on context
             if has_profitable_near_term and not is_strictly_cheapest_in_near_term:

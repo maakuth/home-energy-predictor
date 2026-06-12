@@ -885,6 +885,45 @@ class OptimizePlanTests(unittest.TestCase):
                         "Should not charge on unprofitable micro-spread")
         self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 0.0, places=5)
 
+    def test_solar_inclusive_arbitrage(self):
+        """Battery should grid-charge for near-term arbitrage even with solar present."""
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "10",  # At minimum
+                "BATTERY_MAX_CHARGE_KW": "5",
+                "BATTERY_MAX_DISCHARGE_KW": "5",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "false",
+                "BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH": "0.005",
+            }
+        ):
+            # Interval 0: cheap import (0.083), some solar (2.0 kW), small load (1.0 kW)
+            # Interval 1: expensive import (0.105), less solar (1.5 kW), large load (3.0 kW)
+            # Interval 2: cheap import (0.080), good solar (3.0 kW)
+            # Even though solar exists, interval 0 is cheaper than interval 1.
+            # Should grid-charge in interval 0 to prepare for expensive interval 1 load.
+            predictions = np.array([1.0, 3.0, 0.0])
+            solar = np.array([2.0, 1.5, 3.0])
+            import_prices = np.array([0.083, 0.105, 0.080])
+            export_prices = np.array([0.050, 0.050, 0.050])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: should grid-charge despite solar being present
+        # Spread: 0.105 - 0.083 = 0.022 > 0.005 margin, profitable
+        self.assertEqual(plan[0]["battery_action"], "charge_mixed",  # solar + grid
+                        "Should grid-charge for near-term arbitrage even with solar")
+        self.assertGreater(plan[0]["charge_from_grid_kwh"], 0.0)
+
+        # Interval 1: should discharge to load (expensive period)
+        self.assertIn(plan[1]["battery_action"], ("discharge_load", "discharge_mixed", "idle"),
+                      "Interval 1 (expensive) should discharge")
+
 
 class EffectiveCostTests(unittest.TestCase):
     def test_effective_cost_when_grid_importing(self):
