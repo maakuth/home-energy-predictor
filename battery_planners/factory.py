@@ -16,6 +16,11 @@ class BatteryPlannerFactory:
         cls._planners[name.lower()] = planner_class
     
     @classmethod
+    def names(cls) -> tuple:
+        """Get sorted tuple of registered planner names."""
+        return tuple(sorted(cls._planners.keys()))
+    
+    @classmethod
     def create(cls, planner_type: Optional[str] = None) -> BatteryPlanner:
         """
         Create a battery planner instance.
