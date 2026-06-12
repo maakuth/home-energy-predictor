@@ -305,14 +305,16 @@ def predict():
     hours_to_fetch = (now_local - yesterday_evening_start).total_seconds() / 3600.0 + 4.0
     s_yesterday_dict = fetch_states_history('sensor.sauna_temperature_2', hours=hours_to_fetch)
     s_yesterday = s_yesterday_dict.get('sensor.sauna_temperature_2', pd.DataFrame())
-    
+     
     was_warm_yesterday = False
     if not s_yesterday.empty:
         # Filter to 18-22 window
+        # timestamp is now the index, so we use the index directly
+        timestamp_series = s_yesterday.index if isinstance(s_yesterday.index, pd.DatetimeIndex) else s_yesterday['timestamp']
         s_y_window = s_yesterday[
-            (s_yesterday['timestamp'].dt.hour >= 18) & 
-            (s_yesterday['timestamp'].dt.hour <= 22) &
-            (s_yesterday['timestamp'].dt.day == yesterday_evening_start.day)
+            (timestamp_series.hour >= 18) & 
+            (timestamp_series.hour <= 22) &
+            (timestamp_series.day == yesterday_evening_start.day)
         ]
         if not s_y_window.empty and s_y_window['state'].max() > 50.0:
             was_warm_yesterday = True
