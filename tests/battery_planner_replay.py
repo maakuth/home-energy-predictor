@@ -85,16 +85,17 @@ class BatteryReplaySimulator:
     def get_visible_predictions(self, planning_time) -> pd.DataFrame:
         """Get predictions visible at planning_time.
         
-        Returns only predictions where generated_at <= planning_time.
+        Returns only predictions where generated_at <= planning_time AND target_timestamp >= planning_time.
         For each target_timestamp, returns only the latest forecast generated
         before or at planning_time.
         """
         if self.predictions_df is None or self.predictions_df.empty:
             return pd.DataFrame()
         
-        # Filter to predictions generated before or at planning_time
+        # Filter to predictions generated before or at planning_time AND target is in the future
         visible = self.predictions_df[
-            self.predictions_df.index.get_level_values('generated_at') <= planning_time
+            (self.predictions_df.index.get_level_values('generated_at') <= planning_time) &
+            (self.predictions_df.index.get_level_values('target_timestamp') >= planning_time)
         ]
         
         if visible.empty:
@@ -311,7 +312,11 @@ class BatteryReplaySimulator:
                 # actual_load = grid power (total_power_kw) + solar generation
                 # If solar_actual_kw not available, just use grid power (conservative)
                 actual_solar = measurements.get('solar_actual_kw', 0.0)
-                actual_load = measurements.get('total_power_kw', 0.0) + actual_solar
+                actual_load_kw = measurements.get('total_power_kw', 0.0) + actual_solar
+                
+                # Convert load to kWh for the interval (15 min = 0.25 hours)
+                interval_hours = 0.25
+                actual_load_kwh = actual_load_kw * interval_hours
                 
                 # Apply battery action and compute grid exchange
                 battery_charge_kwh = entry.charge_from_solar_kwh + entry.charge_from_grid_kwh
@@ -342,12 +347,12 @@ class BatteryReplaySimulator:
                 import_price = import_prices[0] if len(import_prices) > 0 else 0.15
                 export_price = export_prices[0] if len(export_prices) > 0 else 0.05
                 
-                # Realized grid exchange
-                grid_import = max(0.0, actual_load - battery_discharge_kwh)
-                grid_export = max(0.0, battery_discharge_kwh - actual_load)
+                # Realized grid exchange (both in kWh)
+                grid_import = max(0.0, actual_load_kwh - battery_discharge_kwh)
+                grid_export = max(0.0, battery_discharge_kwh - actual_load_kwh)
                 
                 interval_cost_battery = grid_import * import_price - grid_export * export_price
-                interval_cost_no_battery = actual_load * import_price
+                interval_cost_no_battery = actual_load_kwh * import_price
                 
                 cost_with_battery += interval_cost_battery
                 cost_no_battery += interval_cost_no_battery
