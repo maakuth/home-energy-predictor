@@ -238,6 +238,8 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         prediction_timestamps: List[Any],
         committed_load_kwh: np.ndarray = None,
         allow_export: bool = True,
+        initial_soc_pct: float = None,
+        max_lookahead_hours: float = 8.0,
     ) -> List[BatteryPlanEntry]:
         """Generate battery dispatch plan using heuristic opportunity-cost approach."""
         
@@ -247,8 +249,11 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         max_soc_pct = get_env_float('BATTERY_MAX_SOC_PCT', 90.0)
         reserve_soc_pct = get_env_float('BATTERY_RESERVE_SOC_PCT', min_soc_pct)
         
-        # For now, use initial SoC from environment (Home Assistant integration removed from planner)
-        initial_soc_pct = get_env_float('BATTERY_INITIAL_SOC_PCT', 50.0)
+        # Use caller-provided live SOC if available, otherwise fall back to env default
+        if initial_soc_pct is not None:
+            effective_initial_soc_pct = float(initial_soc_pct)
+        else:
+            effective_initial_soc_pct = get_env_float('BATTERY_INITIAL_SOC_PCT', 50.0)
         
         max_charge_kw = get_env_float('BATTERY_MAX_CHARGE_KW', 10.0)
         max_discharge_kw = get_env_float('BATTERY_MAX_DISCHARGE_KW', 10.0)
@@ -266,7 +271,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         
         min_soc_kwh = capacity_kwh * max(min_soc_pct, reserve_soc_pct) / 100.0
         max_soc_kwh = capacity_kwh * max(max_soc_pct, 0.0) / 100.0
-        soc_kwh = min(max(capacity_kwh * initial_soc_pct / 100.0, min_soc_kwh), max_soc_kwh)
+        soc_kwh = min(max(capacity_kwh * effective_initial_soc_pct / 100.0, min_soc_kwh), max_soc_kwh)
         
         horizon = len(predictions_kwh)
         net_without_battery = np.array(predictions_kwh, dtype=float) - np.array(solar_kwh, dtype=float)
@@ -297,7 +302,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                 min_soc_kwh, max_soc_kwh,
                 charge_eff, discharge_eff,
                 max_charge_kw, max_discharge_kw, interval_hours,
-                max_lookahead_hours=8.0
+                max_lookahead_hours=max_lookahead_hours
             )
             
             # 1. Charge from solar surplus (when it's better than exporting)
@@ -323,7 +328,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                 min_soc_kwh, max_soc_kwh,
                 charge_eff, discharge_eff,
                 max_charge_kw, max_discharge_kw, interval_hours,
-                max_lookahead_hours=8.0
+                max_lookahead_hours=max_lookahead_hours
             )
             
             # 2. Discharge to load (partial — only the amount that doesn't sacrifice
@@ -343,7 +348,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                     min_soc_kwh, discharge_eff,
                     max_discharge_kw, interval_hours,
                     current_import,
-                    max_lookahead_hours=8.0
+                    max_lookahead_hours=max_lookahead_hours
                 )
                 dischargeable_kwh = max(0.0, soc_available_kwh * discharge_eff - reserved_for_import)
                 discharge_to_load = min(net_load, discharge_limit_output_kwh, dischargeable_kwh)
@@ -372,7 +377,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                         min_soc_kwh, discharge_eff,
                         max_discharge_kw, interval_hours,
                         current_export,
-                        max_lookahead_hours=8.0
+                        max_lookahead_hours=max_lookahead_hours
                     )
                     exportable_kwh = max(0.0, soc_available_kwh * discharge_eff - reserved_for_export)
                     discharge_to_export = min(remaining_capacity, exportable_kwh)

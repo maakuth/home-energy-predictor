@@ -271,9 +271,8 @@ class BatteryReplaySimulator:
         
         # Simulation loop
         while current_time < end_time and intervals_run < max_planks:
-            # Set current SoC in environment
+            # Compute current SoC to pass directly to planner
             current_soc_pct = (soc_kwh / battery_capacity_kwh) * 100.0
-            os.environ['BATTERY_INITIAL_SOC_PCT'] = str(current_soc_pct)
             
             # Get planner horizon
             predictions, solar, import_prices, export_prices, timestamps = self.get_planner_horizon(
@@ -298,7 +297,8 @@ class BatteryReplaySimulator:
                     import_prices=import_prices,
                     export_prices=export_prices,
                     prediction_timestamps=ts_strings,
-                    allow_export=True
+                    allow_export=True,
+                    initial_soc_pct=current_soc_pct,
                 )
                 
                 if plan is None or len(plan) == 0:

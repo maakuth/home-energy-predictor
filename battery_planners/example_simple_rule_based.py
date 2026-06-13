@@ -49,18 +49,22 @@ class SimpleRuleBasedPlanner(BatteryPlanner):
         prediction_timestamps: List[Any],
         committed_load_kwh: np.ndarray = None,
         allow_export: bool = True,
+        initial_soc_pct: float = None,
     ) -> List[BatteryPlanEntry]:
         """Generate battery dispatch plan using simple rules."""
         
         # Load configuration
         capacity_kwh = get_env_float('BATTERY_CAPACITY_KWH', 40.0)
-        initial_soc_pct = get_env_float('BATTERY_INITIAL_SOC_PCT', 50.0)
+        if initial_soc_pct is not None:
+            effective_initial_soc_pct = float(initial_soc_pct)
+        else:
+            effective_initial_soc_pct = get_env_float('BATTERY_INITIAL_SOC_PCT', 50.0)
         min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
         max_soc_pct = get_env_float('BATTERY_MAX_SOC_PCT', 90.0)
         
         min_soc_kwh = capacity_kwh * min_soc_pct / 100.0
         max_soc_kwh = capacity_kwh * max_soc_pct / 100.0
-        soc_kwh = capacity_kwh * initial_soc_pct / 100.0
+        soc_kwh = capacity_kwh * effective_initial_soc_pct / 100.0
         
         horizon = len(predictions_kwh)
         interval_hours = 0.25  # Default 15 minutes

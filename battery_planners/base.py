@@ -71,6 +71,7 @@ class BatteryPlanner(ABC):
         prediction_timestamps: List[Any],
         committed_load_kwh: np.ndarray = None,
         allow_export: bool = True,
+        initial_soc_pct: float = None,
     ) -> List[BatteryPlanEntry]:
         """
         Generate a battery dispatch plan.
@@ -84,6 +85,8 @@ class BatteryPlanner(ABC):
             committed_load_kwh: Fixed loads (EV, Leaf) that reduce grid capacity but
                                 are not powered by house battery (optional)
             allow_export: Whether battery can export to grid (optional)
+            initial_soc_pct: Current battery state of charge in percent (0-100).
+                If None, the planner reads from BATTERY_INITIAL_SOC_PCT env var.
         
         Returns:
             List of BatteryPlanEntry objects, one per interval

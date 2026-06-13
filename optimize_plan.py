@@ -16,13 +16,17 @@ load_dotenv(override=True)
 
 
 # Backward compatibility wrapper for tests
-def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices, 
-                         committed_load_kwh=None, allow_export=True, max_lookahead_hours=8.0):
+def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices,
+                         committed_load_kwh=None, allow_export=None, max_lookahead_hours=8.0):
     """
     Backward compatibility wrapper for tests.
-    
+
     Uses the pluggable HeuristicBatteryPlanner internally.
     """
+    if allow_export is None:
+        allow_export_entity = os.getenv('BATTERY_ALLOW_EXPORT_ENTITY', 'input_boolean.battery_allow_export')
+        allow_export_state = get_ha_state(allow_export_entity)
+        allow_export = parse_ha_bool(allow_export_state, default=get_env_bool('BATTERY_ALLOW_EXPORT', True))
     planner = BatteryPlannerFactory.create('heuristic')
     entries = planner.plan(
         np.array(predictions, dtype=float),
@@ -31,7 +35,8 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         np.array(export_prices, dtype=float),
         [f"interval_{i}" for i in range(len(predictions))],
         committed_load_kwh=committed_load_kwh,
-        allow_export=allow_export
+        allow_export=allow_export,
+        max_lookahead_hours=max_lookahead_hours,
     )
     # Convert back to dicts for test compatibility
     return [entry.to_dict() for entry in entries]
@@ -581,12 +586,25 @@ def optimize():
     allow_export = parse_ha_bool(allow_export_state, default=get_env_bool('BATTERY_ALLOW_EXPORT', True))
     print(f"Battery allow_export from HA ({allow_export_entity}): {allow_export}")
     
+    # Fetch live battery SoC from Home Assistant
+    batt_state = get_ha_state('sensor.be_soc')
+    current_battery_soc_pct = None
+    if batt_state and batt_state.get('state') not in ['unknown', 'unavailable', None]:
+        try:
+            current_battery_soc_pct = float(batt_state['state'])
+            print(f"Battery live SoC from HA: {current_battery_soc_pct:.1f}%")
+        except (ValueError, TypeError):
+            print("⚠️ Could not parse battery SoC state, using fallback")
+    else:
+        print("Battery live SoC unavailable, using fallback from environment")
+    
     # Use battery optimization if available, otherwise fall back to no-battery plan
     if is_battery_enabled():
         planner = BatteryPlannerFactory.create()
         battery_plan_entries = planner.plan(
             predictions_kwh, solar_kwh, import_prices, export_prices, 
-            prediction_timestamps, committed_load_kwh, allow_export=allow_export
+            prediction_timestamps, committed_load_kwh, allow_export=allow_export,
+            initial_soc_pct=current_battery_soc_pct,
         )
         # Convert BatteryPlanEntry objects to dicts for compatibility with rest of code
         battery_plan = [entry.to_dict() for entry in battery_plan_entries]

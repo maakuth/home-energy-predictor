@@ -91,6 +91,74 @@ class OptimizeArchivingTests(unittest.TestCase):
         self.assertIsNotNone(row[6]) # export_price
         self.assertIsNotNone(row[7]) # grid_import_kwh
 
+    @patch('optimize_plan.get_ha_state')
+    @patch('optimize_plan.fetch_market_prices')
+    @patch('optimize_plan.get_db_connection')
+    def test_optimize_uses_live_battery_soc(self, mock_db, mock_prices, mock_ha):
+        """When sensor.be_soc is available, the plan should start from that SOC, not 50%."""
+        # Write zero-load predictions so the battery idles and SOC stays at initial value
+        zero_load_predictions = [
+            {
+                "timestamp": "2026-04-05T13:15:00+03:00",
+                "predicted_baseload": 0.0,
+                "solar_forecast": 0.0,
+                "outside_temp": 5.0,
+                "is_sauna_active": 0,
+                "is_fallback_price": 0,
+                "ev_position": 0
+            },
+            {
+                "timestamp": "2026-04-05T13:30:00+03:00",
+                "predicted_baseload": 0.0,
+                "solar_forecast": 0.0,
+                "outside_temp": 5.0,
+                "is_sauna_active": 0,
+                "is_fallback_price": 0,
+                "ev_position": 0
+            },
+            {
+                "timestamp": "2026-04-05T13:45:00+03:00",
+                "predicted_baseload": 0.0,
+                "solar_forecast": 0.0,
+                "outside_temp": 5.0,
+                "is_sauna_active": 0,
+                "is_fallback_price": 0,
+                "ev_position": 0
+            }
+        ]
+        with open(self.predictions_file, 'w') as f:
+            json.dump(zero_load_predictions, f)
+
+        mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
+        # Prices: first interval is neither cheapest import nor best export, so battery idles
+        mock_prices.return_value = ([0.15, 0.1, 0.2], [0, 0, 0], "Nordpool", False, False)
+
+        def ha_side_effect(entity_id):
+            if entity_id == 'sensor.mlp_teho':
+                return {"state": "0"}
+            if entity_id == 'sensor.be_soc':
+                return {"state": "73.0"}
+            if entity_id == 'sensor.mlp_varaajan_lampotila':
+                return {"state": "55.0"}  # GSHP at max temp, stays off
+            if entity_id == 'input_boolean.battery_allow_export':
+                return {"state": "off"}
+            return {"state": "50.0"}
+        mock_ha.side_effect = ha_side_effect
+
+        optimize()
+
+        self.assertTrue(os.path.exists(self.db_file))
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        cur.execute("SELECT battery_soc_pct FROM predictions LIMIT 1")
+        row = cur.fetchone()
+        conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertIsNotNone(row[0])
+        self.assertAlmostEqual(row[0], 73.0, places=1,
+            msg="Plan should start from live HA battery SOC (73%), not default 50%")
+
 
 @contextmanager
 def patched_env(overrides):

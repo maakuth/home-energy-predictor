@@ -94,7 +94,7 @@ class TestBatteryPlannerReplayParametrized:
             battery_min_soc_pct=10.0,
             battery_max_soc_pct=90.0,
             battery_initial_soc_pct=10.0,
-            max_planks=96,
+            max_planks=len(simulator.measurements_df) if simulator.measurements_df is not None else 96,
         )
         
         assert result['success'], f"Replay failed: {result.get('error', 'Unknown error')}"
@@ -125,7 +125,7 @@ class TestBatteryPlannerReplayParametrized:
             battery_min_soc_pct=10.0,
             battery_max_soc_pct=90.0,
             battery_initial_soc_pct=10.0,
-            max_planks=96,
+            max_planks=len(simulator.measurements_df) if simulator.measurements_df is not None else 96,
         )
         
         assert result['success']
@@ -158,7 +158,7 @@ class TestBatteryPlannerReplayParametrized:
             battery_min_soc_pct=10.0,
             battery_max_soc_pct=90.0,
             battery_initial_soc_pct=10.0,
-            max_planks=96,
+            max_planks=len(simulator.measurements_df) if simulator.measurements_df is not None else 96,
         )
         
         assert result['success']
