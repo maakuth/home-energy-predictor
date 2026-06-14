@@ -6,7 +6,7 @@ import json
 from push_to_ha import push_accuracy, push_plan
 from utils.battery_utils import (
     push_battery_control, is_battery_available, compute_load_following_setpoint,
-    get_current_plan_entry,
+    get_current_plan_entry, compute_net_metering_setpoint,
     BATTERY_CONTROL_ENTITY_ID
 )
 
@@ -607,6 +607,182 @@ class TestPhaseCapping(unittest.TestCase):
             phase_currents=[20.0, None, 10.0]
         )
         self.assertAlmostEqual(adjusted, 3.45) # Still caps based on phase 1
+
+
+class TestNetMeteringBatteryControl(unittest.TestCase):
+    """Tests for net metering-aware battery control using cumulative energy sensors."""
+
+    def setUp(self):
+        """Set up test environment with mock state file."""
+        self.test_state_file = '/tmp/hepo_net_metering_test.json'
+        os.environ['HEPO_NET_METERING_STATE_FILE'] = self.test_state_file
+        # Clean up any existing test state
+        if os.path.exists(self.test_state_file):
+            os.remove(self.test_state_file)
+
+    def tearDown(self):
+        """Clean up test state file."""
+        if os.path.exists(self.test_state_file):
+            os.remove(self.test_state_file)
+        if 'HEPO_NET_METERING_STATE_FILE' in os.environ:
+            del os.environ['HEPO_NET_METERING_STATE_FILE']
+
+    def test_net_metering_discharges_more_when_imported_too_much(self):
+        """When actual net import > planned, battery should discharge more."""
+        # Interval: 15 min, elapsed: 5 min, remaining: 10 min
+        # First call: capture baseline
+        compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        # Second call: actual net import = 0.5, planned = 0.1
+        # Deviation = 0.5 - 0.1 = 0.4 kWh
+        # Correction = -0.4 / (10/60) = -2.4 kW
+        # Planned battery = -1.0 kW (discharging 1kW)
+        # Adjusted = -1.0 + (-2.4) = -3.4 kW
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.5,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        self.assertAlmostEqual(adjusted, -3.4, places=1)
+        self.assertIn('correction', log)
+
+    def test_net_metering_charges_less_when_exported_too_much(self):
+        """When actual net export > planned, battery should charge less (or discharge more)."""
+        # First call: capture baseline
+        compute_net_metering_setpoint(
+            planned_battery_kw=2.0,
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        # Second call: actual net export = 0.3, planned = 0.0
+        # Deviation = -0.3 - 0 = -0.3 kWh
+        # Correction = -(-0.3) / (10/60) = +1.8 kW
+        # Planned battery = +2.0 kW (charging)
+        # Adjusted = 2.0 + 1.8 = 3.8 kW (charge more to absorb the export)
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=2.0,
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.3,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        self.assertAlmostEqual(adjusted, 3.8, places=1)
+        self.assertIn('correction', log)
+
+    def test_net_metering_no_adjustment_when_on_track(self):
+        """When actual matches planned, no correction needed."""
+        # First call: capture baseline
+        compute_net_metering_setpoint(
+            planned_battery_kw=-1.5,
+            planned_grid_import_kwh=0.375,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        # Second call: actual matches planned
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-1.5,
+            planned_grid_import_kwh=0.375,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.375,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        self.assertAlmostEqual(adjusted, -1.5, places=2)
+        self.assertEqual(log, '')
+
+    def test_net_metering_resets_state_on_new_interval(self):
+        """When a new interval starts, cumulative readings should be captured."""
+        # First call: interval starts, captures baseline
+        adjusted1, log1 = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=100.0,
+            cumulative_export_kwh=50.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        # At interval start, no correction possible (no time elapsed)
+        self.assertAlmostEqual(adjusted1, -1.0, places=2)
+        self.assertIn('baseline', log1)
+
+        # Second call: 5 minutes later, cumulative import increased by 0.5
+        adjusted2, log2 = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=100.5,
+            cumulative_export_kwh=50.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        # Net import = 0.5, planned = 0.1, deviation = 0.4
+        # Correction = -0.4 / (10/60) = -2.4 kW
+        # Adjusted = -1.0 - 2.4 = -3.4 kW
+        self.assertAlmostEqual(adjusted2, -3.4, places=1)
+
+    def test_net_metering_clamped_to_max_battery_power(self):
+        """Adjusted power should not exceed physical battery limits."""
+        # Large deviation would suggest huge correction
+        # First call: capture baseline
+        compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+            max_battery_kw=10.0,
+        )
+        # Second call: large deviation
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=5.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+            max_battery_kw=10.0,
+        )
+        # Should not exceed max_battery_kw in magnitude
+        self.assertLessEqual(abs(adjusted), 10.0)
+        self.assertIn('clamped', log)
+
+    def test_net_metering_handles_zero_elapsed(self):
+        """At interval start with zero elapsed, return planned power."""
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=100.0,
+            cumulative_export_kwh=50.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        self.assertAlmostEqual(adjusted, -1.0, places=2)
 
 
 if __name__ == '__main__':

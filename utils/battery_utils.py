@@ -8,6 +8,7 @@ Gracefully handles battery unavailability - if the entity doesn't exist,
 silently continues without error (degradation mode for testing).
 """
 
+import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
@@ -277,3 +278,130 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
     adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, adjusted_battery_kw))
 
     return adjusted_battery_kw, log_message
+
+
+def _load_net_metering_state(state_file=None):
+    """Load the persisted net metering state for interval tracking."""
+    if state_file is None:
+        state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'net_metering_state.json')
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def _save_net_metering_state(state, state_file=None):
+    """Persist the net metering state for interval tracking."""
+    if state_file is None:
+        state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'net_metering_state.json')
+    try:
+        with open(state_file, 'w') as f:
+            json.dump(state, f)
+    except IOError:
+        pass
+
+
+def compute_net_metering_setpoint(
+    planned_battery_kw,
+    planned_grid_import_kwh,
+    planned_grid_export_kwh,
+    cumulative_import_kwh,
+    cumulative_export_kwh,
+    elapsed_minutes,
+    interval_minutes=15,
+    max_battery_kw=10.0,
+    state_file=None,
+):
+    """
+    Adjust battery power to match the planned net energy for the current interval
+    using cumulative energy meter readings.
+
+    With net metering, the grid meter only cares about net energy per quarter.
+    This function uses a feedback loop: it compares actual net energy so far
+    against the planned net energy, and adjusts battery power so that the
+    remaining energy needed is spread evenly over the remaining interval.
+
+    Args:
+        planned_battery_kw: Planned battery power (positive=charge, negative=discharge)
+        planned_grid_import_kwh: Planned grid import for this interval
+        planned_grid_export_kwh: Planned grid export for this interval
+        cumulative_import_kwh: Current cumulative active import reading (kWh)
+        cumulative_export_kwh: Current cumulative active export reading (kWh)
+        elapsed_minutes: Minutes elapsed in current interval
+        interval_minutes: Total interval length (default 15)
+        max_battery_kw: Maximum battery power in kW
+        state_file: Path to JSON file for persisting interval state
+
+    Returns:
+        tuple: (adjusted_battery_kw, log_message)
+    """
+    state = _load_net_metering_state(state_file)
+    
+    # Interval start detection
+    interval_start = state.get('interval_start')
+    if interval_start is None:
+        interval_start = cumulative_import_kwh + cumulative_export_kwh
+        state['interval_start'] = interval_start
+        state['import_start'] = cumulative_import_kwh
+        state['export_start'] = cumulative_export_kwh
+        state['planned_battery_kw'] = planned_battery_kw
+        _save_net_metering_state(state, state_file)
+        return planned_battery_kw, f"net metering baseline: import={cumulative_import_kwh:.3f}, export={cumulative_export_kwh:.3f}"
+
+    # Check if this is a new interval (cumulative meters have been reset)
+    # Actually cumulative meters are monotonic, so we detect reset by checking if
+    # current reading is less than stored start (which would indicate a meter reset)
+    if cumulative_import_kwh < state.get('import_start', 0) or cumulative_export_kwh < state.get('export_start', 0):
+        # Meter reset: capture new baseline
+        state['import_start'] = cumulative_import_kwh
+        state['export_start'] = cumulative_export_kwh
+        state['planned_battery_kw'] = planned_battery_kw
+        _save_net_metering_state(state, state_file)
+        return planned_battery_kw, f"net metering reset: new baseline import={cumulative_import_kwh:.3f}"
+
+    # Compute actual net energy so far
+    import_start = state.get('import_start', cumulative_import_kwh)
+    export_start = state.get('export_start', cumulative_export_kwh)
+    
+    actual_import = cumulative_import_kwh - import_start
+    actual_export = cumulative_export_kwh - export_start
+    actual_net = actual_import - actual_export
+    
+    # Planned net energy
+    planned_net = planned_grid_import_kwh - planned_grid_export_kwh
+    
+    # Deviation: positive = imported too much (or exported too little)
+    deviation = actual_net - planned_net
+    
+    # Compute remaining time
+    remaining_minutes = max(interval_minutes - elapsed_minutes, 0.5)
+    remaining_hours = remaining_minutes / 60.0
+    
+    # Correction power: opposite sign to deviation
+    correction = -deviation / remaining_hours
+    
+    adjusted = planned_battery_kw + correction
+    
+    # Clamp
+    clamped = max(-max_battery_kw, min(max_battery_kw, adjusted))
+    
+    if abs(deviation) < 0.001:
+        log_msg = ""
+    else:
+        log_msg = (
+            f"net metering: actual_net={actual_net:.3f}kWh, planned={planned_net:.3f}kWh, "
+            f"deviation={deviation:.3f}kWh, correction={correction:.2f}kW, "
+        )
+        if abs(clamped - adjusted) > 0.01:
+            log_msg += f"clamped {adjusted:.2f}kW -> {clamped:.2f}kW"
+        else:
+            log_msg += f"adjusted {planned_battery_kw:.2f}kW -> {clamped:.2f}kW"
+    
+    # Update state
+    state['planned_battery_kw'] = planned_battery_kw
+    _save_net_metering_state(state, state_file)
+    
+    return clamped, log_msg
