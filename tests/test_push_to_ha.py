@@ -784,6 +784,40 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         )
         self.assertAlmostEqual(adjusted, -1.0, places=2)
 
+    def test_net_metering_reduces_discharge_when_exporting_too_much(self):
+        """When battery discharges too much towards load, reduce discharge to match plan.
+        
+        This is the 'other direction' — the battery was discharging more than needed,
+        causing net export. The correction should reduce discharge (or even charge)
+        to bring the quarterly average back to the planned net energy.
+        """
+        # First call: capture baseline
+        compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        # Second call: battery discharged too much, causing 0.3 kWh export
+        # Planned net = 0, actual net = -0.3 (export)
+        # Deviation = -0.3 - 0 = -0.3
+        # Correction = -(-0.3) / (10/60) = +1.8 kW
+        # Adjusted = -1.0 + 1.8 = +0.8 kW (charge to absorb excess export)
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.3,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        self.assertAlmostEqual(adjusted, 0.8, places=1)
+        self.assertIn('correction', log)
+
 
 if __name__ == '__main__':
     unittest.main()
