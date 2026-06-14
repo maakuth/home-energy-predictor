@@ -202,5 +202,62 @@ class TestPredictFuture(unittest.TestCase):
                          "Fix: at 09:30:43, start_time should be 09:30 (current interval)")
 
 
+    def test_anchor_entities_include_battery_sensor(self):
+        """Verify that battery power sensor is included in anchor_entities for lag calculation."""
+        from unittest.mock import patch, MagicMock
+        import pandas as pd
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        target_ts = now - timedelta(hours=1)
+
+        # Create mock data with battery power present
+        mock_df = pd.DataFrame({'state': [1.0, 2.0]}, index=[target_ts, target_ts + timedelta(minutes=1)])
+        mock_df.index = pd.DatetimeIndex(mock_df.index)
+
+        with patch('predict_future.fetch_states_history') as mock_fetch, \
+             patch('predict_future.get_ha_state') as mock_ha:
+
+            mock_fetch.return_value = {
+                'sensor.sahkokauppa_nyt': mock_df,
+                'sensor.solarh_63038_real_power_kw': mock_df,
+                'sensor.mlp_teho': mock_df,
+                'sensor.tasmota_energy_power_3': mock_df,
+                'sensor.be_stat_batt_power': mock_df  # Battery sensor present
+            }
+            mock_ha.return_value = {'state': '5.0', 'attributes': {}}
+
+            with patch('predict_future.datetime') as mock_dt:
+                mock_dt.now.return_value = now
+                mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+                mock_dt.timedelta = timedelta
+                mock_dt.timezone = timezone
+
+                # Call predict() to trigger the anchor fetching logic
+                with patch('xgboost.XGBRegressor') as mock_xgb, \
+                     patch('builtins.open', MagicMock()), \
+                     patch('json.load', return_value=['outside_temp', 'wind_speed']), \
+                     patch('predict_future.call_ha_service', return_value=None), \
+                     patch('predict_future.get_ha_state', return_value={'state': '5.0', 'attributes': {}}), \
+                     patch('predict_future.get_db_connection', MagicMock()), \
+                     patch('predict_future.os.getenv', return_value='future_predictions.json'):
+
+                    mock_model = MagicMock()
+                    mock_model.predict.return_value = [1.0] * 10
+                    mock_xgb.return_value = mock_model
+
+                    try:
+                        predict()
+                    except Exception:
+                        pass  # We only care about the fetch_states_history call
+
+            # Verify battery sensor was requested
+            call_args = mock_fetch.call_args
+            if call_args:
+                entities = call_args[0][0] if call_args[0] else call_args[1].get('entities', [])
+                self.assertIn('sensor.be_stat_batt_power', entities,
+                              "Battery sensor must be in anchor_entities to compute correct baseload lags")
+
+
 if __name__ == '__main__':
     unittest.main()

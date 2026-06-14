@@ -20,7 +20,8 @@ def fetch_actuals(days=7):
     entities = {
         'sensor.sahkokauppa_nyt': 'total_power',
         'sensor.solarh_63038_real_power_kw': 'solar_actual',
-        'sensor.mlp_teho': 'gshp_actual_w'
+        'sensor.mlp_teho': 'gshp_actual_w',
+        'sensor.be_stat_batt_power': 'battery_actual_w'
     }
     
     hist_data = fetch_states_history(list(entities.keys()), hours=days*24)
@@ -30,15 +31,18 @@ def fetch_actuals(days=7):
         df = hist_data.get(eid)
         if df is not None and not df.empty:
             df = df.rename(columns={'state': col_name})
-            all_resampled.append(df.set_index('timestamp').resample('15min').mean())
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df = df.set_index('timestamp')
+            all_resampled.append(df.resample('15min').mean())
     
     if not all_resampled:
         print("⚠️ No data fetched from PostgreSQL.")
         return pd.DataFrame(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw'])
 
     df_actual = pd.concat(all_resampled, axis=1).fillna(0)
-    # Total home power is grid_meter + solar_production
-    df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0)
+    # Total home power is grid_meter + solar_production - battery_net_power
+    battery_kw = df_actual.get('battery_actual_w', 0) / 1000.0
+    df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0) - battery_kw
     df_actual['gshp_actual_kw'] = df_actual.get('gshp_actual_w', 0) / 1000.0
     return df_actual[['actual_usage', 'solar_actual', 'gshp_actual_kw']]
 

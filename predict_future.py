@@ -187,7 +187,8 @@ def predict():
         'sensor.sahkokauppa_nyt', 
         'sensor.solarh_63038_real_power_kw', 
         'sensor.mlp_teho',
-        'sensor.tasmota_energy_power_3'
+        'sensor.tasmota_energy_power_3',
+        'sensor.be_stat_batt_power'
     ]
     anchor_data = fetch_states_history(anchor_entities, hours=25)
     

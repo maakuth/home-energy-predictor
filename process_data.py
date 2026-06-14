@@ -70,7 +70,7 @@ def process_data():
 
     # Clip component power meters
     power_cols = [c for c in df.columns if 'power' in c or 'teho' in c or 'energy' in c]
-    exclude_from_clip = {'total_power'} 
+    exclude_from_clip = {'total_power', 'battery_power'}
     for col in power_cols:
         if col in df.columns and col not in exclude_from_clip:
             df[col] = df[col].clip(lower=0)
