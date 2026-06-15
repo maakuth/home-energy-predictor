@@ -15,8 +15,8 @@ alternative algorithms can be plugged in without touching optimize_plan.py
 
 import os
 import numpy as np
-from typing import List, Any
-from .base import BatteryPlanner, BatteryPlanEntry
+from typing import List, Any, Optional
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
 
 
 def get_env_float(name, default):
@@ -50,6 +50,7 @@ class SimpleRuleBasedPlanner(BatteryPlanner):
         committed_load_kwh: np.ndarray = None,
         allow_export: bool = True,
         initial_soc_pct: float = None,
+        context: Optional[BatteryPlannerContext] = None,
     ) -> List[BatteryPlanEntry]:
         """Generate battery dispatch plan using simple rules."""
         

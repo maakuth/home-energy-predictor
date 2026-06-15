@@ -13,10 +13,10 @@ All heuristics are designed to maximize battery ROI by minimizing grid costs.
 
 import os
 import numpy as np
-from typing import List, Any
+from typing import List, Any, Optional
 from datetime import datetime
 
-from .base import BatteryPlanner, BatteryPlanEntry
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
 
 
 def get_env_float(name, default):
@@ -240,6 +240,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         allow_export: bool = True,
         initial_soc_pct: float = None,
         max_lookahead_hours: float = 8.0,
+        context: Optional['BatteryPlannerContext'] = None,
     ) -> List[BatteryPlanEntry]:
         """Generate battery dispatch plan using heuristic opportunity-cost approach."""
         

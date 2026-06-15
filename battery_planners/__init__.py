@@ -6,13 +6,14 @@ on opportunity cost and peak price avoidance, but alternative algorithmic
 approaches can be plugged in.
 """
 
-from .base import BatteryPlanner, BatteryPlanEntry
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
 from .heuristic import HeuristicBatteryPlanner
 from .factory import BatteryPlannerFactory
 
 __all__ = [
     'BatteryPlanner',
     'BatteryPlanEntry',
+    'BatteryPlannerContext',
     'HeuristicBatteryPlanner',
     'BatteryPlannerFactory',
 ]

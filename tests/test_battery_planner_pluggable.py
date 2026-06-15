@@ -5,6 +5,7 @@ import numpy as np
 from battery_planners import (
     BatteryPlanner,
     BatteryPlanEntry,
+    BatteryPlannerContext,
     BatteryPlannerFactory,
     HeuristicBatteryPlanner,
 )
@@ -138,6 +139,56 @@ class TestPlannerSwappability(unittest.TestCase):
         # But both should work
         self.assertIsInstance(planner1, BatteryPlanner)
         self.assertIsInstance(planner2, BatteryPlanner)
+
+
+class TestBatteryPlannerContext(unittest.TestCase):
+    """Test that the extensible context dict is accepted and ignored gracefully."""
+    
+    def test_planner_accepts_context_dict(self):
+        """Planner should accept a BatteryPlannerContext and still produce valid output."""
+        planner = HeuristicBatteryPlanner()
+        
+        predictions = np.array([2.0, 2.0, 2.0])
+        solar = np.array([0.0, 0.0, 0.0])
+        import_prices = np.array([0.15, 0.15, 0.15])
+        export_prices = np.array([0.05, 0.05, 0.05])
+        
+        context: BatteryPlannerContext = {
+            'outside_temps': np.array([-5.0, -3.0, 0.0]),
+            'is_sauna_active': np.array([0, 1, 0]),
+            'tomorrow_valid': True,
+        }
+        
+        plan = planner.plan(
+            predictions, solar, import_prices, export_prices,
+            prediction_timestamps=["t0", "t1", "t2"],
+            context=context,
+        )
+        
+        self.assertEqual(len(plan), 3)
+        self.assertTrue(all(isinstance(entry, BatteryPlanEntry) for entry in plan))
+    
+    def test_planner_ignores_unknown_context_keys(self):
+        """Planner should ignore keys in context that it does not recognise."""
+        planner = HeuristicBatteryPlanner()
+        
+        predictions = np.array([2.0, 2.0])
+        solar = np.array([0.0, 0.0])
+        import_prices = np.array([0.15, 0.15])
+        export_prices = np.array([0.05, 0.05])
+        
+        # Pass a context with a completely made-up key
+        context: BatteryPlannerContext = {
+            'future_alien_invasion': np.array([0, 0]),  # type: ignore[typeddict-unknown-key]
+        }
+        
+        plan = planner.plan(
+            predictions, solar, import_prices, export_prices,
+            prediction_timestamps=["t0", "t1"],
+            context=context,
+        )
+        
+        self.assertEqual(len(plan), 2)
 
 
 if __name__ == '__main__':

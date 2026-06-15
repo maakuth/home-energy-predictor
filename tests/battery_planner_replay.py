@@ -224,6 +224,7 @@ class BatteryReplaySimulator:
         battery_max_soc_pct: float = 90.0,
         battery_initial_soc_pct: float = 10.0,
         max_planks: int = 96,  # 24 hours at 15-min intervals
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run step-by-step battery planner simulation.
         
@@ -299,6 +300,7 @@ class BatteryReplaySimulator:
                     prediction_timestamps=ts_strings,
                     allow_export=True,
                     initial_soc_pct=current_soc_pct,
+                    context=context,
                 )
                 
                 if plan is None or len(plan) == 0:

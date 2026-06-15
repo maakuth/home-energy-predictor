@@ -10,14 +10,15 @@ from utils.price_utils import fetch_market_prices, align_interval_prices
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.db_utils import fetch_states_history
-from battery_planners import BatteryPlannerFactory, BatteryPlanEntry
+from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPlannerContext
 
 load_dotenv(override=True)
 
 
 # Backward compatibility wrapper for tests
 def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices,
-                         committed_load_kwh=None, allow_export=None, max_lookahead_hours=8.0):
+                         committed_load_kwh=None, allow_export=None, max_lookahead_hours=8.0,
+                         context=None):
     """
     Backward compatibility wrapper for tests.
 
@@ -37,6 +38,7 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         committed_load_kwh=committed_load_kwh,
         allow_export=allow_export,
         max_lookahead_hours=max_lookahead_hours,
+        context=context,
     )
     # Convert back to dicts for test compatibility
     return [entry.to_dict() for entry in entries]
@@ -598,13 +600,29 @@ def optimize():
     else:
         print("Battery live SoC unavailable, using fallback from environment")
     
+    # Build optional context dict for the planner
+    battery_context: BatteryPlannerContext = {
+        'outside_temps': np.array(outside_temps, dtype=float),
+        'is_sauna_active': np.array(is_sauna_active, dtype=int),
+        'ev_position': np.array([p.get('ev_position', 1) for p in predictions_data], dtype=int),
+        'sarima_lower': np.array(sarima_lower.values, dtype=float) if hasattr(sarima_lower, 'values') else np.array(sarima_lower, dtype=float),
+        'sarima_upper': np.array(sarima_upper.values, dtype=float) if hasattr(sarima_upper, 'values') else np.array(sarima_upper, dtype=float),
+        'is_fallback_price': np.array(is_fallback_price, dtype=int),
+        'tomorrow_valid': tomorrow_valid,
+        'planned_gshp_kw': np.array(planned_gshp_kw, dtype=float),
+        'current_acc_temp': current_acc_temp,
+        'is_fireplace_currently_on': is_fireplace_currently_on,
+        'model_version': get_model_version(),
+    }
+
     # Use battery optimization if available, otherwise fall back to no-battery plan
     if is_battery_enabled():
         planner = BatteryPlannerFactory.create()
         battery_plan_entries = planner.plan(
-            predictions_kwh, solar_kwh, import_prices, export_prices, 
+            predictions_kwh, solar_kwh, import_prices, export_prices,
             prediction_timestamps, committed_load_kwh, allow_export=allow_export,
             initial_soc_pct=current_battery_soc_pct,
+            context=battery_context,
         )
         # Convert BatteryPlanEntry objects to dicts for compatibility with rest of code
         battery_plan = [entry.to_dict() for entry in battery_plan_entries]

@@ -22,10 +22,29 @@ class BatteryPlanner(ABC):
         prediction_timestamps: List[Any],
         committed_load_kwh: np.ndarray = None,
         allow_export: bool = True,
+        initial_soc_pct: float = None,
+        context: Optional[BatteryPlannerContext] = None,
     ) -> List[BatteryPlanEntry]:
         """Generate a battery dispatch plan."""
         pass
 ```
+
+### Typed Context: `BatteryPlannerContext`
+
+`BatteryPlannerContext` is a `TypedDict` (defined in `battery_planners/base.py`) that carries optional extra data the orchestrator can provide, such as:
+
+- `outside_temps` (np.ndarray, °C)
+- `is_sauna_active` (np.ndarray, 0/1)
+- `ev_position` (np.ndarray, 0/1)
+- `sarima_lower` / `sarima_upper` (np.ndarray, kW)
+- `is_fallback_price` (np.ndarray, 0/1)
+- `tomorrow_valid` (bool)
+- `planned_gshp_kw` (np.ndarray, kW)
+- `current_acc_temp` (float, °C)
+- `is_fireplace_currently_on` (bool)
+- `model_version` (str)
+
+Planners **must ignore keys they do not recognise** so the interface can be extended without breaking existing implementations.
 
 ### Data Structure: `BatteryPlanEntry`
 
@@ -72,7 +91,9 @@ if is_battery_enabled():
     planner = BatteryPlannerFactory.create()
     battery_plan_entries = planner.plan(
         predictions_kwh, solar_kwh, import_prices, export_prices,
-        prediction_timestamps, committed_load_kwh, allow_export=allow_export
+        prediction_timestamps, committed_load_kwh, allow_export=allow_export,
+        initial_soc_pct=current_battery_soc_pct,
+        context=battery_context,
     )
     # Convert to dicts for compatibility with rest of code
     battery_plan = [entry.to_dict() for entry in battery_plan_entries]
@@ -86,15 +107,29 @@ else:
 
 ```python
 # battery_planners/my_algorithm.py
-from .base import BatteryPlanner, BatteryPlanEntry
+from typing import Optional
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
 import numpy as np
 
 class MyAlgorithmPlanner(BatteryPlanner):
     def plan(self, predictions_kwh, solar_kwh, import_prices, export_prices,
-             prediction_timestamps, committed_load_kwh=None, allow_export=True):
-        """Your algorithm here."""
+             prediction_timestamps, committed_load_kwh=None, allow_export=True,
+             initial_soc_pct=None, context: Optional[BatteryPlannerContext] = None):
+        """Your algorithm here.
+
+        The ``context`` dict carries optional extra data (temperature, EV
+        position, prediction uncertainty, etc.).  Ignore keys you don't need
+        so the interface can be extended without breaking your planner.
+        """
         horizon = len(predictions_kwh)
         entries = []
+        
+        # Example: read a context key if it exists
+        if context is not None:
+            outside_temps = context.get('outside_temps')
+            if outside_temps is not None:
+                # Use temperature for heating-load aware decisions
+                pass
         
         for i in range(horizon):
             # Your logic

@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 
-from battery_planners import BatteryPlannerFactory
+from battery_planners import BatteryPlannerFactory, BatteryPlannerContext
 from tests.battery_planner_replay import (
     BatteryReplaySimulator,
     load_fixture,
@@ -235,6 +235,38 @@ class TestBatteryPlannerReplayParametrized:
         # Grid import/export should be non-negative
         assert entry.grid_import_kwh >= 0, "grid_import_kwh is negative"
         assert entry.grid_export_kwh >= 0, "grid_export_kwh is negative"
+    
+    def test_planner_replay_with_context(self, fixture_path, planner_name):
+        """Planner should accept a context dict during replay and still pass constraints."""
+        fixture = load_fixture(fixture_path)
+        simulator = BatteryReplaySimulator(fixture)
+        
+        if simulator.measurements_df is None or simulator.measurements_df.empty:
+            pytest.skip(f"Fixture {Path(fixture_path).stem} has no measurement data")
+        
+        planner = BatteryPlannerFactory.create(planner_name)
+        
+        horizon = len(simulator.measurements_df) if simulator.measurements_df is not None else 96
+        context: BatteryPlannerContext = {
+            'outside_temps': np.zeros(horizon),
+            'is_sauna_active': np.zeros(horizon, dtype=int),
+            'tomorrow_valid': False,
+        }
+        
+        result = simulator.simulate_battery_control(
+            planner=planner,
+            planner_type=planner_name,
+            battery_capacity_kwh=50.0,
+            battery_min_soc_pct=10.0,
+            battery_max_soc_pct=90.0,
+            battery_initial_soc_pct=10.0,
+            max_planks=horizon,
+            context=context,
+        )
+        
+        assert result['success'], f"Replay with context failed: {result.get('error', 'Unknown error')}"
+        assert result['soc_violations'] == 0, \
+            f"SoC constraint violations with context: {result.get('soc_violation_details', [])}"
 
 
 class TestBatteryReplaySimulatorBasics(unittest.TestCase):
