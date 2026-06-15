@@ -54,5 +54,7 @@ class BatteryPlannerFactory:
 
 # Import and register planners after factory class definition
 from .heuristic import HeuristicBatteryPlanner
+from .nemotron_linprog import NemotronLinprogPlanner
 
 BatteryPlannerFactory.register('heuristic', HeuristicBatteryPlanner)
+BatteryPlannerFactory.register('nemotron-linprog', NemotronLinprogPlanner)

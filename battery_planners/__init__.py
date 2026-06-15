@@ -8,6 +8,7 @@ approaches can be plugged in.
 
 from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
 from .heuristic import HeuristicBatteryPlanner
+from .nemotron_linprog import NemotronLinprogPlanner
 from .factory import BatteryPlannerFactory
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     'BatteryPlanEntry',
     'BatteryPlannerContext',
     'HeuristicBatteryPlanner',
+    'NemotronLinprogPlanner',
     'BatteryPlannerFactory',
 ]

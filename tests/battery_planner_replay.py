@@ -350,8 +350,9 @@ class BatteryReplaySimulator:
                 export_price = export_prices[0] if len(export_prices) > 0 else 0.05
                 
                 # Realized grid exchange (both in kWh)
-                grid_import = max(0.0, actual_load_kwh - battery_discharge_kwh)
-                grid_export = max(0.0, battery_discharge_kwh - actual_load_kwh)
+                # Battery charging from grid increases import, discharging reduces it
+                grid_import = max(0.0, actual_load_kwh + battery_charge_kwh - battery_discharge_kwh)
+                grid_export = max(0.0, battery_discharge_kwh - actual_load_kwh - battery_charge_kwh)
                 
                 interval_cost_battery = grid_import * import_price - grid_export * export_price
                 interval_cost_no_battery = actual_load_kwh * import_price
