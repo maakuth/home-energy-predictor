@@ -48,6 +48,7 @@ class BatteryPlannerFactory:
                 f"Available: {available}"
             )
         
+        print(f"Using battery planner: {planner_type}")
         planner_class = cls._planners[planner_type]
         return planner_class()
 
