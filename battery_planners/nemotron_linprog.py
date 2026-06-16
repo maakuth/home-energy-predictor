@@ -296,6 +296,23 @@ class NemotronLinprogPlanner(BatteryPlanner):
             
             x = result.x
             
+            # Fallback: if LP solution cost >= no-battery cost, idle is better
+            total_plan_cost = 0.0
+            total_no_battery_cost = 0.0
+            for i in range(horizon):
+                net_kwh_i = net_without_battery_kwh[i] + committed_kwh[i]
+                no_bat_import = max(net_kwh_i, 0.0)
+                no_bat_export = max(-net_kwh_i, 0.0)
+                total_no_battery_cost += no_bat_import * import_prices[i] - no_bat_export * export_prices[i]
+                
+                gi = max(0.0, x[idx_grid_import(i)])
+                ge = max(0.0, x[idx_grid_export(i)])
+                total_plan_cost += gi * import_prices[i] - ge * export_prices[i]
+            
+            if total_plan_cost >= total_no_battery_cost - 0.001:
+                return self._create_idle_plan(horizon, prediction_timestamps, initial_soc_kwh, 
+                                              capacity_kwh, net_without_battery_kwh)
+            
         except Exception as e:
             print(f"LP EXCEPTION: {e}")
             # Fallback to idle plan on solver error
@@ -370,6 +387,33 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 net_load_without_battery_kwh=float(net_without_battery_kwh[i]),
             )
             
+            battery_plan.append(entry)
+        
+        # Pad with idle entries if LP horizon is shorter than input length
+        while len(battery_plan) < len(prediction_timestamps):
+            i = len(battery_plan)
+            ts = prediction_timestamps[i]
+            timestamp_str = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
+            comm = committed_kwh[i] if i < len(committed_kwh) else 0.0
+            net_kwh = float(net_without_battery_kwh[i] + comm)
+            grid_import = max(net_kwh, 0.0)
+            grid_export = max(-net_kwh, 0.0)
+            entry = BatteryPlanEntry(
+                timestamp=timestamp_str,
+                battery_action='idle',
+                battery_power_kw=0.0,
+                charge_from_solar_kwh=0.0,
+                charge_from_grid_kwh=0.0,
+                discharge_to_load_kwh=0.0,
+                discharge_to_export_kwh=0.0,
+                soc_kwh=float(soc_kwh),
+                soc_pct=float((soc_kwh / capacity_kwh) * 100.0),
+                grid_import_kwh=float(grid_import),
+                grid_export_kwh=float(grid_export),
+                estimated_hour_cost=0.0,
+                estimated_hour_savings=0.0,
+                net_load_without_battery_kwh=float(net_without_battery_kwh[i]),
+            )
             battery_plan.append(entry)
         
         return battery_plan

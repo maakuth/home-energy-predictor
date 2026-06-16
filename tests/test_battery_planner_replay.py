@@ -62,17 +62,12 @@ class TestBatteryPlannerReplayParametrized:
     @staticmethod
     def _print_planner_score(result, fixture_name, planner_name):
         """Print a summary of planner performance."""
-        print(f"\n{'='*60}")
-        print(f"Planner Score: {planner_name} on {fixture_name}")
-        print(f"{'='*60}")
-        print(f"  Intervals run:      {result['intervals_run']}")
-        print(f"  Baseline cost:      {result['cost_no_battery_eur']:.2f} EUR")
-        print(f"  With battery:       {result['cost_with_battery_eur']:.2f} EUR")
-        print(f"  Savings:            {result['savings_eur']:.2f} EUR")
-        print(f"  Savings %:          {result['savings_pct']:.1f}%")
-        print(f"  Final SoC:          {result['final_soc_pct']:.1f}%")
-        print(f"  SoC violations:     {result['soc_violations']}")
-        print(f"{'='*60}\n")
+        savings = result['savings_pct']
+        soc = result['final_soc_pct']
+        cost = result['cost_with_battery_eur']
+        base = result['cost_no_battery_eur']
+        viol = result['soc_violations']
+        print(f"  {planner_name:22s} {fixture_name:5s}  savings={savings:6.1f}%  soc={soc:5.1f}%  cost={cost:.3f}  base={base:.3f}  viol={viol}")
     
     def test_planner_replay_no_violations(self, fixture_path, planner_name):
         """Planner should respect SoC constraints throughout simulation."""
