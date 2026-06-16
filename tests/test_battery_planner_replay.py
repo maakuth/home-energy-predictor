@@ -69,6 +69,7 @@ class TestBatteryPlannerReplayParametrized:
         viol = result['soc_violations']
         print(f"  {planner_name:22s} {fixture_name:5s}  savings={savings:6.1f}%  soc={soc:5.1f}%  cost={cost:.3f}  base={base:.3f}  viol={viol}")
     
+    @pytest.mark.slow
     def test_planner_replay_no_violations(self, fixture_path, planner_name):
         """Planner should respect SoC constraints throughout simulation."""
         fixture = load_fixture(fixture_path)
@@ -100,6 +101,7 @@ class TestBatteryPlannerReplayParametrized:
         # Print planner score
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
+    @pytest.mark.slow
     def test_planner_replay_finite_cost(self, fixture_path, planner_name):
         """Planner output should not produce NaN or infinite costs."""
         fixture = load_fixture(fixture_path)
@@ -132,6 +134,7 @@ class TestBatteryPlannerReplayParametrized:
         # Print planner score
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
+    @pytest.mark.slow
     def test_planner_replay_not_worse_than_baseline(self, fixture_path, planner_name):
         """Planner cost should not catastrophically exceed baseline.
         
@@ -171,6 +174,7 @@ class TestBatteryPlannerReplayParametrized:
         # Print planner score
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
+    @pytest.mark.slow
     def test_planner_output_structure(self, fixture_path, planner_name):
         """Planner output should have correct structure and valid values."""
         fixture = load_fixture(fixture_path)
@@ -262,6 +266,7 @@ class TestBatteryPlannerReplayParametrized:
 
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
 
+    @pytest.mark.slow
     def test_planner_replay_with_context(self, fixture_path, planner_name):
         """Planner should accept a context dict during replay and still pass constraints."""
         fixture = load_fixture(fixture_path)

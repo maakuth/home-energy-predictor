@@ -1,4 +1,5 @@
 import unittest
+import pytest
 import os
 import pickle
 import pandas as pd
@@ -36,6 +37,7 @@ class TestTrainSarimaSanityCheck(unittest.TestCase):
         # No cleanup needed - conftest.py handles it via tmp_path fixture
         pass
 
+    @pytest.mark.slow
     @patch('train_sarima.load_historical_data')
     def test_saves_params_when_forecast_is_reasonable(self, mock_load):
         """If fitted model produces reasonable forecasts, save the params."""
@@ -56,6 +58,7 @@ class TestTrainSarimaSanityCheck(unittest.TestCase):
         self.assertIn('order', model_data)
         self.assertIn('seasonal_order', model_data)
 
+    @pytest.mark.slow
     @patch('train_sarima.load_historical_data')
     def test_does_not_overwrite_when_forecast_explodes(self, mock_load):
         """If fitted model produces exploding forecasts, keep old params."""

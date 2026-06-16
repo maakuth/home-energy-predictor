@@ -1,4 +1,5 @@
 import unittest
+import pytest
 import pandas as pd
 import numpy as np
 import os
@@ -44,6 +45,7 @@ class TestSARIMAPredictor(unittest.TestCase):
         self.assertGreaterEqual(len(ts_data), 190)
         self.assertIsInstance(ts_data.index, pd.DatetimeIndex)
 
+    @pytest.mark.slow
     def test_predict_sarimax(self):
         # Load all 3 days
         ts_data = load_historical_data(self.test_csv, last_n_days=3)
@@ -72,6 +74,7 @@ class TestSARIMAPredictor(unittest.TestCase):
             self.assertEqual(data[0]['predicted_baseload'], 1.2)
             self.assertEqual(data[0]['model'], 'SARIMA')
 
+    @pytest.mark.slow
     def test_predict_sarimax_fallback_from_bad_params(self):
         """If saved params produce exploding CIs, predictor should refit."""
         import pickle

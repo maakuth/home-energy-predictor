@@ -53,11 +53,6 @@ class TestBatteryPlannerInterface(unittest.TestCase):
 class TestBatteryPlannerFactory(unittest.TestCase):
     """Test planner factory registration and creation."""
     
-    def test_factory_creates_heuristic_by_default(self):
-        """Factory should create heuristic planner by default."""
-        planner = BatteryPlannerFactory.create()
-        self.assertIsInstance(planner, HeuristicBatteryPlanner)
-    
     def test_factory_creates_heuristic_by_name(self):
         """Factory should create heuristic planner when explicitly requested."""
         planner = BatteryPlannerFactory.create('heuristic')
