@@ -451,8 +451,8 @@ def optimize():
         
         if len(acc_df) >= 2:
             # Calculate rate of change over the most recent data
-            acc_df = acc_df.sort_values('timestamp')
-            time_diff = (acc_df['timestamp'].iloc[-1] - acc_df['timestamp'].iloc[-2]).total_seconds() / 60.0  # in minutes
+            acc_df = acc_df.sort_index()
+            time_diff = (acc_df.index[-1] - acc_df.index[-2]).total_seconds() / 60.0  # in minutes
             temp_diff = acc_df['state'].iloc[-1] - acc_df['state'].iloc[-2]
             
             if time_diff > 0:
