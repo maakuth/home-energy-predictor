@@ -216,26 +216,23 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
                            f'(load {actual_load_kw:.2f}kW)')
 
     elif planned_action == 'idle':
-        # Hysteresis thresholds: wider when battery is already active
-        # to prevent rapid charge/discharge oscillation
-        charge_threshold = -500    # Export >500W triggers charge (when idle)
-        discharge_threshold = 500  # Import >500W triggers discharge (when idle)
+        # Proportional control: adjust battery power to zero out grid,
+        # with a small deadband to prevent noise-induced hunting.
+        # target = current_battery + (-grid) = battery - grid.
+        # This naturally brings grid toward zero in one step.
+        grid_kw = grid_w / 1000.0
+        battery_kw = battery_w / 1000.0
         
-        if battery_w > 500:  # Currently charging
-            discharge_threshold = 1500  # Need stronger import to flip
-        elif battery_w < -500:  # Currently discharging
-            charge_threshold = -1500   # Need stronger export to flip
-        
-        if grid_w < charge_threshold:  # Exporting strongly enough
-            adjusted_battery_kw = min(abs(grid_w / 1000.0), max_battery_kw)
-            log_message = (f'idle -> opportunistic charge {adjusted_battery_kw:.2f}kW '
-                           f'(export {abs(grid_w):.0f}W)')
-        elif grid_w > discharge_threshold:  # Importing strongly enough
-            adjusted_battery_kw = -min(abs(grid_w / 1000.0), max_battery_kw)
-            log_message = (f'idle -> opportunistic discharge {abs(adjusted_battery_kw):.2f}kW '
-                           f'(import {grid_w:.0f}W)')
+        if abs(grid_w) > 200:  # Deadband: ignore small grid deviations
+            target_kw = battery_kw - grid_kw
+            adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, target_kw))
         else:
-            adjusted_battery_kw = 0.0
+            adjusted_battery_kw = battery_kw  # Maintain current setpoint
+        
+        if abs(adjusted_battery_kw) > 0.5:
+            direction = 'charge' if adjusted_battery_kw > 0 else 'discharge'
+            log_message = (f'idle -> opportunistic {direction} {abs(adjusted_battery_kw):.2f}kW '
+                           f'(grid {grid_w:.0f}W)')
 
     # Phase current capping
     if phase_currents and any(c is not None for c in phase_currents):
