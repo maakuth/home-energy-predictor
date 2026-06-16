@@ -159,6 +159,11 @@ Beyond the battery constraints above, these tunables affect planner behaviour:
 | `PLAN_INTERVAL_MINUTES` | 15 | Plan interval length (minutes). |
 | `BATTERY_ALLOW_EXPORT` | True | Whether exporting is allowed (fallback if HA entity unavailable). |
 | `BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH` | 0.005 | Minimum arbitrage margin for grid charging. |
+| `BATTERY_LP_HORIZON` | 24 | LP planner horizon (15-min intervals). 24 = 6 h. |
+| `BATTERY_LP_DISCOUNT` | 0.98 | Per-interval discount factor (prevents over-optimistic planning). |
+| `BATTERY_LP_PARALLEL` | 0 | HiGHS parallel solver (usually slower for small LPs). |
+| `BATTERY_TERMINAL_VALUE_PERCENTILE` | 0.0 | Price percentile for final-SoC valuation (0 = disabled). |
+| `BATTERY_DEGRADATION_COST_EUR_PER_KWH` | 0.0 | Battery wear cost per kWh cycled. |
 | `HEPO_DISABLE_BATTERY` | False | Set to `1` to disable battery optimization entirely. |
 
 ---

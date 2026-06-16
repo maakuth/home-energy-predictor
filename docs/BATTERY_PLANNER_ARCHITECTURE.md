@@ -82,6 +82,32 @@ planner = BatteryPlannerFactory.create('heuristic')
 planner = BatteryPlannerFactory.create('HEURISTIC')
 ```
 
+## Registered Planners
+
+### `heuristic` — Default, rule-based
+
+The original battery planner implementing peak shaving, cheap-window charging,
+opportunity-cost analysis, and solar-surplus utilization.
+
+**Env vars:** see `docs/ENV_VARIABLES.md` for `BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH` etc.
+
+### `nemotron-linprog` — Linear programming (HiGHS)
+
+A pure linear-programming solver using `scipy.optimize.linprog` with the HiGHS
+method.  Formulates the battery dispatch as a cost-minimization LP over a
+configurable receding horizon and falls back to idle when the LP solution does
+not beat the no-battery baseline.
+
+**Additional env vars (all prefixed `BATTERY_LP_`):**
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `BATTERY_LP_HORIZON` | 24 | Planning horizon in 15-min intervals (24 = 6 h). |
+| `BATTERY_LP_DISCOUNT` | 0.98 | Per-interval discount factor γ applied to future costs (γ < 1 prevents over-optimistic planning). |
+| `BATTERY_LP_PARALLEL` | 0 | Set to 1 to enable HiGHS parallel solver (usually slower for small LPs). |
+| `BATTERY_TERMINAL_VALUE_PERCENTILE` | 0.0 | Price-percentile for valuing final SoC (0 = disabled). |
+| `BATTERY_DEGRADATION_COST_EUR_PER_KWH` | 0.0 | Cost per kWh cycled (models battery wear). |
+
 ## Usage in `optimize_plan.py`
 
 The main `optimize()` function now uses the factory:
