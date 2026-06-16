@@ -159,12 +159,12 @@ class NemotronLinprogPlanner(BatteryPlanner):
             # Slight preference: solar charging over grid charging (solar is free)
             c[idx_c_solar(i)] = -1e-6
             c[idx_c_grid(i)] = 1e-6
-            # Degradation cost on cycling
+            # Degradation cost on cycling (discounted consistently with grid costs)
             if degradation_cost_per_kwh > 0:
-                c[idx_c_solar(i)] += degradation_cost_per_kwh
-                c[idx_c_grid(i)] += degradation_cost_per_kwh
-                c[idx_d_load(i)] = degradation_cost_per_kwh
-                c[idx_d_export(i)] = degradation_cost_per_kwh
+                c[idx_c_solar(i)] += degradation_cost_per_kwh * gamma_i
+                c[idx_c_grid(i)] += degradation_cost_per_kwh * gamma_i
+                c[idx_d_load(i)] = degradation_cost_per_kwh * gamma_i
+                c[idx_d_export(i)] = degradation_cost_per_kwh * gamma_i
             # Large penalty for exceeding grid import limit (fuse protection)
             c[idx_slack(i)] = 1e3  # High penalty to discourage exceeding limit
         
