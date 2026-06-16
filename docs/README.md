@@ -2,6 +2,10 @@
 
 An ML-powered agent that predicts household energy consumption and optimizes usage against electricity spot prices using a Model Predictive Control (MPC) approach.
 
+This is very custom thing for my own usage. For now, there are no plans to genericize it for anyone's use, but it could good inspiration.
+It has been developed with different ML agents, especially Google Gemini 3 preview.
+Perhaps another agent could make it yours.
+
 ## Current Features
 
 ### 1. Data Pipeline
