@@ -76,8 +76,16 @@ class NemotronLinprogPlanner(BatteryPlanner):
         max_soc_kwh = capacity_kwh * max_soc_pct / 100.0
         initial_soc_kwh = capacity_kwh * effective_initial_soc_pct / 100.0
         
-        # Configurable lookahead horizon (default: 96 intervals = 24 hours)
-        max_horizon = get_env_int('BATTERY_LP_HORIZON', 96)
+        # Configurable lookahead horizon (default: 192 intervals = 48 hours)
+        # Fallback used when tomorrow's spot prices aren't available yet
+        max_horizon = get_env_int('BATTERY_LP_HORIZON', 192)
+        max_horizon_fallback = get_env_int('BATTERY_LP_HORIZON_FALLBACK', 96)
+
+        # Use fallback horizon when tomorrow's prices aren't known from context
+        tomorrow_valid = (context or {}).get('tomorrow_valid', False)
+        if not tomorrow_valid:
+            max_horizon = max_horizon_fallback
+
         horizon = min(len(predictions_kwh), max_horizon)
         interval_hours = get_env_int('PLAN_INTERVAL_MINUTES', 15) / 60.0
         

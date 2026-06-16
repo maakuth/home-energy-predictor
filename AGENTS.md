@@ -109,10 +109,10 @@ ORDER BY version DESC;
 ## Running tests
 $ venv/bin/python3 -m pytest
 
-Normally we want to go fast, the only slow ones are SARIMA tests. If you didn't touch SARIMA stuff, you don't need to run those every time.
-Run them before commit though.
+Normally we want to go fast by skipping slow tests (marked @pytest.mark.slow).
+Run the full suite before commit though.
 
-$ venv/bin/python -m pytest -k 'not sarima'
+$ venv/bin/python -m pytest -k 'not slow'
 
 ## Tuning Trap: Short Tests Mislead
 

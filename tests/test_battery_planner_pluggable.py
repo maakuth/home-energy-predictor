@@ -1,5 +1,6 @@
 """Tests for pluggable battery planner architecture."""
 
+import os
 import unittest
 import numpy as np
 from battery_planners import (
@@ -184,6 +185,95 @@ class TestBatteryPlannerContext(unittest.TestCase):
         )
         
         self.assertEqual(len(plan), 2)
+
+
+class TestNemotronLinprogAdaptiveHorizon(unittest.TestCase):
+    """Test adaptive horizon behavior of NemotronLinprogPlanner."""
+
+    def setUp(self):
+        self._env_backup = {}
+        for key in ['BATTERY_LP_HORIZON', 'BATTERY_LP_HORIZON_FALLBACK',
+                     'BATTERY_LP_DISCOUNT', 'BATTERY_INITIAL_SOC_PCT',
+                     'BATTERY_CAPACITY_KWH', 'BATTERY_MIN_SOC_PCT',
+                     'BATTERY_MAX_SOC_PCT', 'PLAN_INTERVAL_MINUTES']:
+            self._env_backup[key] = os.environ.pop(key, None)
+
+        os.environ['BATTERY_LP_HORIZON'] = '40'
+        os.environ['BATTERY_LP_HORIZON_FALLBACK'] = '20'
+        os.environ['BATTERY_LP_DISCOUNT'] = '1.0'
+        os.environ['BATTERY_INITIAL_SOC_PCT'] = '10'
+        os.environ['BATTERY_CAPACITY_KWH'] = '50'
+        os.environ['BATTERY_MIN_SOC_PCT'] = '10'
+        os.environ['BATTERY_MAX_SOC_PCT'] = '90'
+        os.environ['PLAN_INTERVAL_MINUTES'] = '15'
+
+    def tearDown(self):
+        for key, val in self._env_backup.items():
+            if val is not None:
+                os.environ[key] = val
+            else:
+                os.environ.pop(key, None)
+
+    def _make_price_scenario(self, n=50):
+        """Prices: cheap 0-15, moderate 15-25, expensive 25-35, moderate 35+."""
+        predictions = np.ones(n) * 2.0  # 2 kW baseload
+        solar = np.zeros(n)
+        import_prices = np.concatenate([
+            np.ones(15) * 0.05,
+            np.ones(11) * 0.12,
+            np.ones(11) * 0.30,
+            np.ones(n - 37) * 0.12,
+        ])
+        export_prices = import_prices * 0.5
+        timestamps = [f"interval_{i}" for i in range(n)]
+        return predictions, solar, import_prices, export_prices, timestamps
+
+    def test_tomorrow_valid_charges_for_far_future_peak(self):
+        """With tomorrow_valid=True, LP should charge for peaks beyond fallback horizon."""
+        data = self._make_price_scenario(50)
+        planner_true = BatteryPlannerFactory.create('nemotron-linprog')
+        context = {
+            'tomorrow_valid': True,
+            'outside_temps': np.zeros(50),
+            'is_sauna_active': np.zeros(50, dtype=int),
+        }
+        plan_true = planner_true.plan(*data, context=context)
+
+        planner_false = BatteryPlannerFactory.create('nemotron-linprog')
+        context['tomorrow_valid'] = False
+        plan_false = planner_false.plan(*data, context=context)
+
+        # At index 19 (end of fallback horizon), long-horizon plan should
+        # have charged for the far-future peak, while fallback only sees
+        # moderate prices and stays at min SoC
+        self.assertGreater(
+            plan_true[19].soc_pct,
+            plan_false[19].soc_pct + 1.0,
+            "tomorrow_valid=True should charge for peaks beyond fallback horizon"
+        )
+
+    def test_no_context_equals_tomorrow_false(self):
+        """Without context, LP should use fallback horizon (safe default)."""
+        data = self._make_price_scenario(50)
+        planner = BatteryPlannerFactory.create('nemotron-linprog')
+
+        plan_no_ctx = planner.plan(*data)
+
+        planner2 = BatteryPlannerFactory.create('nemotron-linprog')
+        context = {
+            'tomorrow_valid': False,
+            'outside_temps': np.zeros(50),
+            'is_sauna_active': np.zeros(50, dtype=int),
+        }
+        plan_with_ctx = planner2.plan(*data, context=context)
+
+        # Both should produce identical behavior (same SoC at index 19)
+        self.assertAlmostEqual(
+            plan_no_ctx[19].soc_pct,
+            plan_with_ctx[19].soc_pct,
+            places=4,
+            msg="No context should behave like tomorrow_valid=False"
+        )
 
 
 if __name__ == '__main__':
