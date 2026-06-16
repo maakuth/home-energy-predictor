@@ -4,7 +4,7 @@ This directory now contains comprehensive documentation analyzing how load power
 
 ## Documents Generated
 
-### 1. **SEARCH_RESULTS_SUMMARY.txt** (START HERE)
+### 1. **docs/archive/LOAD-CALC-SEARCH-RESULTS.txt** (START HERE)
    - **Purpose:** Executive summary of findings
    - **Length:** ~200 lines
    - **Best For:** Quick understanding of the problem
@@ -104,7 +104,7 @@ df['total_home_power'] = df['total_power'] + df['solar_actual'] - df.get('batter
 
 ## What Each Document Covers
 
-### SEARCH_RESULTS_SUMMARY.txt
+### archive/LOAD-CALC-SEARCH-RESULTS.txt
 - **Section 1:** Load power calculation (lines 49-61 of process_data.py)
 - **Section 2:** Where sensors interact
 - **Section 3:** Battery impact examples
@@ -141,11 +141,11 @@ df['total_home_power'] = df['total_power'] + df['solar_actual'] - df.get('batter
 ## Reading Path by Role
 
 ### For Quick Understanding (5 min)
-1. Read SEARCH_RESULTS_SUMMARY.txt (KEY FINDINGS section)
+1. Read archive/LOAD-CALC-SEARCH-RESULTS.txt (KEY FINDINGS section)
 2. Look at Example Scenarios (Scenario 1 & 2)
 
 ### For Code Review (30 min)
-1. SEARCH_RESULTS_SUMMARY.txt (all sections)
+1. archive/LOAD-CALC-SEARCH-RESULTS.txt (all sections)
 2. SENSOR_POWER_ANALYSIS.md (Sections 2, 4, 5, 12)
 3. LOAD_CALCULATION_FLOWCHART.md (Formula Cards)
 
@@ -258,7 +258,7 @@ df['total_home_power'] = df['total_power'] + df['solar_actual'] - df.get('batter
 
 | Document | Lines | Words | Sections |
 |----------|-------|-------|----------|
-| SEARCH_RESULTS_SUMMARY.txt | 200+ | 2,500 | 7 major |
+| archive/LOAD-CALC-SEARCH-RESULTS.txt | 200+ | 2,500 | 7 major |
 | SENSOR_POWER_ANALYSIS.md | 400+ | 5,000 | 12 major |
 | LOAD_CALCULATION_FLOWCHART.md | 300+ | 4,000 | 6 major |
 | **Total** | **900+** | **11,500** | **25+** |
