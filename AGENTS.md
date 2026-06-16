@@ -113,3 +113,18 @@ Normally we want to go fast, the only slow ones are SARIMA tests. If you didn't 
 Run them before commit though.
 
 $ venv/bin/python -m pytest -k 'not sarima'
+
+## Tuning Trap: Short Tests Mislead
+
+Never tune hyperparameters (horizon, discount, thresholds) using short
+test windows (e.g. 24h/96-interval quick tests). The receding-horizon
+planner stores energy for future discharge that falls outside the short
+window, making longer horizons look *worse* than they actually are.
+
+**Always use full-length fixture runs for tuning decisions.**
+Quick tests are only for detecting crashes and constraint violations.
+
+Example: LP horizon sweep gave these results:
+- Quick (24h): 6h avg +19.9%, 12h avg +4.0%, 24h avg -16.3%
+- Full-length: 6h avg +13.4%, 12h avg +41.8%, 24h avg +46.0%
+→ The quick test's ranking was completely inverted vs reality.
