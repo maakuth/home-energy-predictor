@@ -76,8 +76,8 @@ class NemotronLinprogPlanner(BatteryPlanner):
         max_soc_kwh = capacity_kwh * max_soc_pct / 100.0
         initial_soc_kwh = capacity_kwh * effective_initial_soc_pct / 100.0
         
-        # Configurable lookahead horizon (default: full predictions, capped at 96)
-        max_horizon = get_env_int('BATTERY_LP_HORIZON', 96)
+        # Configurable lookahead horizon (default: 24 intervals = 6 hours)
+        max_horizon = get_env_int('BATTERY_LP_HORIZON', 24)
         horizon = min(len(predictions_kwh), max_horizon)
         interval_hours = get_env_int('PLAN_INTERVAL_MINUTES', 15) / 60.0
         
@@ -140,7 +140,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
         
         # Discount factor for future costs (addresses receding horizon pathology)
         # γ < 1 makes future savings worth less, preventing over-optimistic planning
-        discount = get_env_float('BATTERY_LP_DISCOUNT', 0.995)
+        discount = get_env_float('BATTERY_LP_DISCOUNT', 0.98)
         
         # Objective coefficients
         c = np.zeros(total_vars)
