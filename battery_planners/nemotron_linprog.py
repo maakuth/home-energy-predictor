@@ -10,7 +10,7 @@ import os
 import numpy as np
 from typing import List, Any, Optional
 from scipy.optimize import linprog
-from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, should_idle_interval
 
 
 def get_env_float(name, default):
@@ -299,7 +299,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
             if not result.success:
                 print(f"LP FAILED: {result.message}")
                 # Fallback to idle plan
-                return self._create_idle_plan(horizon, prediction_timestamps, initial_soc_kwh, 
+                return self._create_follow_plan(horizon, prediction_timestamps, initial_soc_kwh, 
                                               capacity_kwh, net_without_battery_kwh)
             
             x = result.x
@@ -327,13 +327,13 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 total_no_battery_cost -= initial_soc_kwh * tv_benefit_per_kwh
             
             if total_plan_cost >= total_no_battery_cost - 0.001:
-                return self._create_idle_plan(horizon, prediction_timestamps, initial_soc_kwh, 
+                return self._create_follow_plan(horizon, prediction_timestamps, initial_soc_kwh, 
                                               capacity_kwh, net_without_battery_kwh)
             
         except Exception as e:
             print(f"LP EXCEPTION: {e}")
             # Fallback to idle plan on solver error
-            return self._create_idle_plan(horizon, prediction_timestamps, initial_soc_kwh, 
+            return self._create_follow_plan(horizon, prediction_timestamps, initial_soc_kwh, 
                                           capacity_kwh, net_without_battery_kwh)
         
         # Build plan entries from solution
@@ -366,7 +366,13 @@ class NemotronLinprogPlanner(BatteryPlanner):
             elif d_export > 1e-6:
                 battery_action = 'discharge_export'
             else:
-                battery_action = 'idle'
+                is_idle = should_idle_interval(
+                    net_without_battery_kw[i], max(max_charge_kw, max_discharge_kw),
+                    degradation_cost_per_kwh, interval_hours,
+                    charge_eff, discharge_eff,
+                    import_prices[i], export_prices[i],
+                )
+                battery_action = 'idle' if is_idle else 'follow'
             
             # Calculate costs (net and committed already in kWh)
             no_battery_net = net_without_battery_kwh[i] + committed_kwh[i]
@@ -417,7 +423,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
             grid_export = max(-net_kwh, 0.0)
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
-                battery_action='idle',
+                battery_action='follow',
                 battery_power_kw=0.0,
                 charge_from_solar_kwh=0.0,
                 charge_from_grid_kwh=0.0,
@@ -435,9 +441,9 @@ class NemotronLinprogPlanner(BatteryPlanner):
         
         return battery_plan
     
-    def _create_idle_plan(self, horizon, prediction_timestamps, initial_soc_kwh, 
-                          capacity_kwh, net_without_battery_kwh):
-        """Create an idle plan as fallback."""
+    def _create_follow_plan(self, horizon, prediction_timestamps, initial_soc_kwh, 
+                            capacity_kwh, net_without_battery_kwh):
+        """Create a follow plan as fallback (load-following active)."""
         battery_plan = []
         soc_kwh = initial_soc_kwh
         interval_hours = get_env_int('PLAN_INTERVAL_MINUTES', 15) / 60.0
@@ -457,7 +463,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
             
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
-                battery_action='idle',
+                battery_action='follow',
                 battery_power_kw=0.0,
                 charge_from_solar_kwh=0.0,
                 charge_from_grid_kwh=0.0,
@@ -473,7 +479,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
             )
             battery_plan.append(entry)
         
-        # Pad with idle entries if horizon is shorter than input length
+        # Pad with follow entries if horizon is shorter than input length
         while len(battery_plan) < len(prediction_timestamps):
             i = len(battery_plan)
             ts = prediction_timestamps[i]
@@ -483,7 +489,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
             grid_export = max(-net_kwh, 0.0)
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
-                battery_action='idle',
+                battery_action='follow',
                 battery_power_kw=0.0,
                 charge_from_solar_kwh=0.0,
                 charge_from_grid_kwh=0.0,

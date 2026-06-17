@@ -164,7 +164,7 @@ class TestPushPlan(unittest.TestCase):
                 'gshp_intent': 'STOP',
                 'leaf_intent': 'OFF',
                 'battery_power_kw': 0.0,
-                'battery_action': 'idle',
+                'battery_action': 'follow',
                 'soc_pct': 50.0
             }
         ]
@@ -203,7 +203,7 @@ class TestPushPlan(unittest.TestCase):
                 'gshp_intent': 'STOP',
                 'leaf_intent': 'OFF',
                 'battery_power_kw': 0.0,
-                'battery_action': 'idle',
+                'battery_action': 'follow',
                 'soc_pct': 50.0
             }
         ]
@@ -215,7 +215,7 @@ class TestPushPlan(unittest.TestCase):
                 'gshp_intent': 'STOP',
                 'leaf_intent': 'OFF',
                 'battery_power_kw': 0.0,
-                'battery_action': 'idle',
+                'battery_action': 'follow',
                 'soc_pct': 50.0
             })
         
@@ -253,7 +253,7 @@ class TestPushPlan(unittest.TestCase):
                 'gshp_intent': 'STOP',
                 'leaf_intent': 'OFF',
                 'battery_power_kw': 0.0,
-                'battery_action': 'idle',
+                'battery_action': 'follow',
                 'soc_pct': 50.0
             }
         ]
@@ -265,7 +265,7 @@ class TestPushPlan(unittest.TestCase):
                 'gshp_intent': 'STOP',
                 'leaf_intent': 'OFF',
                 'battery_power_kw': 0.0,
-                'battery_action': 'idle',
+                'battery_action': 'follow',
                 'soc_pct': 50.0
             })
         
@@ -323,7 +323,7 @@ class TestGetCurrentPlanEntry(unittest.TestCase):
         plan = [
             {'timestamp': '2026-06-10T09:30:00+00:00', 'battery_action': 'charge_solar'},
             {'timestamp': '2026-06-10T09:45:00+00:00', 'battery_action': 'discharge_export'},
-            {'timestamp': '2026-06-10T10:00:00+00:00', 'battery_action': 'idle'},
+            {'timestamp': '2026-06-10T10:00:00+00:00', 'battery_action': 'follow'},
         ]
         with patch('utils.battery_utils.datetime') as mock_dt:
             mock_dt.now.return_value = now
@@ -353,14 +353,14 @@ class TestGetCurrentPlanEntry(unittest.TestCase):
         from datetime import datetime, timezone
         now = datetime(2026, 6, 10, 9, 46, 30, tzinfo=timezone.utc)
         plan = [
-            {'timestamp': '2026-06-10T10:00:00+00:00', 'battery_action': 'idle'},
+            {'timestamp': '2026-06-10T10:00:00+00:00', 'battery_action': 'follow'},
         ]
         with patch('utils.battery_utils.datetime') as mock_dt:
             mock_dt.now.return_value = now
             mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
             mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
             result = get_current_plan_entry(plan)
-            self.assertEqual(result['battery_action'], 'idle')
+            self.assertEqual(result['battery_action'], 'follow')
 
     def test_empty_plan(self):
         """Empty plan should return None."""
@@ -442,35 +442,39 @@ class TestLoadFollowing(unittest.TestCase):
         self.assertAlmostEqual(adjusted, -2.0)
         self.assertEqual(msg, '')
 
-    def test_idle_opportunistic_charge_on_export(self):
-        """idle should opportunistically charge when exporting to grid."""
+    def test_follow_opportunistic_charge_on_export(self):
+        """follow should opportunistically charge when exporting to grid,
+        but capped at BATTERY_FOLLOW_MAX_KW (default 2 kW)."""
         adjusted, msg = compute_load_following_setpoint(
             planned_battery_kw=0.0,
-            planned_action='idle',
+            planned_action='follow',
             solar_kw=5.0,
             grid_w=-3000.0,
             battery_w=0.0
         )
-        self.assertAlmostEqual(adjusted, 3.0)
-        self.assertIn('opportunistic charge', msg)
+        # 3 kW export exceeds follow cap → stays at 0
+        self.assertAlmostEqual(adjusted, 0.0)
+        self.assertEqual(msg, '')
 
-    def test_idle_opportunistic_discharge_on_import(self):
-        """idle should opportunistically discharge when importing from grid."""
+    def test_follow_opportunistic_discharge_on_import(self):
+        """follow should opportunistically discharge when importing from grid,
+        but capped at BATTERY_FOLLOW_MAX_KW (default 2 kW)."""
         adjusted, msg = compute_load_following_setpoint(
             planned_battery_kw=0.0,
-            planned_action='idle',
+            planned_action='follow',
             solar_kw=0.0,
             grid_w=4000.0,
             battery_w=0.0
         )
-        self.assertAlmostEqual(adjusted, -4.0)
-        self.assertIn('opportunistic discharge', msg)
+        # 4 kW import exceeds follow cap → stays at 0
+        self.assertAlmostEqual(adjusted, 0.0)
+        self.assertEqual(msg, '')
 
-    def test_idle_stays_idle_in_deadband(self):
-        """idle should stay at 0 when grid flow is within deadband."""
+    def test_follow_stays_put_in_deadband(self):
+        """follow should stay at 0 when grid flow is within deadband."""
         adjusted, msg = compute_load_following_setpoint(
             planned_battery_kw=0.0,
-            planned_action='idle',
+            planned_action='follow',
             solar_kw=2.0,
             grid_w=-200.0,
             battery_w=0.0
@@ -494,13 +498,14 @@ class TestLoadFollowing(unittest.TestCase):
         """Adjusted setpoint should be clamped to max_battery_kw."""
         adjusted, msg = compute_load_following_setpoint(
             planned_battery_kw=0.0,
-            planned_action='idle',
+            planned_action='follow',
             solar_kw=0.0,
             grid_w=-15000.0,  # 15kW export
             battery_w=0.0,
             max_battery_kw=10.0
         )
-        self.assertAlmostEqual(adjusted, 10.0)
+        # Follow caps at BATTERY_FOLLOW_MAX_KW (default 2 kW). 15 kW exceeds cap → stays at 0.
+        self.assertAlmostEqual(adjusted, 0.0)
 
 class TestPhaseCapping(unittest.TestCase):
     def test_no_phase_cap_needed(self):
@@ -563,33 +568,33 @@ class TestPhaseCapping(unittest.TestCase):
         self.assertIn('phase cap', msg)
 
     def test_forced_discharge_to_assist_import_overload(self):
-        """Should discharge as much as possible (up to limit) if phase is overloaded."""
+        """Should discharge to protect the fuse when phase is overloaded."""
         # Ip = 30A (exceeding 25A fuse). battery_w = 0.
         # Max P_extra = (25 - 30) * 3 * 230 = -3450W = -3.45kW
         # So it MUST discharge AT LEAST 3.45kW.
-        # Since grid_w is 20kW, opportunistic discharge wants to do 10kW.
-        # 10kW is within the "safe" range (any discharge >= 3.45kW is safe for import limit).
+        # Follow cap prevents opportunistic full discharge; phase cap enforces minimum.
         adjusted, msg = compute_load_following_setpoint(
             planned_battery_kw=0.0,
-            planned_action='idle',
+            planned_action='follow',
             solar_kw=0.0,
             grid_w=20000.0,
             battery_w=0.0,
             phase_currents=[30.0, 10.0, 10.0]
         )
-        self.assertAlmostEqual(adjusted, -10.0) # Opportunistic discharge takes it further
-        # No Phase cap msg because opportunistic discharge already made it safe
+        # Phase cap forces -3.45 kW discharge to protect fuse
+        self.assertAlmostEqual(adjusted, -3.45)
+        self.assertIn('phase cap', msg)
 
     def test_forced_discharge_from_zero(self):
         """Should force discharge if house load exceeds fuse and no opportunistic discharge happens."""
         # Ip = 30A, but grid_w is small (maybe sensors are inconsistent or we are in a deadband)
         # We'll use a planned_action that doesn't have opportunistic discharge to be sure.
-        # Actually, let's just use idle with grid_w in deadband.
+        # Actually, let's just use follow with grid_w in deadband.
         adjusted, msg = compute_load_following_setpoint(
             planned_battery_kw=0.0,
-            planned_action='idle',
+            planned_action='follow',
             solar_kw=0.0,
-            grid_w=200.0, # Within idle deadband (500W)
+            grid_w=200.0, # Within follow deadband (500W)
             battery_w=0.0,
             phase_currents=[30.0, 10.0, 10.0]
         )

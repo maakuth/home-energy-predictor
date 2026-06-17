@@ -78,7 +78,7 @@ def is_battery_available():
     return False
 
 
-def push_battery_control(battery_power_w, battery_action='idle', battery_soc_pct=None):
+def push_battery_control(battery_power_w, battery_action='follow', battery_soc_pct=None):
     """
     Push battery control setpoint to Hoymiles inverter.
     
@@ -162,7 +162,9 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
 
     For 'charge_solar': limits charge to actual solar surplus.
     For 'discharge_load': limits discharge to actual house load.
-    For 'idle': opportunistically charges/discharges to minimize grid flow.
+    For 'follow': opportunistically charges/discharges to minimise grid flow
+        (capped by BATTERY_FOLLOW_MAX_KW).
+    For 'idle': battery does nothing — setpoint is forced to 0 kW.
     For price-arbitrage actions (charge_mixed, charge_grid, discharge_mixed,
     discharge_export): returns the planned setpoint unchanged.
 
@@ -216,22 +218,36 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
                            f'(load {actual_load_kw:.2f}kW)')
 
     elif planned_action == 'idle':
+        # True idle: battery does nothing — setpoint forced to 0 kW.
+        adjusted_battery_kw = 0.0
+        if abs(planned_battery_kw) > 0.01 or abs(battery_w) > 10:
+            log_message = (f'idle: battery forced to 0 kW '
+                           f'(planned {planned_battery_kw:.2f}kW, actual {battery_w / 1000.0:.2f}kW)')
+
+    elif planned_action == 'follow':
         # Proportional control: adjust battery power to zero out grid,
         # with a small deadband to prevent noise-induced hunting.
         # target = current_battery + (-grid) = battery - grid.
         # This naturally brings grid toward zero in one step.
+        # Capped by BATTERY_FOLLOW_MAX_KW to prevent large corrections that
+        # would override the planner's decision to leave the battery alone.
         grid_kw = grid_w / 1000.0
         battery_kw = battery_w / 1000.0
+        max_follow_kw = get_env_float('BATTERY_FOLLOW_MAX_KW', 2.0)
         
         if abs(grid_w) > 200:  # Deadband: ignore small grid deviations
             target_kw = battery_kw - grid_kw
-            adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, target_kw))
+            if abs(target_kw) > max_follow_kw:
+                # Grid flow too large — maintain current setpoint
+                adjusted_battery_kw = battery_kw
+            else:
+                adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, target_kw))
         else:
             adjusted_battery_kw = battery_kw  # Maintain current setpoint
         
         if abs(adjusted_battery_kw) > 0.5:
             direction = 'charge' if adjusted_battery_kw > 0 else 'discharge'
-            log_message = (f'idle -> opportunistic {direction} {abs(adjusted_battery_kw):.2f}kW '
+            log_message = (f'follow -> {direction} {abs(adjusted_battery_kw):.2f}kW '
                            f'(grid {grid_w:.0f}W)')
 
     # Phase current capping

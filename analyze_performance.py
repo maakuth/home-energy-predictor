@@ -157,7 +157,7 @@ def summarize_battery_performance(df_merged):
     print(f"  Period: {start_ts.strftime('%Y-%m-%d %H:%M')} to {end_ts.strftime('%Y-%m-%d %H:%M')} ({duration_hours:.1f}h)")
     
     # Filter to periods where battery was active
-    active = df_merged[df_merged['battery_action'] != 'idle'].copy()
+    active = df_merged[~df_merged['battery_action'].isin(['idle', 'follow'])].copy()
     if active.empty:
         print("  No battery activity found in this period.")
         return {}

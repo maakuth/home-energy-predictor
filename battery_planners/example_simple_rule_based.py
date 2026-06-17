@@ -150,7 +150,7 @@ class SimpleRuleBasedPlanner(BatteryPlanner):
             elif discharge_to_load > 1e-9:
                 battery_action = 'discharge_load'
             else:
-                battery_action = 'idle'
+                battery_action = 'follow'
             
             # Get timestamp
             ts = prediction_timestamps[i]

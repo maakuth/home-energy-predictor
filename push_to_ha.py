@@ -125,7 +125,7 @@ def push_plan():
     battery_control_w = int(-battery_power_kw * 1000)  # Reverse sign, kW→W
     push_battery_control(
         battery_power_w=battery_control_w,
-        battery_action=current.get('battery_action', 'idle'),
+        battery_action=current.get('battery_action', 'follow'),
         battery_soc_pct=current.get('soc_pct')
     )
 

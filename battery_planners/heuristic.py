@@ -16,7 +16,7 @@ import numpy as np
 from typing import List, Any, Optional
 from datetime import datetime
 
-from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, should_idle_interval
 
 
 def get_env_float(name, default):
@@ -490,7 +490,14 @@ class HeuristicBatteryPlanner(BatteryPlanner):
             elif discharge_to_export > 1e-9:
                 battery_action = 'discharge_export'
             else:
-                battery_action = 'idle'
+                # Determine if true idle is better than load-following
+                degradation_cost = get_env_float('BATTERY_DEGRADATION_COST_EUR_PER_KWH', 0.0)
+                max_battery_kw = max(max_charge_kw, max_discharge_kw)
+                is_idle = should_idle_interval(
+                    net_load, max_battery_kw, degradation_cost, interval_hours,
+                    charge_eff, discharge_eff, current_import, current_export,
+                )
+                battery_action = 'idle' if is_idle else 'follow'
             
             # Get timestamp - handle both datetime objects and other types
             ts = prediction_timestamps[i]

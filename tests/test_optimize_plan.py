@@ -474,7 +474,7 @@ class OptimizePlanTests(unittest.TestCase):
         # With export enabled, remaining inverter capacity may also be exported when
         # current export is the best remaining price. Once battery hits min_soc it goes idle.
         for i in range(19, 24):
-            self.assertIn(plan[i]["battery_action"], ("discharge_load", "discharge_mixed", "idle"), f"Hour {i} unexpected action")
+            self.assertIn(plan[i]["battery_action"], ("discharge_load", "discharge_mixed", "follow"), f"Hour {i} unexpected action")
 
     def test_grid_capacity_limits_battery_charge(self):
         with patched_env(
@@ -568,7 +568,7 @@ class OptimizePlanTests(unittest.TestCase):
                 plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         # Solar surplus (9 kWh) > battery room (4 kWh), so no grid charge needed.
-        self.assertEqual(plan[0]["battery_action"], "idle", "Hour 0 should not grid charge when solar can fill battery")
+        self.assertEqual(plan[0]["battery_action"], "follow", "Hour 0 should not grid charge when solar can fill battery")
         self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 0.0, places=5)
 
     def test_no_pressure_discharge_at_cheap_intervals(self):
@@ -753,7 +753,7 @@ class OptimizePlanTests(unittest.TestCase):
         # The cheap ramp-up intervals (0.13-0.18) should preserve energy
         # for the more expensive hours ahead.
         for i in range(3):
-            self.assertEqual(plan[i]["battery_action"], "idle",
+            self.assertEqual(plan[i]["battery_action"], "follow",
                              f"Interval {i} (price={import_prices[i]}) should not discharge")
             self.assertAlmostEqual(plan[i]["discharge_to_export_kwh"], 0.0, places=5,
                                    msg=f"Interval {i} should not export")
@@ -762,7 +762,7 @@ class OptimizePlanTests(unittest.TestCase):
 
         # At interval 3 (price 0.22) the marginal future opportunity is only 0.10,
         # so discharging at 0.22 is still profitable. The battery may discharge.
-        self.assertIn(plan[3]["battery_action"], ("idle", "discharge_mixed", "discharge_load", "discharge_export"),
+        self.assertIn(plan[3]["battery_action"], ("follow", "discharge_mixed", "discharge_load", "discharge_export"),
                       f"Interval 3 (price={import_prices[3]}) unexpected action")
 
         # At the peak interval (0.25) the battery should definitely discharge.
@@ -853,7 +853,7 @@ class OptimizePlanTests(unittest.TestCase):
 
         # Interval 1 (expensive 0.119): should discharge to load (profitable vs 0.091)
         # After charging in interval 0, SOC should be sufficient
-        self.assertIn(plan[1]["battery_action"], ("discharge_load", "discharge_mixed", "idle"),
+        self.assertIn(plan[1]["battery_action"], ("discharge_load", "discharge_mixed", "follow"),
                       "Interval 1 (expensive) should discharge or prepare")
 
     def test_grid_charge_sized_to_near_term_need(self):
@@ -949,7 +949,7 @@ class OptimizePlanTests(unittest.TestCase):
                 plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
 
         # Interval 0: spread is too small to overcome round-trip loss
-        self.assertEqual(plan[0]["battery_action"], "idle",
+        self.assertEqual(plan[0]["battery_action"], "follow",
                         "Should not charge on unprofitable micro-spread")
         self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 0.0, places=5)
 
@@ -989,7 +989,7 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertGreater(plan[0]["charge_from_grid_kwh"], 0.0)
 
         # Interval 1: should discharge to load (expensive period)
-        self.assertIn(plan[1]["battery_action"], ("discharge_load", "discharge_mixed", "idle"),
+        self.assertIn(plan[1]["battery_action"], ("discharge_load", "discharge_mixed", "follow"),
                       "Interval 1 (expensive) should discharge")
 
 

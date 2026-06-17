@@ -6,6 +6,55 @@ from dataclasses import dataclass
 import numpy as np
 
 
+def should_idle_interval(
+    net_kw: float,
+    max_battery_kw: float,
+    degradation_cost_per_kwh: float,
+    interval_hours: float,
+    charge_eff: float,
+    discharge_eff: float,
+    import_price: float,
+    export_price: float,
+) -> bool:
+    """Decide if the battery should truly idle instead of load-following.
+
+    When a planner assigns zero dispatch for an interval, the real-time layer
+    may still load-follow (try to zero out the grid meter) — this is called
+    'follow'. True 'idle' means the battery does nothing, no matter what the
+    grid meter says.
+
+    This function evaluates whether load-following would do more harm than
+    good based on physical feasibility and cost-benefit:
+      1. If net load exceeds battery capacity → futile → idle
+      2. If net load is negligible → not worth cycling → idle
+      3. If no degradation cost configured → follow (legacy behaviour)
+      4. If cycling cost (degradation + efficiency loss) > grid benefit → idle
+    """
+    net_abs = abs(net_kw)
+
+    # Futile: battery can't cancel this flow even at max power
+    if net_abs > max_battery_kw:
+        return True
+
+    # Too small to matter (below typical deadband)
+    if net_abs < 0.2:
+        return True
+
+    # No degradation cost configured → follow (legacy behaviour)
+    if degradation_cost_per_kwh <= 0:
+        return False
+
+    # Cost-benefit: what does load-following cost vs save?
+    energy_kwh = net_abs * interval_hours
+    round_trip_degradation = energy_kwh * degradation_cost_per_kwh * 2
+    round_trip_eff = charge_eff * discharge_eff
+    loss_kwh = energy_kwh * (1 - round_trip_eff)
+    eff_cost = loss_kwh * max(import_price, export_price, 0.01)
+    benefit = energy_kwh * (import_price if net_kw > 0 else export_price)
+
+    return (round_trip_degradation + eff_cost) > benefit
+
+
 class BatteryPlannerContext(TypedDict, total=False):
     """Optional context data available to battery planners.
 
@@ -75,7 +124,7 @@ class BatteryPlanEntry:
     All prices are in EUR/kWh.
     """
     timestamp: str
-    battery_action: str  # 'idle', 'charge_solar', 'charge_grid', 'discharge_load', 'discharge_export', etc.
+    battery_action: str  # 'idle', 'follow', 'charge_solar', 'charge_grid', 'discharge_load', 'discharge_export', etc.
     battery_power_kw: float  # Net power (positive = charging, negative = discharging)
     charge_from_solar_kwh: float
     charge_from_grid_kwh: float
