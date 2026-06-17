@@ -11,6 +11,7 @@ import numpy as np
 from typing import List, Any, Optional
 from scipy.optimize import linprog
 from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, should_idle_interval
+from utils.battery_utils import estimate_follow_dispatch
 
 
 def get_env_float(name, default):
@@ -330,6 +331,136 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 return self._create_follow_plan(horizon, prediction_timestamps, initial_soc_kwh, 
                                               capacity_kwh, net_without_battery_kwh)
             
+            # ---- Stage 2: classify zero-dispatch intervals and re-solve with follow energy ----
+            max_follow_kw = get_env_float('BATTERY_FOLLOW_MAX_KW', 2.0)
+            follow_intervals = {}
+            for i in range(horizon):
+                if max(0.0, x[idx_c_solar(i)]) + max(0.0, x[idx_c_grid(i)]) + max(0.0, x[idx_d_load(i)]) + max(0.0, x[idx_d_export(i)]) > 1e-6:
+                    continue
+                is_idle = should_idle_interval(
+                    net_without_battery_kw[i], max(max_charge_kw, max_discharge_kw),
+                    degradation_cost_per_kwh, interval_hours,
+                    charge_eff, discharge_eff,
+                    import_prices[i], export_prices[i],
+                )
+                if is_idle:
+                    continue
+                follow_kwh, is_discharge = estimate_follow_dispatch(
+                    net_without_battery_kw[i], interval_hours, max_follow_kw)
+                if follow_kwh > 0:
+                    if is_discharge:
+                        follow_intervals[i] = {'charge': 0.0, 'discharge': follow_kwh}
+                    else:
+                        follow_intervals[i] = {'charge': follow_kwh, 'discharge': 0.0}
+            
+            if follow_intervals:
+                # Pre-clip follow energy to avoid infeasible SoC bounds
+                cumulative_soc = initial_soc_kwh
+                for i in sorted(follow_intervals.keys()):
+                    f = follow_intervals[i]
+                    soc_delta = charge_eff * f['charge'] - f['discharge'] / discharge_eff
+                    new_soc = cumulative_soc + soc_delta
+                    if new_soc < min_soc_kwh:
+                        max_discharge = (cumulative_soc - min_soc_kwh) * discharge_eff
+                        f['discharge'] = min(f['discharge'], max(max_discharge, 0.0))
+                    elif new_soc > max_soc_kwh:
+                        max_charge = (max_soc_kwh - cumulative_soc) / charge_eff
+                        f['charge'] = min(f['charge'], max(max_charge, 0.0))
+                    cumulative_soc += charge_eff * f['charge'] - f['discharge'] / discharge_eff
+                    if f['charge'] < 1e-9 and f['discharge'] < 1e-9:
+                        del follow_intervals[i]
+                
+                # Build Stage 2 LP with follow energy embedded
+                c2 = c.copy()
+                A_eq_rows2 = []
+                b_eq_rows2 = []
+                A_ub_rows2 = []
+                b_ub_rows2 = []
+                bounds2 = list(bounds)
+                
+                for i in range(horizon):
+                    f = follow_intervals.get(i)
+                    f_charge = f['charge'] if f else 0.0
+                    f_discharge = f['discharge'] if f else 0.0
+                    follow_grid_offset = f_charge - f_discharge
+                    follow_soc_delta = charge_eff * f_charge - f_discharge / discharge_eff
+                    net_kwh = net_without_battery_kwh[i]
+                    committed_kwh_i = committed_kwh[i]
+                    
+                    # Energy balance (RHS includes follow offset)
+                    row = np.zeros(total_vars)
+                    row[idx_grid_import(i)] = 1
+                    row[idx_grid_export(i)] = -1
+                    row[idx_c_solar(i)] = -1
+                    row[idx_c_grid(i)] = -1
+                    row[idx_d_load(i)] = 1
+                    row[idx_d_export(i)] = 1
+                    A_eq_rows2.append(row)
+                    b_eq_rows2.append(net_kwh + committed_kwh_i + follow_grid_offset)
+                    
+                    # SoC dynamics (RHS includes follow delta)
+                    row = np.zeros(total_vars)
+                    row[idx_soc(i)] = 1
+                    row[idx_c_solar(i)] = -charge_eff
+                    row[idx_c_grid(i)] = -charge_eff
+                    row[idx_d_load(i)] = 1.0 / discharge_eff
+                    row[idx_d_export(i)] = 1.0 / discharge_eff
+                    if i == 0:
+                        b_eq_rows2.append(initial_soc_kwh + follow_soc_delta)
+                    else:
+                        row[idx_soc(i - 1)] = -1
+                        b_eq_rows2.append(follow_soc_delta)
+                    A_eq_rows2.append(row)
+                    
+                    # Charge power limit
+                    row = np.zeros(total_vars)
+                    row[idx_c_solar(i)] = 1
+                    row[idx_c_grid(i)] = 1
+                    A_ub_rows2.append(row)
+                    b_ub_rows2.append(max_charge_kw * interval_hours)
+                    
+                    # Discharge power limit
+                    row = np.zeros(total_vars)
+                    row[idx_d_load(i)] = 1
+                    row[idx_d_export(i)] = 1
+                    A_ub_rows2.append(row)
+                    b_ub_rows2.append(max_discharge_kw * interval_hours)
+                    
+                    # Solar charging limited by solar surplus
+                    solar_surplus_kwh = max(0.0, -net_kwh)
+                    row = np.zeros(total_vars)
+                    row[idx_c_solar(i)] = 1
+                    A_ub_rows2.append(row)
+                    b_ub_rows2.append(solar_surplus_kwh)
+                    
+                    # Grid import limit (fuse)
+                    row = np.zeros(total_vars)
+                    row[idx_grid_import(i)] = 1
+                    row[idx_slack(i)] = -1
+                    A_ub_rows2.append(row)
+                    b_ub_rows2.append(max_grid_import_kwh)
+                    
+                    # Lock follow intervals — charge/discharge forced to zero
+                    if f:
+                        bounds2[idx_c_solar(i)] = (0, 0)
+                        bounds2[idx_c_grid(i)] = (0, 0)
+                        bounds2[idx_d_load(i)] = (0, 0)
+                        bounds2[idx_d_export(i)] = (0, 0)
+                
+                A_eq2 = np.array(A_eq_rows2)
+                b_eq2 = np.array(b_eq_rows2)
+                A_ub2 = np.array(A_ub_rows2)
+                b_ub2 = np.array(b_ub_rows2)
+                
+                result2 = linprog(c2, A_ub=A_ub2, b_ub=b_ub2, A_eq=A_eq2, b_eq=b_eq2,
+                                 bounds=bounds2, method='highs', options=options)
+                
+                if result2.success:
+                    x = result2.x
+                else:
+                    print(f"WARNING: Stage 2 LP failed ({result2.message}), using Stage 1 solution")
+                    follow_intervals = {}
+            
         except Exception as e:
             print(f"LP EXCEPTION: {e}")
             # Fallback to idle plan on solver error
@@ -351,28 +482,38 @@ class NemotronLinprogPlanner(BatteryPlanner):
             # Clamp SoC to valid range (numerical precision)
             soc_kwh = min(max(soc_kwh, min_soc_kwh), max_soc_kwh)
             
-            # Determine battery action (dominant source/sink wins, not first threshold)
-            charge_total = c_solar + c_grid
-            discharge_total = d_load + d_export
+            # Include follow energy for intervals classified in Stage 2
+            f = follow_intervals.get(i) if follow_intervals else None
+            f_charge = f['charge'] if f else 0.0
+            f_discharge = f['discharge'] if f else 0.0
             
-            if charge_total > 1e-6 and c_grid > c_solar:
-                battery_action = 'charge_grid'
-            elif charge_total > 1e-6:
-                battery_action = 'charge_solar'
-            elif d_load > 1e-6 and d_export > 1e-6:
-                battery_action = 'discharge_mixed'
-            elif d_load > 1e-6:
-                battery_action = 'discharge_load'
-            elif d_export > 1e-6:
-                battery_action = 'discharge_export'
+            if f:
+                battery_action = 'follow'
+                entry_c_solar = f_charge + c_solar
+                entry_c_grid = c_grid
+                entry_d_load = f_discharge + d_load
+                entry_d_export = d_export
+                battery_power_kw = (f_charge + c_solar + c_grid - f_discharge - d_load - d_export) / interval_hours
             else:
-                is_idle = should_idle_interval(
-                    net_without_battery_kw[i], max(max_charge_kw, max_discharge_kw),
-                    degradation_cost_per_kwh, interval_hours,
-                    charge_eff, discharge_eff,
-                    import_prices[i], export_prices[i],
-                )
-                battery_action = 'idle' if is_idle else 'follow'
+                charge_total = c_solar + c_grid
+                discharge_total = d_load + d_export
+                if charge_total > 1e-6 and c_grid > c_solar:
+                    battery_action = 'charge_grid'
+                elif charge_total > 1e-6:
+                    battery_action = 'charge_solar'
+                elif d_load > 1e-6 and d_export > 1e-6:
+                    battery_action = 'discharge_mixed'
+                elif d_load > 1e-6:
+                    battery_action = 'discharge_load'
+                elif d_export > 1e-6:
+                    battery_action = 'discharge_export'
+                else:
+                    battery_action = 'idle'
+                entry_c_solar = c_solar
+                entry_c_grid = c_grid
+                entry_d_load = d_load
+                entry_d_export = d_export
+                battery_power_kw = (c_solar + c_grid - d_load - d_export) / interval_hours
             
             # Calculate costs (net and committed already in kWh)
             no_battery_net = net_without_battery_kwh[i] + committed_kwh[i]
@@ -396,11 +537,11 @@ class NemotronLinprogPlanner(BatteryPlanner):
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
                 battery_action=battery_action,
-                battery_power_kw=float((charge_total - discharge_total) / interval_hours),
-                charge_from_solar_kwh=float(c_solar),
-                charge_from_grid_kwh=float(c_grid),
-                discharge_to_load_kwh=float(d_load),
-                discharge_to_export_kwh=float(d_export),
+                battery_power_kw=float(battery_power_kw),
+                charge_from_solar_kwh=float(entry_c_solar),
+                charge_from_grid_kwh=float(entry_c_grid),
+                discharge_to_load_kwh=float(entry_d_load),
+                discharge_to_export_kwh=float(entry_d_export),
                 soc_kwh=float(soc_kwh),
                 soc_pct=float((soc_kwh / capacity_kwh) * 100.0),
                 grid_import_kwh=float(grid_import),
@@ -412,22 +553,48 @@ class NemotronLinprogPlanner(BatteryPlanner):
             
             battery_plan.append(entry)
         
-        # Pad with idle entries if LP horizon is shorter than input length
+        # Pad with follow entries if LP horizon is shorter than input length
         while len(battery_plan) < len(prediction_timestamps):
             i = len(battery_plan)
             ts = prediction_timestamps[i]
             timestamp_str = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
-            comm = committed_kwh[i] if i < len(committed_kwh) else 0.0
-            net_kwh = float(net_without_battery_kwh[i] + comm)
-            grid_import = max(net_kwh, 0.0)
-            grid_export = max(-net_kwh, 0.0)
+            net_kwh = float(net_without_battery_kwh[i] + (committed_kwh[i] if i < len(committed_kwh) else 0.0))
+            net_kw = net_kwh / interval_hours
+            
+            follow_kwh, is_discharge = estimate_follow_dispatch(net_kw, interval_hours, max_follow_kw)
+            if follow_kwh > 0:
+                if is_discharge:
+                    actual = min(follow_kwh, (soc_kwh - min_soc_kwh) * discharge_eff)
+                    actual = max(actual, 0.0)
+                    soc_kwh -= actual / discharge_eff
+                    grid_import = max(net_kwh - actual, 0.0)
+                    grid_export = 0.0
+                    battery_pwr = -min(abs(net_kw), max_follow_kw)
+                    d_load_actual = actual
+                    c_solar_actual = 0.0
+                else:
+                    actual = min(follow_kwh, (max_soc_kwh - soc_kwh) / charge_eff)
+                    actual = max(actual, 0.0)
+                    soc_kwh += actual * charge_eff
+                    grid_import = 0.0
+                    grid_export = max(-net_kwh - actual, 0.0)
+                    battery_pwr = min(abs(net_kw), max_follow_kw)
+                    c_solar_actual = actual
+                    d_load_actual = 0.0
+            else:
+                grid_import = max(net_kwh, 0.0)
+                grid_export = max(-net_kwh, 0.0)
+                battery_pwr = 0.0
+                c_solar_actual = 0.0
+                d_load_actual = 0.0
+            
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
                 battery_action='follow',
-                battery_power_kw=0.0,
-                charge_from_solar_kwh=0.0,
+                battery_power_kw=float(battery_pwr),
+                charge_from_solar_kwh=float(c_solar_actual),
                 charge_from_grid_kwh=0.0,
-                discharge_to_load_kwh=0.0,
+                discharge_to_load_kwh=float(d_load_actual),
                 discharge_to_export_kwh=0.0,
                 soc_kwh=float(soc_kwh),
                 soc_pct=float((soc_kwh / capacity_kwh) * 100.0),
@@ -443,10 +610,15 @@ class NemotronLinprogPlanner(BatteryPlanner):
     
     def _create_follow_plan(self, horizon, prediction_timestamps, initial_soc_kwh, 
                             capacity_kwh, net_without_battery_kwh):
-        """Create a follow plan as fallback (load-following active)."""
+        """Create a follow plan as fallback with load-following SoC correction."""
         battery_plan = []
         soc_kwh = initial_soc_kwh
         interval_hours = get_env_int('PLAN_INTERVAL_MINUTES', 15) / 60.0
+        max_follow_kw = get_env_float('BATTERY_FOLLOW_MAX_KW', 2.0)
+        min_soc_kwh = capacity_kwh * get_env_float('BATTERY_MIN_SOC_PCT', 10.0) / 100.0
+        max_soc_kwh = capacity_kwh * get_env_float('BATTERY_MAX_SOC_PCT', 90.0) / 100.0
+        charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
+        discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
         
         for i in range(horizon):
             ts = prediction_timestamps[i]
@@ -458,16 +630,43 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 timestamp_str = str(ts)
             
             net_kwh = float(net_without_battery_kwh[i])
-            grid_import = max(net_kwh, 0.0)
-            grid_export = max(-net_kwh, 0.0)
+            net_kw = net_kwh / interval_hours
+            
+            # Compute follow dispatch for this interval
+            follow_kwh, is_discharge = estimate_follow_dispatch(net_kw, interval_hours, max_follow_kw)
+            if follow_kwh > 0:
+                if is_discharge:
+                    actual = min(follow_kwh, (soc_kwh - min_soc_kwh) * discharge_eff)
+                    actual = max(actual, 0.0)
+                    soc_kwh -= actual / discharge_eff
+                    grid_import = max(net_kwh - actual, 0.0)
+                    grid_export = 0.0
+                    battery_pwr = -min(abs(net_kw), max_follow_kw)
+                    d_load_actual = actual
+                    c_solar_actual = 0.0
+                else:
+                    actual = min(follow_kwh, (max_soc_kwh - soc_kwh) / charge_eff)
+                    actual = max(actual, 0.0)
+                    soc_kwh += actual * charge_eff
+                    grid_import = 0.0
+                    grid_export = max(-net_kwh - actual, 0.0)
+                    battery_pwr = min(abs(net_kw), max_follow_kw)
+                    c_solar_actual = actual
+                    d_load_actual = 0.0
+            else:
+                grid_import = max(net_kwh, 0.0)
+                grid_export = max(-net_kwh, 0.0)
+                battery_pwr = 0.0
+                c_solar_actual = 0.0
+                d_load_actual = 0.0
             
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
                 battery_action='follow',
-                battery_power_kw=0.0,
-                charge_from_solar_kwh=0.0,
+                battery_power_kw=float(battery_pwr),
+                charge_from_solar_kwh=float(c_solar_actual),
                 charge_from_grid_kwh=0.0,
-                discharge_to_load_kwh=0.0,
+                discharge_to_load_kwh=float(d_load_actual),
                 discharge_to_export_kwh=0.0,
                 soc_kwh=float(soc_kwh),
                 soc_pct=float((soc_kwh / capacity_kwh) * 100.0),
@@ -485,15 +684,42 @@ class NemotronLinprogPlanner(BatteryPlanner):
             ts = prediction_timestamps[i]
             timestamp_str = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
             net_kwh = float(net_without_battery_kwh[i])
-            grid_import = max(net_kwh, 0.0)
-            grid_export = max(-net_kwh, 0.0)
+            net_kw = net_kwh / interval_hours
+            
+            follow_kwh, is_discharge = estimate_follow_dispatch(net_kw, interval_hours, max_follow_kw)
+            if follow_kwh > 0:
+                if is_discharge:
+                    actual = min(follow_kwh, (soc_kwh - min_soc_kwh) * discharge_eff)
+                    actual = max(actual, 0.0)
+                    soc_kwh -= actual / discharge_eff
+                    grid_import = max(net_kwh - actual, 0.0)
+                    grid_export = 0.0
+                    battery_pwr = -min(abs(net_kw), max_follow_kw)
+                    d_load_actual = actual
+                    c_solar_actual = 0.0
+                else:
+                    actual = min(follow_kwh, (max_soc_kwh - soc_kwh) / charge_eff)
+                    actual = max(actual, 0.0)
+                    soc_kwh += actual * charge_eff
+                    grid_import = 0.0
+                    grid_export = max(-net_kwh - actual, 0.0)
+                    battery_pwr = min(abs(net_kw), max_follow_kw)
+                    c_solar_actual = actual
+                    d_load_actual = 0.0
+            else:
+                grid_import = max(net_kwh, 0.0)
+                grid_export = max(-net_kwh, 0.0)
+                battery_pwr = 0.0
+                c_solar_actual = 0.0
+                d_load_actual = 0.0
+            
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
                 battery_action='follow',
-                battery_power_kw=0.0,
-                charge_from_solar_kwh=0.0,
+                battery_power_kw=float(battery_pwr),
+                charge_from_solar_kwh=float(c_solar_actual),
                 charge_from_grid_kwh=0.0,
-                discharge_to_load_kwh=0.0,
+                discharge_to_load_kwh=float(d_load_actual),
                 discharge_to_export_kwh=0.0,
                 soc_kwh=float(soc_kwh),
                 soc_pct=float((soc_kwh / capacity_kwh) * 100.0),

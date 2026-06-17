@@ -426,5 +426,22 @@ def compute_net_metering_setpoint(
     # Update state
     state['planned_battery_kw'] = planned_battery_kw
     _save_net_metering_state(state, state_file)
-    
+
     return clamped, log_msg
+
+
+def estimate_follow_dispatch(net_kw, interval_hours, max_follow_kw=2.0,
+                              deadband_kw=0.2):
+    """Estimate real-time load-following dispatch for a single interval.
+    
+    Returns (follow_kwh, is_discharge) or (0.0, None) if no follow activity
+    is expected (net below deadband or above follow cap).
+    
+    follow_kwh:  energy (kWh) the battery would charge/discharge
+    is_discharge: True = battery discharges (net import being cancelled),
+                  False = battery charges (net export being absorbed)
+    """
+    abs_net = abs(net_kw)
+    if abs_net < deadband_kw or abs_net > max_follow_kw:
+        return 0.0, None
+    return abs_net * interval_hours, (net_kw > 0)
