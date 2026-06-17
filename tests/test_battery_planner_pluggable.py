@@ -195,7 +195,9 @@ class TestNemotronLinprogAdaptiveHorizon(unittest.TestCase):
         for key in ['BATTERY_LP_HORIZON', 'BATTERY_LP_HORIZON_FALLBACK',
                      'BATTERY_LP_DISCOUNT', 'BATTERY_INITIAL_SOC_PCT',
                      'BATTERY_CAPACITY_KWH', 'BATTERY_MIN_SOC_PCT',
-                     'BATTERY_MAX_SOC_PCT', 'PLAN_INTERVAL_MINUTES']:
+                     'BATTERY_MAX_SOC_PCT', 'PLAN_INTERVAL_MINUTES',
+                     'BATTERY_TERMINAL_VALUE_PERCENTILE',
+                     'BATTERY_DEGRADATION_COST_EUR_PER_KWH']:
             self._env_backup[key] = os.environ.pop(key, None)
 
         os.environ['BATTERY_LP_HORIZON'] = '40'

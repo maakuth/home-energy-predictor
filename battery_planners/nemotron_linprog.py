@@ -317,6 +317,15 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 ge = max(0.0, x[idx_grid_export(i)])
                 total_plan_cost += gi * import_prices[i] - ge * export_prices[i]
             
+            # Adjust both sides for terminal value of remaining SOC so the
+            # comparison does not discard a plan that stores energy for use
+            # beyond the horizon (the LP objective includes this, but the
+            # grid-cost-only calculation above does not see it).
+            if terminal_value_percentile > 0:
+                tv_benefit_per_kwh = terminal_value * charge_eff * discharge_eff
+                total_plan_cost -= x[idx_soc(horizon - 1)] * tv_benefit_per_kwh
+                total_no_battery_cost -= initial_soc_kwh * tv_benefit_per_kwh
+            
             if total_plan_cost >= total_no_battery_cost - 0.001:
                 return self._create_idle_plan(horizon, prediction_timestamps, initial_soc_kwh, 
                                               capacity_kwh, net_without_battery_kwh)
@@ -342,14 +351,14 @@ class NemotronLinprogPlanner(BatteryPlanner):
             # Clamp SoC to valid range (numerical precision)
             soc_kwh = min(max(soc_kwh, min_soc_kwh), max_soc_kwh)
             
-            # Determine battery action
+            # Determine battery action (dominant source/sink wins, not first threshold)
             charge_total = c_solar + c_grid
             discharge_total = d_load + d_export
             
-            if c_solar > 1e-6:
-                battery_action = 'charge_solar'
-            elif c_grid > 1e-6:
+            if charge_total > 1e-6 and c_grid > c_solar:
                 battery_action = 'charge_grid'
+            elif charge_total > 1e-6:
+                battery_action = 'charge_solar'
             elif d_load > 1e-6 and d_export > 1e-6:
                 battery_action = 'discharge_mixed'
             elif d_load > 1e-6:
@@ -446,6 +455,32 @@ class NemotronLinprogPlanner(BatteryPlanner):
             grid_import = max(net_kwh, 0.0)
             grid_export = max(-net_kwh, 0.0)
             
+            entry = BatteryPlanEntry(
+                timestamp=timestamp_str,
+                battery_action='idle',
+                battery_power_kw=0.0,
+                charge_from_solar_kwh=0.0,
+                charge_from_grid_kwh=0.0,
+                discharge_to_load_kwh=0.0,
+                discharge_to_export_kwh=0.0,
+                soc_kwh=float(soc_kwh),
+                soc_pct=float((soc_kwh / capacity_kwh) * 100.0),
+                grid_import_kwh=float(grid_import),
+                grid_export_kwh=float(grid_export),
+                estimated_hour_cost=0.0,
+                estimated_hour_savings=0.0,
+                net_load_without_battery_kwh=net_kwh,
+            )
+            battery_plan.append(entry)
+        
+        # Pad with idle entries if horizon is shorter than input length
+        while len(battery_plan) < len(prediction_timestamps):
+            i = len(battery_plan)
+            ts = prediction_timestamps[i]
+            timestamp_str = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
+            net_kwh = float(net_without_battery_kwh[i])
+            grid_import = max(net_kwh, 0.0)
+            grid_export = max(-net_kwh, 0.0)
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
                 battery_action='idle',

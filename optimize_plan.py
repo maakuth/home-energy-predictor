@@ -635,8 +635,8 @@ def optimize():
     print(f"Fireplace: {'ON' if is_fireplace_currently_on else 'OFF'}")
     
     final_plan = []
-    print('Time        | Baseload | GSHP kW | Grid kW | Solar | SOC% | P-tile | Intent | Acc Sim')
-    print('------------|----------|---------|---------|-------|------|--------|--------|--------')
+    print('Time        | Baseload | GSHP kW | Grid kW | Solar | SOC% | Battery Intent | Intent | Acc Sim')
+    print('------------|----------|---------|---------|-------|------|----------------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
         # Ensure ts is local-aware for consistent display
         if ts.tzinfo is None:
@@ -657,8 +657,6 @@ def optimize():
         
         # Calculate price percentile within the current plan window
         # (Where does current price rank among all prices in the plan)
-        p_tile = (import_prices < p_import).mean() * 100.0
-        
         # Net Grid Exchange: positive means importing, negative means exporting
         # grid_import and grid_export are in kWh per interval
         # power (kW) = energy (kWh) / hours
@@ -666,7 +664,7 @@ def optimize():
         
         print(
             f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_grid_kw:7.1f} | "
-            f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {p_tile:5.1f}% | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
+            f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {b['battery_action']:16} | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
         )
         
         entry = {
