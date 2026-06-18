@@ -511,6 +511,27 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 entry_d_export = d_export
                 battery_power_kw = (c_solar + c_grid - d_load - d_export) / interval_hours
             
+            # Override: if LP gave zero dispatch but load-following would
+            # be profitable, switch to 'follow' (Stage 2 may have missed
+            # these intervals when the re-solve covers only some intervals)
+            if battery_action == 'idle':
+                net_kw_i = net_without_battery_kwh[i] / interval_hours
+                if not should_idle_interval(
+                    net_kw_i, max(max_charge_kw, max_discharge_kw),
+                    degradation_cost_per_kwh, interval_hours,
+                    charge_eff, discharge_eff,
+                    import_prices[i], export_prices[i],
+                ):
+                    follow_kwh, is_discharge = estimate_follow_dispatch(
+                        net_kw_i, interval_hours, max_follow_kw)
+                    if follow_kwh > 0:
+                        battery_action = 'follow'
+                        if is_discharge:
+                            entry_d_load = follow_kwh
+                        else:
+                            entry_c_solar = follow_kwh
+                        battery_power_kw = (entry_c_solar + entry_c_grid - entry_d_load - entry_d_export) / interval_hours
+            
             # Calculate costs (net and committed already in kWh)
             no_battery_net = net_without_battery_kwh[i] + committed_kwh[i]
             no_battery_import = max(no_battery_net, 0.0)
