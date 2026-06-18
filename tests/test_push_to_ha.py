@@ -398,10 +398,11 @@ class TestLoadFollowing(unittest.TestCase):
         self.assertAlmostEqual(adjusted, 0.0)
         self.assertIn('0.00kW', msg)
 
-    def test_charge_solar_follows_plan_when_enough_surplus(self):
-        """charge_solar should follow plan when surplus exceeds plan."""
+    def test_charge_solar_scales_to_actual_surplus(self):
+        """charge_solar should charge at actual surplus up to max_battery_kw."""
         # Planned: charge 2kW
-        # Actual: solar=5kW, load=1kW -> grid = load - solar + battery = -4kW (export)
+        # Actual: solar=5kW, load=1kW -> surplus = 4kW
+        # New behavior: charge at min(max_battery_kw, surplus) = 4kW
         adjusted, msg = compute_load_following_setpoint(
             planned_battery_kw=2.0,
             planned_action='charge_solar',
@@ -409,8 +410,8 @@ class TestLoadFollowing(unittest.TestCase):
             grid_w=-4000.0,
             battery_w=0.0
         )
-        self.assertAlmostEqual(adjusted, 2.0)
-        self.assertEqual(msg, '')  # No adjustment needed
+        self.assertAlmostEqual(adjusted, 4.0)  # Surplus = 4kW, max_battery_kw=10
+        self.assertIn('planned 2.00kW -> adjusted 4.00kW', msg)
 
     def test_discharge_load_limited_by_actual_load(self):
         """discharge_load should be limited to actual house load."""

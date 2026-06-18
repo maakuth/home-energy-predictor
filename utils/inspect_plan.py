@@ -10,6 +10,8 @@ Usage:
     venv/bin/python3 utils/inspect_plan.py --actions charge_grid,discharge_load
     venv/bin/python3 utils/inspect_plan.py --n 20
     venv/bin/python3 utils/inspect_plan.py --file /path/to/plan.json --detail
+    venv/bin/python3 utils/inspect_plan.py --charging
+    venv/bin/python3 utils/inspect_plan.py --charging --n 10
 """
 
 import json
@@ -112,21 +114,63 @@ def show_detail(entries, args):
         ))
 
 
+def show_charging(entries, args):
+    """Show charging analysis: only charge_solar/charge_grid actions."""
+    entries = [e for e in entries if e.get('battery_action') in ('charge_solar', 'charge_grid')]
+    if not entries:
+        print("No charging entries match filters.")
+        return
+    if args.n:
+        entries = entries[:args.n]
+
+    fmt = "{:<24s} {:>5s} {:>5s} {:>5s} {:>6s} {:>6s} {:>7s} {:>6s} {:>6s} {:>6s}"
+    print(fmt.format("Timestamp", "Action", "SoC%", "kW_p", "ImpPrc", "Solar", "Net_kWh",
+                     "ChgSol", "ChgGrd", "SurpkW"))
+    print("-" * 90)
+
+    for e in entries:
+        ts = e['timestamp']
+        if ts.endswith('+00:00'):
+            ts = ts[:-6] + 'Z'
+        action = e.get('battery_action', '')
+        soc = e.get('soc_pct', 0)
+        pwr = e.get('battery_power_kw', 0)
+        imp = e.get('import_unit_price', 0)
+        solar = e.get('solar_forecast_kw', 0)
+        load = e.get('predicted_usage_kw', 0)
+        net = e.get('net_load_without_battery_kwh', 0)
+        cs = e.get('charge_from_solar_kwh', 0)
+        cg = e.get('charge_from_grid_kwh', 0)
+        surplus_kw = max(0.0, solar - load)
+        a = action[:5]
+        print(fmt.format(
+            ts, a,
+            f"{soc:.1f}", f"{pwr:.1f}",
+            f"{imp:.3f}", f"{solar:.1f}",
+            f"{net:.3f}",
+            f"{cs:.3f}", f"{cg:.3f}",
+            f"{surplus_kw:.1f}",
+        ))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Inspect battery plan entries")
     parser.add_argument('--file', default='optimization_plan.json', help='Plan JSON file path')
     parser.add_argument('--summary', action='store_true', help='Show summary only (default)')
     parser.add_argument('--detail', action='store_true', help='Show detail table')
+    parser.add_argument('--charging', action='store_true', help='Show charging analysis')
     parser.add_argument('--start', help='Filter: start timestamp (ISO-8601)')
     parser.add_argument('--end', help='Filter: end timestamp (ISO-8601)')
     parser.add_argument('--actions', help='Filter: comma-separated action types')
-    parser.add_argument('--n', type=int, default=None, help='Max rows to show (detail mode)')
+    parser.add_argument('--n', type=int, default=None, help='Max rows to show')
     args = parser.parse_args()
 
     entries = load_plan(args.file)
     entries = filter_entries(entries, args)
 
-    if args.detail:
+    if args.charging:
+        show_charging(entries, args)
+    elif args.detail:
         show_detail(entries, args)
     else:
         show_summary(entries, args)

@@ -200,7 +200,7 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
     if planned_action == 'charge_solar':
         actual_surplus_kw = solar_kw - actual_load_kw
         if actual_surplus_kw > 0:
-            adjusted_battery_kw = min(planned_battery_kw, actual_surplus_kw)
+            adjusted_battery_kw = min(max_battery_kw, actual_surplus_kw)
         else:
             adjusted_battery_kw = 0.0
         if adjusted_battery_kw != planned_battery_kw:
