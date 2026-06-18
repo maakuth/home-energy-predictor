@@ -2,7 +2,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 import pandas as pd
-from predict_future import generate_inference_data, predict
+from predict_future import generate_inference_data, predict, compute_baseload_at_lag
 
 class TestPredictFuture(unittest.TestCase):
     def setUp(self):
@@ -257,6 +257,154 @@ class TestPredictFuture(unittest.TestCase):
                 entities = call_args[0][0] if call_args[0] else call_args[1].get('entities', [])
                 self.assertIn('sensor.be_stat_batt_power', entities,
                               "Battery sensor must be in anchor_entities to compute correct baseload lags")
+
+
+class TestComputeBaseloadAtLag(unittest.TestCase):
+    """Tests for the extracted compute_baseload_at_lag function.
+
+    The critical bug we're guarding against: the old ``get_nearest`` approach
+    picked the closest-in-time reading for *each sensor independently*, so
+    different sensors could come from different moments — especially harmful
+    when battery power changes rapidly.
+    """
+
+    def _make_anchor_data(self, sensors, base_ts=None):
+        """Build an anchor_data dict from per-sensor value lists.
+
+        Parameters
+        ----------
+        sensors : dict of str -> list of (offset_seconds, value)
+            Entity_id → list of (seconds-from-base_ts, state-value) tuples.
+            Omitting an entity simulates a missing sensor.
+        base_ts : datetime, optional
+            Reference timestamp.  Defaults to now-24h so 1h/24h lags
+            can both find data.
+        """
+        if base_ts is None:
+            base_ts = datetime.now(timezone.utc) - timedelta(hours=24)
+        anchor = {}
+        for eid, entries in sensors.items():
+            rows = []
+            for offset_sec, val in entries:
+                ts = base_ts + timedelta(seconds=offset_sec)
+                rows.append({'state': str(val), 'ts': ts.timestamp()})
+            df = pd.DataFrame(rows)
+            if not df.empty:
+                df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+                df = df.set_index('timestamp').drop(columns=['ts'])
+                df['state'] = pd.to_numeric(df['state'], errors='coerce')
+            anchor[eid] = df
+        return anchor
+
+    def test_all_sensors_aligned(self):
+        """When all sensors report at the same instant, baseload is exact."""
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 2.0)],   # grid import 2 kW
+            'sensor.solarh_63038_real_power_kw': [(0, 1.0)],  # solar 1 kW
+            'sensor.mlp_teho':              [(0, 1000.0)], # GSHP 1 kW (Watts)
+            'sensor.tasmota_energy_power_3':[(0, 500.0)],  # Leaf 0.5 kW (W)
+            'sensor.be_stat_batt_power':    [(0, 2000.0)], # battery charging 2 kW (W)
+        }, base_ts=ts)
+        result = compute_baseload_at_lag(anchor, 1)
+        # baseload = 2 + 1 - 1 - 0.5 - 2 = -0.5 → clipped to 0
+        self.assertAlmostEqual(result, 0.0, places=5)
+
+    def test_battery_discharging(self):
+        """Battery discharging (negative W) correctly adds back to baseload."""
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 1.5)],   # grid import 1.5 kW
+            'sensor.solarh_63038_real_power_kw': [(0, 0.5)],
+            'sensor.mlp_teho':              [(0, 0.0)],
+            'sensor.tasmota_energy_power_3':[(0, 0.0)],
+            'sensor.be_stat_batt_power':    [(0, -2000.0)], # discharging 2 kW (W)
+        }, base_ts=ts)
+        result = compute_baseload_at_lag(anchor, 1)
+        # baseload = 1.5 + 0.5 - 0 - 0 - (-2) = 4.0
+        self.assertAlmostEqual(result, 4.0, places=5)
+
+    def test_time_skew_battery_stopped_charging(self):
+        """Battery changed state between target_ts and nearest reading.
+
+        This is the primary bug scenario: the old code would pick a *future*
+        battery reading ("closest" to target_ts) that no longer reflects the
+        battery state the grid meter saw.
+
+        Sensors at target_ts T:
+          - grid = 5 kW  (house 2 + battery charging 3)
+          - battery = +3000 W (charging)
+
+        Battery changes to 0 W at T+30s (stops charging).
+        Old ``get_nearest`` at T picks T+30s (30s away) vs T-60s (60s away)
+        → battery reads 0, not 3000 → baseload = 5+0-0-0-0 = 5 (WRONG, true=2)
+        """
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 5.0)],            # at T: 5 kW (incl battery)
+            'sensor.solarh_63038_real_power_kw': [(0, 0.0)],
+            'sensor.mlp_teho':              [(0, 0.0)],
+            'sensor.tasmota_energy_power_3':[(0, 0.0)],
+            # Last reading before T is at T-60s (charging 3kW).
+            # After T there is a reading at T+30s (stopped, 0W).
+            'sensor.be_stat_batt_power':    [(-60, 3000.0), (30, 0.0)],
+        }, base_ts=ts)
+        result = compute_baseload_at_lag(anchor, 1)
+        # ffill at T should grab the value at T-60s → battery=3 → baseload=5-3=2
+        self.assertAlmostEqual(result, 2.0, places=5,
+            msg="Time-skew bug: battery stopped charging after T, but ffill should use last value before T")
+
+    def test_battery_sensor_missing(self):
+        """When battery sensor data is absent, baseload still computes (no battery subtraction)."""
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 5.0)],
+            'sensor.solarh_63038_real_power_kw': [(0, 0.0)],
+            'sensor.mlp_teho':              [(0, 0.0)],
+            'sensor.tasmota_energy_power_3':[(0, 0.0)],
+            # No battery sensor
+        }, base_ts=ts)
+        result = compute_baseload_at_lag(anchor, 1)
+        # Without battery subtraction: baseload = 5, but true load (w/o battery) is 5.
+        # There's no battery to subtract, so this is correct for a battery-free system.
+        self.assertAlmostEqual(result, 5.0, places=5)
+
+    def test_all_sensors_empty(self):
+        """When no sensor data exists, fallback is returned."""
+        result = compute_baseload_at_lag({}, 1)
+        self.assertAlmostEqual(result, 1.0, places=5)
+
+    def test_some_sensors_have_gaps(self):
+        """Forward-fill tolerates gaps in individual sensors."""
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 3.0)],
+            'sensor.solarh_63038_real_power_kw': [(0, 2.0)],
+            # GSHP has a gap: no reading near T, only at T+120s (2 min later)
+            'sensor.mlp_teho':              [(120, 1500.0)],
+            'sensor.tasmota_energy_power_3':[(0, 0.0)],
+            'sensor.be_stat_batt_power':    [(0, 0.0)],
+        }, base_ts=ts)
+        result = compute_baseload_at_lag(anchor, 1)
+        # Without GSHP data before T → gshp=0 (ffill can't fill forward from nothing)
+        # baseload = 3 + 2 - 0 - 0 - 0 = 5
+        self.assertAlmostEqual(result, 5.0, places=5,
+            msg="GSHP data only exists after target_ts; ffill has nothing to fill from → gshp=0")
+
+    def test_24h_lag_within_window(self):
+        """24h lag should load data that exists 24 hours back."""
+        # Create data starting from 25h ago to ensure 24h lag is covered
+        base = datetime.now(timezone.utc) - timedelta(hours=25)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 2.5)],
+            'sensor.solarh_63038_real_power_kw': [(0, 1.5)],
+            'sensor.mlp_teho':              [(0, 0.0)],
+            'sensor.tasmota_energy_power_3':[(0, 0.0)],
+            'sensor.be_stat_batt_power':    [(0, 0.0)],
+        }, base_ts=base)
+        result = compute_baseload_at_lag(anchor, 24)
+        # baseload = 2.5 + 1.5 - 0 - 0 - 0 = 4.0
+        self.assertAlmostEqual(result, 4.0, places=5)
 
 
 if __name__ == '__main__':

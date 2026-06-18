@@ -16,6 +16,83 @@ load_dotenv(override=True)
 
 PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
 
+
+def compute_baseload_at_lag(anchor_data, hours_back):
+    """
+    Compute baseload power at a given historical lag using combined DataFrame
+    + forward-fill alignment across all sensors.
+
+    The old approach used ``get_nearest`` per sensor independently, which could
+    pick values from *different* timestamps for different sensors (time-skew).
+    This became particularly harmful when battery power changed rapidly: the
+    grid meter value and the battery sensor value could be tens of seconds
+    apart, producing an incorrect instantaneous baseload estimate.
+
+    The fix aligns all five sensor streams to a common timeline by
+    forward-filling gaps, then picks values from the same row.  This ensures
+    the five quantities (grid, solar, GSHP, EV, battery) represent
+    approximately the same moment.
+
+    Returns
+    -------
+    float
+        Baseload power in kW, clipped to ``[0.0, inf)``.  Returns ``1.0``
+        as a safe fallback when no sensor data is available.
+    """
+    target_ts = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+
+    try:
+        sensors_def = [
+            ('sensor.sahkokauppa_nyt', 'total', 1.0),
+            ('sensor.solarh_63038_real_power_kw', 'solar', 1.0),
+            ('sensor.mlp_teho', 'gshp', 1 / 1000.0),
+            ('sensor.tasmota_energy_power_3', 'leaf', 1 / 1000.0),
+            ('sensor.be_stat_batt_power', 'battery', 1 / 1000.0),
+        ]
+
+        series_list = []
+        for entity_id, name, scale in sensors_def:
+            df = anchor_data.get(entity_id)
+            if df is None or df.empty:
+                continue
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df = df.set_index('timestamp')
+            s = pd.to_numeric(df['state'], errors='coerce').dropna()
+            s = s * scale
+            s.name = name
+            series_list.append(s)
+
+        if not series_list:
+            return 1.0
+
+        combined = pd.concat(series_list, axis=1, sort=True)
+        combined = combined.sort_index()
+
+        all_ts = combined.index.union(pd.DatetimeIndex([target_ts]))
+        combined = combined.reindex(all_ts).sort_index().ffill()
+
+        row = combined.loc[target_ts]
+
+        total = row.get('total', 0.0)
+        total = float(total) if pd.notna(total) else 0.0
+        solar = row.get('solar', 0.0)
+        solar = float(solar) if pd.notna(solar) else 0.0
+        gshp = row.get('gshp', 0.0)
+        gshp = float(gshp) if pd.notna(gshp) else 0.0
+        leaf = row.get('leaf', 0.0)
+        leaf = float(leaf) if pd.notna(leaf) else 0.0
+        battery = row.get('battery', 0.0)
+        battery = float(battery) if pd.notna(battery) else 0.0
+
+        if 'battery' not in combined.columns:
+            print(f"⚠️ Battery sensor data unavailable for baseload lag at {hours_back}h — baseload may include battery charging")
+
+        return max(0.0, total + solar - gshp - leaf - battery)
+    except Exception as e:
+        print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
+        return 1.0
+
+
 def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df_weather, current_states, sauna_states):
     """
     Generate inference data rows for the model.
@@ -193,40 +270,7 @@ def predict():
     anchor_data = fetch_states_history(anchor_entities, hours=25)
     
     def get_baseload_at_lag(hours_back):
-        target_ts = datetime.now(timezone.utc) - timedelta(hours=hours_back)
-        try:
-            total_df = anchor_data.get('sensor.sahkokauppa_nyt')
-            solar_df = anchor_data.get('sensor.solarh_63038_real_power_kw')
-            gshp_df = anchor_data.get('sensor.mlp_teho')
-            leaf_df = anchor_data.get('sensor.tasmota_energy_power_3')
-            battery_df = anchor_data.get('sensor.be_stat_batt_power')  # Battery power (W, positive=charging)
-
-            # Find nearest values
-            def get_nearest(df, ts):
-                if df is None or df.empty: return 0.0
-
-                # Ensure we use a DatetimeIndex for get_indexer
-                if not isinstance(df.index, pd.DatetimeIndex):
-                    temp_df = df.set_index('timestamp')
-                else:
-                    temp_df = df
-
-                idx = temp_df.index.get_indexer([ts], method='nearest')[0]
-                if idx == -1: return 0.0
-                return float(temp_df.iloc[idx]['state'])
-
-            total = get_nearest(total_df, target_ts)
-            solar = get_nearest(solar_df, target_ts)
-            gshp = get_nearest(gshp_df, target_ts) / 1000.0 # W to kW
-            leaf = get_nearest(leaf_df, target_ts) / 1000.0 # W to kW
-            battery = get_nearest(battery_df, target_ts) / 1000.0  # W to kW (positive=charging)
-
-            # Home Load = Grid Import + Solar - Battery Net Power
-            # (Battery positive when charging from grid, so we subtract to get true load)
-            return max(0.0, total + solar - gshp - leaf - battery)
-        except Exception as e:
-            print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
-            return 1.0 # Fallback
+        return compute_baseload_at_lag(anchor_data, hours_back)
 
     def get_leaf_features():
         # Get Leaf power 1h ago and energy sum for last 24h
