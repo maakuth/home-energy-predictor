@@ -106,17 +106,13 @@ class NemotronLinprogPlanner(BatteryPlanner):
         if committed_load_kwh is None:
             committed_load_kwh = np.zeros(horizon)
         
-        # Predictions and solar come in kW, convert to kWh per interval
-        predictions_kw = np.array(predictions_kwh, dtype=float)
-        solar_kw = np.array(solar_kwh, dtype=float)
+        # Predictions and solar are already in kWh per interval (API contract)
         import_prices = np.array(import_prices, dtype=float)
         export_prices = np.array(export_prices, dtype=float)
-        committed_load_kw = np.array(committed_load_kwh, dtype=float)
         
         # Net load without battery (positive = load, negative = solar surplus)
-        net_without_battery_kw = predictions_kw - solar_kw
-        net_without_battery_kwh = net_without_battery_kw * interval_hours
-        committed_kwh = committed_load_kw * interval_hours
+        net_without_battery_kwh = np.array(predictions_kwh, dtype=float) - np.array(solar_kwh, dtype=float)
+        committed_kwh = np.array(committed_load_kwh, dtype=float)
         
         # Build LP problem
         # Variables per interval: [c_solar, c_grid, d_load, d_export, soc]
@@ -215,7 +211,6 @@ class NemotronLinprogPlanner(BatteryPlanner):
         # Constraints per interval
         for i in range(horizon):
             net_kwh = net_without_battery_kwh[i]
-            net_kw = net_without_battery_kw[i]
             committed_kwh_i = committed_kwh[i]
             
             # Energy balance: grid_import - grid_export = net_kwh + c_solar + c_grid - d_load - d_export + committed_kwh
@@ -337,8 +332,9 @@ class NemotronLinprogPlanner(BatteryPlanner):
             for i in range(horizon):
                 if max(0.0, x[idx_c_solar(i)]) + max(0.0, x[idx_c_grid(i)]) + max(0.0, x[idx_d_load(i)]) + max(0.0, x[idx_d_export(i)]) > 1e-6:
                     continue
+                net_kw_i = net_without_battery_kwh[i] / interval_hours
                 is_idle = should_idle_interval(
-                    net_without_battery_kw[i], max(max_charge_kw, max_discharge_kw),
+                    net_kw_i, max(max_charge_kw, max_discharge_kw),
                     degradation_cost_per_kwh, interval_hours,
                     charge_eff, discharge_eff,
                     import_prices[i], export_prices[i],
@@ -346,7 +342,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 if is_idle:
                     continue
                 follow_kwh, is_discharge = estimate_follow_dispatch(
-                    net_without_battery_kw[i], interval_hours, max_follow_kw)
+                    net_kw_i, interval_hours, max_follow_kw)
                 if follow_kwh > 0:
                     if is_discharge:
                         follow_intervals[i] = {'charge': 0.0, 'discharge': follow_kwh}

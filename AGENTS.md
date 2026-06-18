@@ -114,6 +114,17 @@ Run the full suite before commit though.
 
 $ venv/bin/python -m pytest -k 'not slow'
 
+## Plan Inspection Utility
+
+Use `utils/inspect_plan.py` to read `optimization_plan.json`:
+```bash
+venv/bin/python3 utils/inspect_plan.py --summary   # action counts, SoC range, energy totals
+venv/bin/python3 utils/inspect_plan.py --detail    # timestamp-ordered table with all actions
+venv/bin/python3 utils/inspect_plan.py --start "2026-06-18T07:00" --end "2026-06-18T09:00" --detail  --n 20
+venv/bin/python3 utils/inspect_plan.py --actions charge_grid,discharge_load --detail
+```
+Use this instead of ad-hoc plan inspection scripts.
+
 ## Tuning Trap: Short Tests Mislead
 
 Never tune hyperparameters (horizon, discount, thresholds) using short

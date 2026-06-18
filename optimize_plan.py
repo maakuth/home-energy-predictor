@@ -28,10 +28,13 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
         allow_export_entity = os.getenv('BATTERY_ALLOW_EXPORT_ENTITY', 'input_boolean.battery_allow_export')
         allow_export_state = get_ha_state(allow_export_entity)
         allow_export = parse_ha_bool(allow_export_state, default=get_env_bool('BATTERY_ALLOW_EXPORT', True))
+    interval_h = get_plan_interval_minutes() / 60.0
+    predictions_kwh = np.array(predictions, dtype=float) * interval_h
+    solar_kwh = np.array(solar_array, dtype=float) * interval_h
     planner = BatteryPlannerFactory.create('heuristic')
     entries = planner.plan(
-        np.array(predictions, dtype=float),
-        np.array(solar_array, dtype=float),
+        predictions_kwh,
+        solar_kwh,
         np.array(import_prices, dtype=float),
         np.array(export_prices, dtype=float),
         [f"interval_{i}" for i in range(len(predictions))],

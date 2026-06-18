@@ -1,0 +1,136 @@
+"""
+Plan inspection utility: read optimization_plan.json and display
+formatted tables, summaries, and filtered views.
+
+Usage:
+    venv/bin/python3 utils/inspect_plan.py
+    venv/bin/python3 utils/inspect_plan.py --summary
+    venv/bin/python3 utils/inspect_plan.py --detail
+    venv/bin/python3 utils/inspect_plan.py --start "2026-06-18T07:00" --end "2026-06-18T09:00"
+    venv/bin/python3 utils/inspect_plan.py --actions charge_grid,discharge_load
+    venv/bin/python3 utils/inspect_plan.py --n 20
+    venv/bin/python3 utils/inspect_plan.py --file /path/to/plan.json --detail
+"""
+
+import json
+import argparse
+from datetime import datetime, timezone
+from collections import Counter
+
+
+def load_plan(path="optimization_plan.json"):
+    with open(path) as f:
+        return json.load(f)
+
+
+def parse_iso(s):
+    if s.endswith('Z'):
+        s = s[:-1] + '+00:00'
+    return datetime.fromisoformat(s)
+
+
+def filter_entries(entries, args):
+    if args.start:
+        t = parse_iso(args.start)
+        entries = [e for e in entries if parse_iso(e['timestamp']) >= t]
+    if args.end:
+        t = parse_iso(args.end)
+        entries = [e for e in entries if parse_iso(e['timestamp']) <= t]
+    if args.actions:
+        allowed = set(args.actions.split(','))
+        entries = [e for e in entries if e.get('battery_action') in allowed]
+    return entries
+
+
+def show_summary(entries, args):
+    if not entries:
+        print("No entries match filters.")
+        return
+
+    n = len(entries)
+
+    action_counts = Counter(e.get('battery_action', 'unknown') for e in entries)
+    total_charge_grid = sum(e.get('charge_from_grid_kwh', 0.0) for e in entries)
+    total_charge_solar = sum(e.get('charge_from_solar_kwh', 0.0) for e in entries)
+    total_discharge_load = sum(e.get('discharge_to_load_kwh', 0.0) for e in entries)
+    total_discharge_export = sum(e.get('discharge_to_export_kwh', 0.0) for e in entries)
+    total_grid_import = sum(e.get('grid_import_kwh', 0.0) for e in entries)
+    total_grid_export = sum(e.get('grid_export_kwh', 0.0) for e in entries)
+
+    socs = [e.get('soc_pct', 0.0) for e in entries if e.get('soc_pct') is not None]
+    soc_min = min(socs) if socs else 0
+    soc_max = max(socs) if socs else 0
+
+    print(f"Plan entries: {n}")
+    print(f"Time range:  {entries[0]['timestamp']}  →  {entries[-1]['timestamp']}")
+    print()
+    print("Action counts:")
+    for action, count in sorted(action_counts.items(), key=lambda x: -x[1]):
+        print(f"  {action:25s}  {count:4d}  ({100*count/n:5.1f}%)")
+    print()
+    print(f"SoC range:     {soc_min:.1f}%  →  {soc_max:.1f}%")
+    print(f"Grid import:   {total_grid_import:8.3f} kWh")
+    print(f"Grid export:   {total_grid_export:8.3f} kWh")
+    print(f"Charge grid:   {total_charge_grid:8.3f} kWh")
+    print(f"Charge solar:  {total_charge_solar:8.3f} kWh")
+    print(f"Dischg load:   {total_discharge_load:8.3f} kWh")
+    print(f"Dischg export: {total_discharge_export:8.3f} kWh")
+
+
+def show_detail(entries, args):
+    if not entries:
+        print("No entries match filters.")
+        return
+
+    if args.n:
+        entries = entries[:args.n]
+
+    fmt = "{:<24s} {:<18s} {:>6s} {:>7s} {:>7s} {:>7s} {:>7s} {:>7s} {:>7s} {:>7s}"
+    print(fmt.format("Timestamp", "Action", "SoC%", "ImpPrc", "Load_kW", "Solar_kW",
+                     "ChgGrd", "ChgSol", "DisLd", "DisEx"))
+    print("-" * 110)
+
+    for e in entries:
+        ts = e['timestamp']
+        if ts.endswith('+00:00'):
+            ts = ts[:-6] + 'Z'
+        action = e.get('battery_action', '')
+        soc = e.get('soc_pct', 0)
+        imp = e.get('import_unit_price', 0)
+        load = e.get('predicted_usage_kw', 0)
+        solar = e.get('solar_forecast_kw', 0)
+        cg = e.get('charge_from_grid_kwh', 0)
+        cs = e.get('charge_from_solar_kwh', 0)
+        dl = e.get('discharge_to_load_kwh', 0)
+        de = e.get('discharge_to_export_kwh', 0)
+        print(fmt.format(
+            ts, action,
+            f"{soc:.1f}", f"{imp:.3f}",
+            f"{load:.2f}", f"{solar:.2f}",
+            f"{cg:.2f}", f"{cs:.2f}",
+            f"{dl:.2f}", f"{de:.2f}",
+        ))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Inspect battery plan entries")
+    parser.add_argument('--file', default='optimization_plan.json', help='Plan JSON file path')
+    parser.add_argument('--summary', action='store_true', help='Show summary only (default)')
+    parser.add_argument('--detail', action='store_true', help='Show detail table')
+    parser.add_argument('--start', help='Filter: start timestamp (ISO-8601)')
+    parser.add_argument('--end', help='Filter: end timestamp (ISO-8601)')
+    parser.add_argument('--actions', help='Filter: comma-separated action types')
+    parser.add_argument('--n', type=int, default=None, help='Max rows to show (detail mode)')
+    args = parser.parse_args()
+
+    entries = load_plan(args.file)
+    entries = filter_entries(entries, args)
+
+    if args.detail:
+        show_detail(entries, args)
+    else:
+        show_summary(entries, args)
+
+
+if __name__ == '__main__':
+    main()

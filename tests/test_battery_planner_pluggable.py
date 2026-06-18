@@ -77,6 +77,9 @@ class TestBatteryPlannerFactory(unittest.TestCase):
         self.assertIn('heuristic', str(cm.exception))
 
 
+INTERVAL_H = 0.25  # 15-minute default interval in hours
+
+
 class TestHeuristicPlannerBasic(unittest.TestCase):
     """Test basic functionality of HeuristicBatteryPlanner."""
     
@@ -85,7 +88,7 @@ class TestHeuristicPlannerBasic(unittest.TestCase):
         planner = HeuristicBatteryPlanner()
         
         horizon = 10
-        predictions = np.ones(horizon) * 2.0  # 2 kW baseload
+        predictions = np.ones(horizon) * 2.0 * INTERVAL_H  # 2 kW baseload → 0.5 kWh/interval
         solar = np.zeros(horizon)
         import_prices = np.ones(horizon) * 0.15
         export_prices = np.ones(horizon) * 0.05
@@ -102,7 +105,7 @@ class TestHeuristicPlannerBasic(unittest.TestCase):
         """Planner output should be convertible to dicts."""
         planner = HeuristicBatteryPlanner()
         
-        predictions = np.array([2.0, 2.0, 2.0])
+        predictions = np.array([2.0, 2.0, 2.0]) * INTERVAL_H
         solar = np.array([0.0, 0.0, 0.0])
         import_prices = np.array([0.15, 0.15, 0.15])
         export_prices = np.array([0.05, 0.05, 0.05])
@@ -144,7 +147,7 @@ class TestBatteryPlannerContext(unittest.TestCase):
         """Planner should accept a BatteryPlannerContext and still produce valid output."""
         planner = HeuristicBatteryPlanner()
         
-        predictions = np.array([2.0, 2.0, 2.0])
+        predictions = np.array([2.0, 2.0, 2.0]) * INTERVAL_H
         solar = np.array([0.0, 0.0, 0.0])
         import_prices = np.array([0.15, 0.15, 0.15])
         export_prices = np.array([0.05, 0.05, 0.05])
@@ -168,7 +171,7 @@ class TestBatteryPlannerContext(unittest.TestCase):
         """Planner should ignore keys in context that it does not recognise."""
         planner = HeuristicBatteryPlanner()
         
-        predictions = np.array([2.0, 2.0])
+        predictions = np.array([2.0, 2.0]) * INTERVAL_H
         solar = np.array([0.0, 0.0])
         import_prices = np.array([0.15, 0.15])
         export_prices = np.array([0.05, 0.05])
@@ -218,7 +221,7 @@ class TestNemotronLinprogAdaptiveHorizon(unittest.TestCase):
 
     def _make_price_scenario(self, n=50):
         """Prices: cheap 0-15, moderate 15-25, expensive 25-35, moderate 35+."""
-        predictions = np.ones(n) * 2.0  # 2 kW baseload
+        predictions = np.ones(n) * 2.0 * INTERVAL_H  # 2 kW baseload → 0.5 kWh/interval
         solar = np.zeros(n)
         import_prices = np.concatenate([
             np.ones(15) * 0.05,

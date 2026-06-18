@@ -167,12 +167,13 @@ class BatteryReplaySimulator:
         if visible_preds.empty:
             return np.array([]), np.array([]), np.array([]), np.array([]), []
         
-        # Build forecast arrays, truncating to planner_output_length
+        # Convert kW → kWh (APIs expect kWh per interval)
+        interval_hours = 0.25
         pred_series = visible_preds.get('predicted_usage_kw', pd.Series())
-        predictions_kwh = np.asarray(pred_series)[:planner_output_length]
+        predictions_kwh = np.asarray(pred_series, dtype=float)[:planner_output_length] * interval_hours
         
         solar_series = visible_preds.get('solar_forecast_kw', pd.Series())
-        solar_kwh = np.asarray(solar_series)[:planner_output_length]
+        solar_kwh = np.asarray(solar_series, dtype=float)[:planner_output_length] * interval_hours
         
         # Get prices from visible window
         visible_prices = self.get_visible_prices(planning_time)
