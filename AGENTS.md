@@ -122,6 +122,8 @@ venv/bin/python3 utils/inspect_plan.py --summary   # action counts, SoC range, e
 venv/bin/python3 utils/inspect_plan.py --detail    # timestamp-ordered table with all actions
 venv/bin/python3 utils/inspect_plan.py --start "2026-06-18T07:00" --end "2026-06-18T09:00" --detail  --n 20
 venv/bin/python3 utils/inspect_plan.py --actions charge_grid,discharge_load --detail
+venv/bin/python3 utils/inspect_plan.py --charging               # charging-only view with surplus
+venv/bin/python3 utils/inspect_plan.py --charging --n 10        # first 10 charging entries
 ```
 Use this instead of ad-hoc plan inspection scripts.
 

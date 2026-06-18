@@ -31,6 +31,13 @@ def parse_iso(s):
     return datetime.fromisoformat(s)
 
 
+def format_ts(ts_str):
+    """Convert plan timestamp (ISO-8601 with offset) to local-timezone string."""
+    dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+    local = dt.astimezone()
+    return local.isoformat()
+
+
 def filter_entries(entries, args):
     if args.start:
         t = parse_iso(args.start)
@@ -64,7 +71,7 @@ def show_summary(entries, args):
     soc_max = max(socs) if socs else 0
 
     print(f"Plan entries: {n}")
-    print(f"Time range:  {entries[0]['timestamp']}  →  {entries[-1]['timestamp']}")
+    print(f"Time range:  {format_ts(entries[0]['timestamp'])}  →  {format_ts(entries[-1]['timestamp'])}")
     print()
     print("Action counts:")
     for action, count in sorted(action_counts.items(), key=lambda x: -x[1]):
@@ -93,9 +100,7 @@ def show_detail(entries, args):
     print("-" * 110)
 
     for e in entries:
-        ts = e['timestamp']
-        if ts.endswith('+00:00'):
-            ts = ts[:-6] + 'Z'
+        ts = format_ts(e['timestamp'])
         action = e.get('battery_action', '')
         soc = e.get('soc_pct', 0)
         imp = e.get('import_unit_price', 0)
@@ -129,9 +134,7 @@ def show_charging(entries, args):
     print("-" * 90)
 
     for e in entries:
-        ts = e['timestamp']
-        if ts.endswith('+00:00'):
-            ts = ts[:-6] + 'Z'
+        ts = format_ts(e['timestamp'])
         action = e.get('battery_action', '')
         soc = e.get('soc_pct', 0)
         pwr = e.get('battery_power_kw', 0)
