@@ -6,10 +6,9 @@ import sqlite3
 import json
 from push_to_ha import push_accuracy, push_plan
 from utils.battery_utils import (
-    push_battery_control, is_battery_available, compute_load_following_setpoint,
+    is_battery_available, compute_load_following_setpoint,
     get_current_plan_entry, compute_net_metering_setpoint,
     adjust_charge_solar_for_real_time,
-    BATTERY_CONTROL_ENTITY_ID
 )
 
 class TestPushToHA(unittest.TestCase):
@@ -63,94 +62,6 @@ class TestPushPlan(unittest.TestCase):
         """No cleanup needed - conftest.py handles it via tmp_path fixture."""
         pass
     
-    @patch('utils.battery_utils.is_battery_available')
-    @patch('utils.battery_utils.call_ha_service')
-    def test_push_plan_with_battery_intent(self, mock_service, mock_battery_available):
-        """Test that battery control is correctly pushed with reversed sign."""
-        mock_battery_available.return_value = True  # Battery is available
-        mock_service.return_value = {}  # Mock successful service call (returns dict)
-        
-        # Setup mock plan data
-        plan_data = [
-            {
-                'predicted_usage_kwh': 0.5,
-                'gshp_intent': 'RUN',
-                'gshp_temp_simulated': 48.5,
-                'leaf_intent': 'OFF',
-                'battery_power_kw': 2.5,  # Charging: positive in plan
-                'battery_action': 'charge_solar',
-                'soc_pct': 60.0
-            }
-        ]
-        # Expand to 96 intervals for 24h
-        plan_data.extend([plan_data[0].copy() for _ in range(95)])
-        
-        # Write test plan to file
-        with open(self.plan_file, 'w') as f:
-            json.dump(plan_data, f)
-        
-        # Execute
-        push_plan()
-        
-        # Verify battery control was pushed with correct service call
-        calls = mock_service.call_args_list
-        battery_control_call = None
-        for call in calls:
-            kwargs = call[1]
-            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == BATTERY_CONTROL_ENTITY_ID:
-                battery_control_call = call
-                break
-        
-        self.assertIsNotNone(battery_control_call, "Battery control service call not found")
-        
-        # Verify sign reversal: battery_power_kw=2.5 (charging) → control=-2500W (charge)
-        service_data = battery_control_call[1]['service_data']
-        self.assertEqual(service_data['entity_id'], BATTERY_CONTROL_ENTITY_ID)
-        self.assertEqual(int(service_data['value']), -2500)
-
-    @patch('utils.battery_utils.is_battery_available')
-    @patch('utils.battery_utils.call_ha_service')
-    def test_push_plan_battery_discharge_intent(self, mock_service, mock_battery_available):
-        """Test battery discharge control (negative battery_power_kw → positive control)."""
-        mock_battery_available.return_value = True  # Battery is available
-        mock_service.return_value = {}  # Mock successful service call (returns dict)
-        
-        plan_data = [
-            {
-                'predicted_usage_kwh': 0.5,
-                'gshp_intent': 'STOP',
-                'gshp_temp_simulated': 52.0,
-                'leaf_intent': 'OFF',
-                'battery_power_kw': -3.0,  # Discharging: negative in plan
-                'battery_action': 'discharge_load',
-                'soc_pct': 45.0
-            }
-        ]
-        # Expand to 96 intervals
-        plan_data.extend([plan_data[0].copy() for _ in range(95)])
-        
-        # Write test plan to file
-        with open(self.plan_file, 'w') as f:
-            json.dump(plan_data, f)
-        
-        # Execute
-        push_plan()
-        
-        # Verify battery control service call
-        calls = mock_service.call_args_list
-        battery_control_call = None
-        for call in calls:
-            kwargs = call[1]
-            if kwargs.get('service') == 'set_value' and kwargs.get('service_data', {}).get('entity_id') == BATTERY_CONTROL_ENTITY_ID:
-                battery_control_call = call
-                break
-        
-        self.assertIsNotNone(battery_control_call)
-        
-        # battery_power_kw=-3.0 (discharging) → control=3000W (discharge/provide power)
-        service_data = battery_control_call[1]['service_data']
-        self.assertEqual(int(service_data['value']), 3000)
-
     @patch('push_to_ha.push_ha_state')
     @patch('utils.battery_utils.is_battery_available')
     @patch('utils.battery_utils.call_ha_service')

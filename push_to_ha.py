@@ -3,7 +3,7 @@ import json
 import os
 from typing import Any, Optional
 from utils.ha_utils import push_ha_state
-from utils.battery_utils import push_battery_control, get_current_plan_entry
+from utils.battery_utils import get_current_plan_entry
 from utils.sqlite_utils import get_db_connection, db_exists
 
 def push_accuracy() -> None:
@@ -119,16 +119,6 @@ def push_plan() -> None:
         'percentile': low_cost_percentile
     })
     print(f'✅ Low Cost Signal pushed: {low_cost_signal} (threshold={threshold:.4f})')
-
-    # Push battery power control (positive = discharge, negative = charge)
-    # Sign reversed: battery_power_kw is positive for charging, but control is from home perspective
-    battery_power_kw = current.get('battery_power_kw', 0.0)
-    battery_control_w = int(-battery_power_kw * 1000)  # Reverse sign, kW→W
-    push_battery_control(
-        battery_power_w=battery_control_w,
-        battery_action=current.get('battery_action', 'follow'),
-        battery_soc_pct=current.get('soc_pct')
-    )
 
     # Also push 24h usage as a standalone sensor for easier history tracking
     attributes_24h = {
