@@ -13,7 +13,7 @@ echo "=== HEPO Quick Update: $(date) ==="
 # Pull current sensor states, apply load-following, and push battery control
 python3 -c "
 from utils.ha_utils import get_ha_state
-from utils.battery_utils import push_battery_control, compute_load_following_setpoint, compute_net_metering_setpoint, get_current_plan_entry
+from utils.battery_utils import push_battery_control, compute_load_following_setpoint, compute_net_metering_setpoint, get_current_plan_entry, adjust_charge_solar_for_real_time
 import json
 import os
 from datetime import datetime
@@ -83,6 +83,19 @@ if plan:
     planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
     planned_action = current.get('battery_action', 'idle') if current else 'idle'
     planned_soc = current.get('soc_pct') if current else None
+
+    # Pre-processing: if plan says charge_solar but real-time has no solar surplus
+    # (unexpected load exceeded forecast), switch to discharge to cover the net load
+    # instead of importing from grid. The battery will recharge later from future
+    # solar surplus as planned.
+    planned_battery_kw, planned_action = adjust_charge_solar_for_real_time(
+        planned_battery_kw=planned_battery_kw,
+        planned_action=planned_action,
+        solar_kw=solar_kw,
+        grid_w=grid_w,
+        battery_w=battery_w,
+        battery_soc_pct=soc_pct,
+    )
 
     # Check if net metering mode is enabled
     net_metering = os.getenv('BATTERY_NET_METERING', '').strip().lower() in {'1', 'true', 'yes', 'on'}

@@ -430,6 +430,47 @@ def compute_net_metering_setpoint(
     return clamped, log_msg
 
 
+def adjust_charge_solar_for_real_time(
+    planned_battery_kw: float,
+    planned_action: str,
+    solar_kw: float,
+    grid_w: float,
+    battery_w: float,
+    battery_soc_pct: float | None = None,
+    min_soc_pct: float = 10.0,
+    max_battery_kw: float = 10.0,
+):
+    """Adjust charge_solar planned action based on real-time conditions.
+
+    When the plan expects solar surplus (``charge_solar``) but real-time
+    shows no surplus (load > solar), switch to discharging to cover the
+    net load instead of idling and importing from grid. The battery will
+    recharge later from future solar surplus as predicted by the plan.
+
+    Returns
+    -------
+    tuple
+        (adjusted_battery_kw, adjusted_action) — unchanged if no adjustment.
+    """
+    if planned_action != 'charge_solar':
+        return planned_battery_kw, planned_action
+
+    actual_load_kw = solar_kw + (grid_w / 1000.0) - (battery_w / 1000.0)
+    actual_surplus_kw = solar_kw - actual_load_kw
+
+    surplus_deadband_kw = 0.1
+    epsilon = 1e-9
+    if actual_surplus_kw >= -surplus_deadband_kw - epsilon:
+        return planned_battery_kw, planned_action
+
+    if battery_soc_pct is None or battery_soc_pct <= min_soc_pct + 5.0:
+        return planned_battery_kw, planned_action
+
+    net_load_kw = -actual_surplus_kw
+    discharge_kw = min(max_battery_kw, net_load_kw)
+    return -discharge_kw, 'discharge_load'
+
+
 def estimate_follow_dispatch(net_kw, interval_hours, max_follow_kw=2.0,
                               deadband_kw=0.2):
     """Estimate real-time load-following dispatch for a single interval.

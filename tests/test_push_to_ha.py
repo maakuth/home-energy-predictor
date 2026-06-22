@@ -7,6 +7,7 @@ from push_to_ha import push_accuracy, push_plan
 from utils.battery_utils import (
     push_battery_control, is_battery_available, compute_load_following_setpoint,
     get_current_plan_entry, compute_net_metering_setpoint,
+    adjust_charge_solar_for_real_time,
     BATTERY_CONTROL_ENTITY_ID
 )
 
@@ -825,5 +826,190 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         self.assertIn('correction', log)
 
 
+class TestAdjustChargeSolarRealTime(unittest.TestCase):
+    """Test adjust_charge_solar_for_real_time adjustments."""
+
+    def setUp(self):
+        self.kwargs = dict(
+            planned_battery_kw=5.0,
+            planned_action='charge_solar',
+            solar_kw=2.0,
+        )
+
+    def test_switches_to_discharge_when_no_surplus_and_adequate_soc(self):
+        """No solar surplus + adequate SoC => discharge to cover load."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -2.0)
+
+    def test_keeps_charge_when_surplus_present(self):
+        """Actual solar surplus exists => stay charge_solar."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=-2000.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+        self.assertAlmostEqual(adjusted, 5.0)
+
+    def test_keeps_charge_when_surplus_is_negligible(self):
+        """Tiny negative surplus (>= -0.1) shouldn't trigger switch."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=100.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+
+    def test_keeps_charge_when_soc_too_low(self):
+        """SoC close to minimum => don't risk over-discharge."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=13.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+        self.assertAlmostEqual(adjusted, 5.0)
+
+    def test_keeps_original_when_soc_is_none(self):
+        """Unavailable SoC sensor => conservative, keep plan."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=None,
+        )
+        self.assertEqual(action, 'charge_solar')
+
+    def test_ignores_non_charge_solar_actions(self):
+        """Only charge_solar action is affected."""
+        for action in ('discharge_load', 'charge_grid', 'idle', 'follow'):
+            adjusted, adj_action = adjust_charge_solar_for_real_time(
+                planned_battery_kw=5.0, planned_action=action,
+                solar_kw=2.0, grid_w=2000.0, battery_w=0.0, battery_soc_pct=50.0,
+            )
+            self.assertEqual(adj_action, action)
+            self.assertAlmostEqual(adjusted, 5.0)
+
+    def test_discharge_capped_to_battery_max(self):
+        """Discharge is capped to max_battery_kw even for large net load."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=15000.0, battery_w=0.0,
+            battery_soc_pct=50.0, max_battery_kw=6.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -6.0)
+
+    def test_discharge_respects_actual_load(self):
+        """Discharge matches the actual net load, not more."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=500.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -0.5)
+
+    def test_min_soc_threshold_blocks_discharge(self):
+        """Custom min_soc_pct blocks discharge when SoC within margin."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0,
+            battery_soc_pct=22.0, min_soc_pct=18.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+
+    def test_min_soc_threshold_respected(self):
+        """Custom (lower) min_soc_pct lowers the discharge threshold."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0,
+            battery_soc_pct=12.0, min_soc_pct=5.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -2.0)
+
+
 if __name__ == '__main__':
+    """Test adjust_charge_solar_for_real_time adjustments."""
+
+    def setUp(self):
+        self.kwargs = dict(
+            planned_battery_kw=5.0,
+            planned_action='charge_solar',
+            solar_kw=2.0,
+        )
+
+    def test_switches_to_discharge_when_no_surplus_and_adequate_soc(self):
+        """No solar surplus + adequate SoC => discharge to cover load."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -2.0)
+
+    def test_keeps_charge_when_surplus_present(self):
+        """Actual solar surplus exists => stay charge_solar."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=-2000.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+        self.assertAlmostEqual(adjusted, 5.0)
+
+    def test_keeps_charge_when_surplus_is_negligible(self):
+        """Tiny negative surplus (>= -0.1) shouldn't trigger switch."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=100.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+
+    def test_keeps_charge_when_soc_too_low(self):
+        """SoC close to minimum => don't risk over-discharge."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=13.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+        self.assertAlmostEqual(adjusted, 5.0)
+
+    def test_keeps_original_when_soc_is_none(self):
+        """Unavailable SoC sensor => conservative, keep plan."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=None,
+        )
+        self.assertEqual(action, 'charge_solar')
+
+    def test_ignores_non_charge_solar_actions(self):
+        """Only charge_solar action is affected."""
+        for action in ('discharge_load', 'charge_grid', 'idle', 'follow'):
+            adjusted, adj_action = adjust_charge_solar_for_real_time(
+                planned_battery_kw=5.0, planned_action=action,
+                solar_kw=2.0, grid_w=2000.0, battery_w=0.0, battery_soc_pct=50.0,
+            )
+            self.assertEqual(adj_action, action)
+            self.assertAlmostEqual(adjusted, 5.0)
+
+    def test_discharge_capped_to_battery_max(self):
+        """Discharge is capped to max_battery_kw even for large net load."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=15000.0, battery_w=0.0,
+            battery_soc_pct=50.0, max_battery_kw=6.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -6.0)
+
+    def test_discharge_respects_actual_load(self):
+        """Discharge matches the actual net load, not more."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=500.0, battery_w=0.0, battery_soc_pct=50.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -0.5)
+
+    def test_min_soc_threshold_respected(self):
+        """Custom min_soc_pct raises the threshold."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0,
+            battery_soc_pct=20.0, min_soc_pct=18.0,
+        )
+        self.assertEqual(action, 'discharge_load')
+        self.assertAlmostEqual(adjusted, -2.0)
+
+    def test_min_soc_threshold_blocks_discharge(self):
+        """Custom min_soc_pct blocks discharge when inside margin."""
+        adjusted, action = adjust_charge_solar_for_real_time(
+            **self.kwargs, grid_w=2000.0, battery_w=0.0,
+            battery_soc_pct=22.0, min_soc_pct=18.0,
+        )
+        self.assertEqual(action, 'charge_solar')
+
+
     unittest.main()
