@@ -397,6 +397,19 @@ def compute_net_metering_setpoint(
     correction = -deviation / remaining_hours
     
     adjusted = planned_battery_kw + correction
+
+    # Economic guard: don't increase battery activity to match a planned
+    # grid exchange when the deviation is in the wrong direction.
+    if deviation > 0 and planned_net < 0:
+        # Under-export: actual net > planned net (less export than planned).
+        # Correction wants more discharge to hit the planned export target,
+        # but discharging stored energy at low export prices is uneconomical.
+        adjusted = max(adjusted, planned_battery_kw)
+    elif deviation < 0 and planned_net > 0:
+        # Under-import: actual net < planned net (less import than planned).
+        # Correction wants more charge to hit the planned import target,
+        # but paying retail import price is not worth matching a plan number.
+        adjusted = min(adjusted, planned_battery_kw)
     
     # Clamp
     clamped = max(-max_battery_kw, min(max_battery_kw, adjusted))

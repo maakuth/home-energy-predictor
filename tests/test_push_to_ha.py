@@ -826,6 +826,82 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         self.assertAlmostEqual(adjusted, 0.8, places=1)
         self.assertIn('correction', log)
 
+    def test_net_metering_under_export_does_not_increase_discharge(self):
+        """Under-export: actual export < planned export → don't discharge more to match target.
+        
+        The plan expects net export (0.4 kWh export, 0 import). Actual is
+        only 0.1 kWh export (battery absorbed some solar). The correction
+        would ask the battery to discharge more to hit the export target,
+        but that's uneconomical when export price is low.
+        """
+        # First call: capture baseline
+        compute_net_metering_setpoint(
+            planned_battery_kw=-2.0,
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.4,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        # Second call: actual export = 0.1, planned export = 0.4
+        # Planned net = 0 - 0.4 = -0.4
+        # Actual net = 0 - 0.1 = -0.1
+        # Deviation = -0.1 - (-0.4) = 0.3
+        # Correction = -0.3 / (10/60) = -1.8
+        # Without guard: adjusted = -2.0 + (-1.8) = -3.8
+        # With guard: deviation>0 & planned_net<0 → cap at planned_battery_kw
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-2.0,
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.4,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.1,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        # Guard should cap adjustment, not go below planned -2.0
+        self.assertGreaterEqual(adjusted, -2.0)
+        self.assertNotAlmostEqual(adjusted, -3.8, places=1)
+
+    def test_net_metering_under_import_does_not_increase_charge(self):
+        """Under-import: actual import < planned import → don't charge more to match target.
+        
+        The plan expects net import (0.4 kWh import, 0 export). Actual is
+        only 0.1 kWh import. The correction would ask the battery to charge
+        more (grid-charge) to hit the import target, but paying retail
+        import price to match a plan number is wasteful.
+        """
+        # First call: capture baseline
+        compute_net_metering_setpoint(
+            planned_battery_kw=2.0,
+            planned_grid_import_kwh=0.4,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        # Second call: actual import = 0.1, planned import = 0.4
+        # Planned net = 0.4 - 0 = 0.4
+        # Actual net = 0.1 - 0 = 0.1
+        # Deviation = 0.1 - 0.4 = -0.3
+        # Correction = -(-0.3) / (10/60) = 1.8
+        # Without guard: adjusted = 2.0 + 1.8 = 3.8
+        # With guard: deviation<0 & planned_net>0 → cap at planned_battery_kw
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=2.0,
+            planned_grid_import_kwh=0.4,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.1,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        # Guard should cap adjustment, not go above planned 2.0
+        self.assertLessEqual(adjusted, 2.0)
+        self.assertNotAlmostEqual(adjusted, 3.8, places=1)
+
 
 class TestAdjustChargeSolarRealTime(unittest.TestCase):
     """Test adjust_charge_solar_for_real_time adjustments."""

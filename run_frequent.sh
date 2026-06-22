@@ -36,6 +36,18 @@ source .venv/bin/activate
   python3 optimize_plan.py
   python3 push_to_ha.py
 
+  # Reset net metering state when crossing a 15-minute boundary
+  # so each quarter starts clean. Uses epoch interval index
+  # (epoch_seconds / 900) instead of clock position, so SARIMAX
+  # delays don't cause us to skip the reset.
+  track_file="/tmp/hepo_net_metering_interval"
+  current_interval=$(($(date +%s) / 900))
+
+  if [ ! -f "$track_file" ] || [ "$(cat "$track_file")" -lt "$current_interval" ]; then
+    echo '{}' > net_metering_state.json
+    echo "$current_interval" > "$track_file"
+  fi
+
   echo "=== Update Complete: $(date) ==="
 
 ) 200>/tmp/hepo.lock
