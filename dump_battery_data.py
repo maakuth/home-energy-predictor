@@ -192,7 +192,7 @@ def fetch_predictions(
     end_time: Optional[datetime] = None,
 ) -> list[FuturePredictionRecord]:
     """Load predictions from future_predictions.json."""
-    preds = load_json_file('future_predictions.json')
+    preds = load_json_file('state/future_predictions.json')
     if not preds:
         return []
     
@@ -312,7 +312,7 @@ def fetch_market_prices_range(
     
     try:
         # Try to load from predictions file if it has price data
-        preds = load_json_file('future_predictions.json')
+preds = load_json_file('state/future_predictions.json')
         if preds and isinstance(preds, list) and len(preds) > 0:
             if 'import_price' in preds[0] or 'export_price' in preds[0]:
                 for pred in preds:

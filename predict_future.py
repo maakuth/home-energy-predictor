@@ -416,8 +416,8 @@ def predict() -> None:
     # Load model and features
     model = xgb.XGBRegressor()
     try:
-        model.load_model('energy_model.json')
-        with open('model_features.json', 'r') as f:
+        model.load_model('state/energy_model.json')
+        with open('state/model_features.json', 'r') as f:
             features = json.load(f)
     except FileNotFoundError:
         print('Error: Model files not found. Run train_model.py first.')
@@ -494,7 +494,7 @@ def predict() -> None:
     print(f'\nGenerated {len(results)} predictions at {interval}-minute resolution.')
     
     # Support environment variable override for testing
-    predictions_file = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
+    predictions_file = os.getenv('TEST_PREDICTIONS_FILE', 'state/future_predictions.json')
     with open(predictions_file, 'w') as f:
         json.dump(results, f, indent=2)
     print(f'\n✅ Predictions saved to {predictions_file}')

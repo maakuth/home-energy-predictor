@@ -43,7 +43,7 @@ def push_accuracy() -> None:
 def push_plan() -> None:
     print('Loading optimization plan...')
     # Support environment variable override for testing
-    plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')
+    plan_file = os.getenv('TEST_PLAN_FILE', 'state/optimization_plan.json')
     try:
         with open(plan_file, 'r') as f:
             plan = json.load(f)

@@ -4,7 +4,7 @@ import os
 from typing import Optional
 
 # Default database path, can be overridden by DB_PATH environment variable
-_DEFAULT_DB_PATH = 'hepo.db'
+_DEFAULT_DB_PATH = 'state/hepo.db'
 DB_PATH: str = os.getenv('DB_PATH', _DEFAULT_DB_PATH)
 
 def get_db_connection(db_file: Optional[str] = None) -> sqlite3.Connection:

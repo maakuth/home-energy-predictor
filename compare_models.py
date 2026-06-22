@@ -29,7 +29,7 @@ def get_archived_xgboost_predictions(days: int = 2) -> pd.DataFrame:
     df['timestamp'] = pd.to_datetime(df['target_timestamp'], utc=True)
     return df.set_index('timestamp')[['predicted_baseload']]
 
-def load_sarima_latest_forecast(filename: str = 'sarimax_predictions.json') -> pd.DataFrame:
+def load_sarima_latest_forecast(filename: str = 'state/sarimax_predictions.json') -> pd.DataFrame:
     """Load the latest SARIMA forecast (note: this is only the latest one run)."""
     if not os.path.exists(filename):
         return pd.DataFrame()
@@ -71,7 +71,7 @@ def compare() -> None:
     print("=== Model Comparison Analysis ===")
     
     # 1. Load actual historical baseload (Ground Truth)
-    actual_ts = load_actual_baseload(file_path='processed_data.csv', last_n_days=2)
+    actual_ts = load_actual_baseload(file_path='state/processed_data.csv', last_n_days=2)
     if actual_ts is None:
         return
     

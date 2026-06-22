@@ -11,7 +11,7 @@ from collections import Counter
 from typing import Any
 
 
-def load_plan(path: str = "optimization_plan.json") -> list[dict[str, Any]]:
+def load_plan(path: str = "state/optimization_plan.json") -> list[dict[str, Any]]:
     with open(path) as f:
         return json.load(f)
 
@@ -149,7 +149,7 @@ def show_charging(entries: list[dict[str, Any]], args: argparse.Namespace) -> No
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect battery plan entries")
-    parser.add_argument('--file', default='optimization_plan.json', help='Plan JSON file path')
+    parser.add_argument('--file', default='state/optimization_plan.json', help='Plan JSON file path')
     parser.add_argument('--summary', action='store_true', help='Show summary only (default)')
     parser.add_argument('--detail', action='store_true', help='Show detail table')
     parser.add_argument('--charging', action='store_true', help='Show charging analysis')

@@ -40,11 +40,12 @@ source .venv/bin/activate
   # so each quarter starts clean. Uses epoch interval index
   # (epoch_seconds / 900) instead of clock position, so SARIMAX
   # delays don't cause us to skip the reset.
-  track_file="/tmp/hepo_net_metering_interval"
+  mkdir -p state
+  track_file="state/hepo_net_metering_interval"
   current_interval=$(($(date +%s) / 900))
 
   if [ ! -f "$track_file" ] || [ "$(cat "$track_file")" -lt "$current_interval" ]; then
-    echo '{}' > net_metering_state.json
+    echo '{}' > state/net_metering_state.json
     echo "$current_interval" > "$track_file"
   fi
 

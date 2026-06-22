@@ -149,8 +149,9 @@ def main() -> None:
     final_df = final_df[~final_df.index.duplicated(keep='first')]
     
     # Create final dataset
-    final_df.to_csv('raw_data.csv')
-    print(f"✅ Data extraction complete. Saved to raw_data.csv. Shape: {final_df.shape}")
+    os.makedirs('state', exist_ok=True)
+    final_df.to_csv('state/raw_data.csv')
+    print(f"✅ Data extraction complete. Saved to state/raw_data.csv. Shape: {final_df.shape}")
 
 if __name__ == "__main__":
     main()

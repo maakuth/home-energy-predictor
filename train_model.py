@@ -5,10 +5,11 @@ import xgboost as xgb
 import argparse
 from sklearn.metrics import mean_absolute_error
 import json
+import os
 
 def train(holdout_days: int = 0) -> None:
     print('Loading processed data...')
-    df = pd.read_csv('processed_data.csv', index_col=0)
+    df = pd.read_csv('state/processed_data.csv', index_col=0)
     df.index = pd.to_datetime(df.index, utc=True)
     print(f"  - Raw rows: {len(df)}")
     
@@ -93,9 +94,9 @@ def train(holdout_days: int = 0) -> None:
         print('✅ Model Training Complete (Evaluation skipped due to empty test set).')
     
     # Save model
-    model.save_model('energy_model.json')
-    # Save feature list for inference
-    with open('model_features.json', 'w') as f:
+    os.makedirs('state', exist_ok=True)
+    model.save_model('state/energy_model.json')
+    with open('state/model_features.json', 'w') as f:
         json.dump(features, f)
     print('Model saved to energy_model.json')
 

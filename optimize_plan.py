@@ -85,9 +85,9 @@ def load_predictions(
 ) -> tuple[Any, Any, Any, Any, pd.Series, pd.Series]:
     # Support environment variable overrides for testing
     if file_path is None:
-        file_path = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
+        file_path = os.getenv('TEST_PREDICTIONS_FILE', 'state/future_predictions.json')
     if sarima_path is None:
-        sarima_path = os.getenv('TEST_SARIMA_FILE', 'sarimax_predictions.json')
+        sarima_path = os.getenv('TEST_SARIMA_FILE', 'state/sarimax_predictions.json')
     with open(file_path, 'r') as f:
         xgb_data = json.load(f)
 
@@ -725,7 +725,7 @@ def optimize() -> None:
         final_plan.append(entry)
         
     # Support environment variable override for testing
-    plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')
+    plan_file = os.getenv('TEST_PLAN_FILE', 'state/optimization_plan.json')
     with open(plan_file, 'w') as f:
         json.dump(final_plan, f, indent=2)
     print(f'\n✅ Plan saved to {plan_file}')

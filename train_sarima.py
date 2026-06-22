@@ -19,7 +19,7 @@ def train_sarima(days: int = 14, params_path: Optional[str] = None) -> None:
 
     # Support environment variable override for testing
     if params_path is None:
-        params_path = os.getenv('TEST_SARIMA_PARAMS', 'sarima_model_params.pkl')
+        params_path = os.getenv('TEST_SARIMA_PARAMS', 'state/sarima_model_params.pkl')
     start_params = None
     if os.path.exists(params_path):
         try:

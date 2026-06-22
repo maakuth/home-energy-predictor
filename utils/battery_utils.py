@@ -296,7 +296,7 @@ def compute_load_following_setpoint(
 def _load_net_metering_state(state_file: Optional[str] = None) -> dict[str, Any]:
     """Load the persisted net metering state for interval tracking."""
     if state_file is None:
-        state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'net_metering_state.json')
+        state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'state/net_metering_state.json')
     if os.path.exists(state_file):
         try:
             with open(state_file, 'r') as f:
@@ -309,7 +309,8 @@ def _load_net_metering_state(state_file: Optional[str] = None) -> dict[str, Any]
 def _save_net_metering_state(state: dict[str, Any], state_file: Optional[str] = None) -> None:
     """Persist the net metering state for interval tracking."""
     if state_file is None:
-        state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'net_metering_state.json')
+        state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'state/net_metering_state.json')
+    os.makedirs(os.path.dirname(state_file), exist_ok=True)
     try:
         with open(state_file, 'w') as f:
             json.dump(state, f)

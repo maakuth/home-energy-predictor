@@ -292,9 +292,9 @@ def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
     Run a 'hindsight' prediction using the CURRENT model on PAST features.
     This tells us if the NEW model is better at predicting the past than the OLD model was.
     """
-    model_path = 'energy_model.json'
-    features_path = 'model_features.json'
-    processed_path = 'processed_data.csv'
+    model_path = 'state/energy_model.json'
+    features_path = 'state/model_features.json'
+    processed_path = 'state/processed_data.csv'
 
     if not all(os.path.exists(p) for p in [model_path, features_path, processed_path]):
         print("⚠️ Model files or processed_data.csv not found. Skipping hindsight backtest.")

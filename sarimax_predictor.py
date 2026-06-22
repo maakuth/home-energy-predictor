@@ -14,7 +14,7 @@ from utils.sqlite_utils import get_db_connection, get_db_path
 BASELOAD_MAX_KW = 20.0
 
 def load_historical_data(
-    file_path: str = 'processed_data.csv',
+    file_path: str = 'state/processed_data.csv',
     target_col: str = 'baseload_power',
     last_n_days: int = 14,
 ) -> Optional[pd.Series]:
@@ -103,7 +103,7 @@ def _clamp_ci(val: float, low: float, high: float, historical_std: Optional[floa
 def predict_sarimax(
     ts_data: pd.Series,
     forecast_steps: int = 96,
-    params_path: str = 'sarima_model_params.pkl',
+    params_path: str = 'state/sarima_model_params.pkl',
 ) -> tuple[pd.Series, pd.DataFrame]:
     """
     Predicts future values using SARIMA model.
@@ -159,7 +159,7 @@ def predict_sarimax(
 def save_benchmark_results(
     forecast_mean: pd.Series,
     forecast_ci: Optional[pd.DataFrame] = None,
-    filename: str = "sarimax_predictions.json",
+    filename: str = "state/sarimax_predictions.json",
     historical_std: Optional[float] = None,
 ) -> None:
     """Saves SARIMA forecast and confidence intervals."""
@@ -248,7 +248,7 @@ def archive_sarimax_predictions(
 
 def main() -> None:
     # Support environment variable override for testing
-    params_path = os.getenv('TEST_SARIMA_PARAMS', 'sarima_model_params.pkl')
+    params_path = os.getenv('TEST_SARIMA_PARAMS', 'state/sarima_model_params.pkl')
 
     if not os.path.exists(params_path):
         print(f"⚠️ No SARIMA parameters found at {params_path}. Please run train_sarima.py first.")

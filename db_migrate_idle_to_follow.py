@@ -11,7 +11,7 @@ import os
 
 
 def migrate() -> None:
-    db_path = os.getenv('HEPO_DB_PATH', 'hepo.db')
+    db_path = os.getenv('HEPO_DB_PATH', 'state/hepo.db')
     if not os.path.exists(db_path):
         print(f"DB not found at {db_path}, skipping migration.")
         return

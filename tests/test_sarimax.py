@@ -102,7 +102,7 @@ class TestSARIMAPredictor(unittest.TestCase):
 
         try:
             # Use real production data if available, otherwise synthetic
-            ts_data = load_historical_data('processed_data.csv', last_n_days=3)
+            ts_data = load_historical_data('state/processed_data.csv', last_n_days=3)
             if ts_data is None or len(ts_data) < 100:
                 ts_data = load_historical_data(self.test_csv, last_n_days=3)
 

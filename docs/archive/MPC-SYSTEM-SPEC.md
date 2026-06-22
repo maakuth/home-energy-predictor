@@ -69,13 +69,13 @@ The optimizer uses a **marginal opportunity-cost ranking** (8-hour lookahead win
 ## 5. Deployment & Integration
 
 ### Execution Loop
-- **Often (`run_often.sh`):** Runs every minute. Lightweight update: reads current battery/grid sensor states and pushes latest battery intent to Home Assistant (no heavy computation).
+- **Often (`run_often.py`):** Runs every minute. Lightweight update: reads current battery/grid sensor states and pushes latest battery intent to Home Assistant (no heavy computation).
 - **Frequent (`run_frequent.sh`):** Runs every 30 mins. Performs fast extraction, generates fresh predictions, and updates the MPC plan.
 - **Daily (`run_daily.sh`):** Runs once a day. Performs full extraction and retrains the XGBoost model.
 
 ### Home Assistant Integration
 - **Optimization Plan:** Pushed to `sensor.hepo_optimization_plan` as a JSON attribute, containing 15-minute resolution actions for the inverter and GSHP.
-- **Battery Control:** `number.hoymiles_remote_control_hoymiles_battery_power` (in Watts) provides real-time control setpoint for the Hoymiles battery inverter. Positive = discharge (provide power to home), Negative = charge (draw power from grid/solar). Updated every minute via `run_often.sh`.
+- **Battery Control:** `number.hoymiles_remote_control_hoymiles_battery_power` (in Watts) provides real-time control setpoint for the Hoymiles battery inverter. Positive = discharge (provide power to home), Negative = charge (draw power from grid/solar). Updated every minute via `run_often.py`.
 - **Accuracy Tracking:** `sensor.hepo_accuracy` reports 3-hour windowed MAE and Bias from `analyze_performance.py`.
 
 ## 6. Battery Availability & Degradation Mode

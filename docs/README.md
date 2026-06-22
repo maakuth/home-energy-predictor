@@ -50,7 +50,7 @@ Extracts 3 days, predicts from "now", optimizes battery/GSHP/EV, pushes to HA.
 
 ### Mid-Cycle Update (every 2-5 min)
 ```bash
-./run_often.sh
+./run_often.py
 ```
 Lightweight: reads current HA state, computes battery setpoint from existing plan, pushes single power command.
 
@@ -63,7 +63,7 @@ Extracts 730 days, retrains XGBoost + SARIMA, runs analysis for last 14 days.
 ### Automation (Cron)
 ```bash
 # Battery setpoint update every 5 minutes
-*/5 * * * * /path/to/hepo/run_often.sh >> /path/to/hepo/frequent.log 2>&1
+*/5 * * * * /path/to/hepo/.venv/bin/python3 /path/to/hepo/run_often.py >> /path/to/hepo/frequent.log 2>&1
 
 # Full re-optimization every 30 minutes
 */30 * * * * /path/to/hepo/run_frequent.sh >> /path/to/hepo/frequent.log 2>&1

@@ -26,9 +26,9 @@ def main() -> None:
 
     print("Loading processed data...")
     try:
-        df = pd.read_csv('processed_data.csv', index_col=0)
+        df = pd.read_csv('state/processed_data.csv', index_col=0)
     except FileNotFoundError:
-        print("processed_data.csv not found.")
+        print("state/processed_data.csv not found.")
         return
 
     df.index = pd.to_datetime(df.index, utc=True)
@@ -90,7 +90,7 @@ def main() -> None:
 
     # Connect to DB to get prices
     try:
-        conn = sqlite3.connect('hepo.db')
+        conn = sqlite3.connect('state/hepo.db')
         # Load prices
         prices_df = pd.read_sql_query("SELECT target_timestamp, import_price FROM predictions WHERE import_price IS NOT NULL", conn)
         prices_df['target_timestamp'] = pd.to_datetime(prices_df['target_timestamp'], utc=True)
