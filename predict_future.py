@@ -129,7 +129,7 @@ def generate_inference_data(
     while current_ts <= end_time:
         # Get nearest solar estimate
         try:
-            idx = df_solar.index.get_indexer([current_ts], method='nearest')[0]
+            idx = df_solar.index.get_indexer([current_ts], method='nearest')[0]  # type: ignore[arg-type]
             solar_val = df_solar.iloc[idx]['pv_estimate']
         except Exception:
             solar_val = 0.0
@@ -139,7 +139,7 @@ def generate_inference_data(
         forecast_wind = wind_val
         try:
             if not df_weather.empty:
-                w_idx = df_weather.index.get_indexer([current_ts], method='nearest')[0]
+                w_idx = df_weather.index.get_indexer([current_ts], method='nearest')[0]  # type: ignore[arg-type]
                 forecast_dt = df_weather.index[w_idx]
                 
                 # Force both to UTC for comparison to avoid offset-naive vs offset-aware issues
@@ -223,7 +223,7 @@ def predict() -> None:
     weather_forecast_data = call_ha_service('weather', 'get_forecasts', {'entity_id': 'weather.home', 'type': 'hourly'})
     df_weather = pd.DataFrame()
     if weather_forecast_data and 'weather.home' in weather_forecast_data:
-        raw_forecast = weather_forecast_data['weather.home'].get('forecast', [])
+        raw_forecast = weather_forecast_data['weather.home'].get('forecast', [])  # type: ignore[arg-type]
         if raw_forecast:
             df_weather = pd.DataFrame(raw_forecast)
             df_weather['datetime'] = pd.to_datetime(df_weather['datetime'], utc=True)
@@ -256,16 +256,24 @@ def predict() -> None:
     
     # Current states
     current_temp = get_ha_state('sensor.ulkona_temperature_2')
-    try:
-        temp_val = float(current_temp.get('state')) if current_temp and current_temp.get('state') not in ['unknown', 'unavailable'] else 5.0
-    except (ValueError, TypeError, AttributeError):
-        temp_val = 5.0
+    temp_val = 5.0
+    if current_temp is not None:
+        try:
+            temp_state = current_temp.get('state')
+            if temp_state is not None and temp_state not in ['unknown', 'unavailable']:
+                temp_val = float(temp_state)
+        except (ValueError, TypeError, AttributeError):
+            pass
 
     current_wind = get_ha_state('sensor.outside_wind_speed')
-    try:
-        wind_val = float(current_wind.get('state')) if current_wind and current_wind.get('state') not in ['unknown', 'unavailable'] else 0.0
-    except (ValueError, TypeError, AttributeError):
-        wind_val = 0.0
+    wind_val = 0.0
+    if current_wind is not None:
+        try:
+            wind_state = current_wind.get('state')
+            if wind_state is not None and wind_state not in ['unknown', 'unavailable']:
+                wind_val = float(wind_state)
+        except (ValueError, TypeError, AttributeError):
+            pass
 
     # Anchors: Fetch historical baseload for lags
     # Fetch last 25 hours to cover both 1h and 24h lags
@@ -293,7 +301,7 @@ def predict() -> None:
             target_ts_1h = datetime.now(timezone.utc) - timedelta(hours=1)
             # fetch_states_history now returns DataFrames with timestamp as index
             temp_df = leaf_df if isinstance(leaf_df.index, pd.DatetimeIndex) else leaf_df.set_index('timestamp')
-            idx = temp_df.index.get_indexer([target_ts_1h], method='nearest')[0]
+            idx = temp_df.index.get_indexer([target_ts_1h], method='nearest')[0]  # type: ignore[arg-type]
             leaf_lag_1h = float(temp_df.iloc[idx]['state']) if idx != -1 else 0.0
 
             # 24h energy proxy (kWh)
@@ -313,29 +321,45 @@ def predict() -> None:
 
         
     acc_temp = get_ha_state('sensor.mlp_varaajan_lampotila')
-    try:
-        acc_val = float(acc_temp.get('state')) if acc_temp and acc_temp.get('state') not in ['unknown', 'unavailable'] else 45.0
-    except (ValueError, TypeError, AttributeError):
-        acc_val = 45.0
+    acc_val = 45.0
+    if acc_temp is not None:
+        try:
+            acc_state = acc_temp.get('state')
+            if acc_state is not None and acc_state not in ['unknown', 'unavailable']:
+                acc_val = float(acc_state)
+        except (ValueError, TypeError, AttributeError):
+            pass
 
     # GSHP Pump Temperature logic
     gshp_pump_temp_state = get_ha_state('sensor.mlp_pumpun_lampotla')
     gshp_power_state = get_ha_state('sensor.mlp_teho')
-    try:
-        p_temp_val = float(gshp_pump_temp_state.get('state')) if gshp_pump_temp_state and gshp_pump_temp_state.get('state') not in ['unknown', 'unavailable'] else np.nan
-        p_power_val = float(gshp_power_state.get('state')) if gshp_power_state and gshp_power_state.get('state') not in ['unknown', 'unavailable'] else 0.0
-        
-        # User specified: if pump power < 100W, the sensor is invalid/weird.
-        if p_power_val < 100:
+    p_temp_val = np.nan
+    p_power_val = 0.0
+    if gshp_pump_temp_state is not None and gshp_power_state is not None:
+        try:
+            p_temp_raw = gshp_pump_temp_state.get('state')
+            p_power_raw = gshp_power_state.get('state')
+            if p_temp_raw is not None and p_temp_raw not in ['unknown', 'unavailable']:
+                p_temp_val = float(p_temp_raw)
+            if p_power_raw is not None and p_power_raw not in ['unknown', 'unavailable']:
+                p_power_val = float(p_power_raw)
+            
+            # User specified: if pump power < 100W, the sensor is invalid/weird.
+            if p_power_val < 100:
+                p_temp_val = np.nan
+        except (ValueError, TypeError, AttributeError):
             p_temp_val = np.nan
-    except (ValueError, TypeError, AttributeError):
-        p_temp_val = np.nan
+            p_power_val = 0.0
 
     sauna_temp = get_ha_state('sensor.sauna_temperature_2')
-    try:
-        s_temp_val = float(sauna_temp.get('state')) if sauna_temp and sauna_temp.get('state') not in ['unknown', 'unavailable'] else 20.0
-    except (ValueError, TypeError, AttributeError):
-        s_temp_val = 20.0
+    s_temp_val = 20.0
+    if sauna_temp is not None:
+        try:
+            sauna_state = sauna_temp.get('state')
+            if sauna_state is not None and sauna_state not in ['unknown', 'unavailable']:
+                s_temp_val = float(sauna_state)
+        except (ValueError, TypeError, AttributeError):
+            pass
     
     # Is sauna currently heating up? (Rising temperature check)
     is_sauna_detected = False
@@ -376,10 +400,14 @@ def predict() -> None:
             print("📅 Sauna was used yesterday evening.")
 
     ev_soc = get_ha_state('sensor.xpz_491_battery_level')
-    try:
-        soc_val = float(ev_soc.get('state')) if ev_soc and ev_soc.get('state') not in ['unknown', 'unavailable'] else 80.0
-    except (ValueError, TypeError, AttributeError):
-        soc_val = 80.0
+    soc_val = 80.0
+    if ev_soc is not None:
+        try:
+            soc_state = ev_soc.get('state')
+            if soc_state is not None and soc_state not in ['unknown', 'unavailable']:
+                soc_val = float(soc_state)
+        except (ValueError, TypeError, AttributeError):
+            pass
 
     ev_pos = get_ha_state('device_tracker.xpz_491_position')
     pos_val = 1 if ev_pos and ev_pos.get('state') == 'home' else 0
@@ -446,8 +474,7 @@ def predict() -> None:
     
     # Fetch market prices to identify fallbacks
     print('Fetching market prices for fallback detection...')
-    prediction_timestamps_dt = [datetime.fromisoformat(ts) for ts in timestamps]
-    market_prices, is_fallback_price, _, _, _ = fetch_market_prices(prediction_timestamps_dt, PREDICTION_INTERVAL_MINUTES)
+    market_prices, is_fallback_price, _, _, _ = fetch_market_prices(timestamps, PREDICTION_INTERVAL_MINUTES)
     if is_fallback_price is None:
         is_fallback_price = [0] * len(predictions)
 

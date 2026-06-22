@@ -30,7 +30,7 @@ def explore() -> None:
         if table in tables:
             print(f"\nPeek into '{table}':")
             cur.execute(f"SELECT * FROM {table} LIMIT 2")
-            colnames = [desc[0] for desc in cur.description]
+            colnames = [desc[0] for desc in (cur.description or [])]
             print(f"Columns: {colnames}")
             rows = cur.fetchall()
             for row in rows:

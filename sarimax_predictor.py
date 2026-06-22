@@ -168,8 +168,8 @@ def save_benchmark_results(
         for ts, val in forecast_mean.items():
             # Handle potential missing CI values
             try:
-                low = forecast_ci.loc[ts, 'lower baseload_power']
-                high = forecast_ci.loc[ts, 'upper baseload_power']
+                low = forecast_ci.loc[ts, 'lower baseload_power']  # type: ignore[arg-type,optional-member]
+                high = forecast_ci.loc[ts, 'upper baseload_power']  # type: ignore[arg-type,optional-member]
             except (KeyError, AttributeError):
                 low = val * 0.5
                 high = val * 1.5
@@ -224,8 +224,8 @@ def archive_sarimax_predictions(
         data_to_insert = []
         for ts, val in forecast_mean.items():
             try:
-                low = float(forecast_ci.loc[ts, 'lower baseload_power'])
-                high = float(forecast_ci.loc[ts, 'upper baseload_power'])
+                low = float(forecast_ci.loc[ts, 'lower baseload_power'])  # type: ignore[arg-type,optional-member]
+                high = float(forecast_ci.loc[ts, 'upper baseload_power'])  # type: ignore[arg-type,optional-member]
             except (KeyError, AttributeError):
                 low = float(val * 0.5)
                 high = float(val * 1.5)
@@ -299,8 +299,8 @@ def main() -> None:
     forecast_mean = np.clip(forecast_mean, 0, BASELOAD_MAX_KW)
     
     # 5. Save & Archive
-    save_benchmark_results(forecast_mean, forecast_ci, historical_std=historical_std)
-    archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=historical_std)
+    save_benchmark_results(forecast_mean, forecast_ci, historical_std=historical_std)  # type: ignore[arg-type]
+    archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=historical_std)  # type: ignore[arg-type]
 
 if __name__ == "__main__":
     main()

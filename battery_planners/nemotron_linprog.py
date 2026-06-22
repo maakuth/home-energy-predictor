@@ -171,6 +171,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
         # Use a configurable percentile of import prices (default 0 = disabled)
         # When disabled, the LP only optimizes costs within the horizon
         terminal_value_percentile = get_env_float('BATTERY_TERMINAL_VALUE_PERCENTILE', 0.0)
+        terminal_value = 0.0
         if terminal_value_percentile > 0:
             terminal_value = np.percentile(import_prices, terminal_value_percentile) if len(import_prices) > 0 else 0.10
             c[idx_soc(horizon - 1)] = -terminal_value * charge_eff * discharge_eff  # Round-trip efficiency adjusted
@@ -467,6 +468,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
         
         # Build plan entries from solution
         battery_plan = []
+        soc_kwh = initial_soc_kwh
         for i in range(horizon):
             c_solar = max(0.0, x[idx_c_solar(i)])
             c_grid = max(0.0, x[idx_c_grid(i)])

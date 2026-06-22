@@ -436,7 +436,7 @@ def optimize() -> None:
 
     print('Fetching market prices...')
     market_prices, is_fallback_price, price_source, is_inclusive, tomorrow_valid = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
-    if market_prices is None:
+    if market_prices is None or is_fallback_price is None:
         print('Error: Could not fetch market prices from Home Assistant sensors.')
         return
 
@@ -458,23 +458,25 @@ def optimize() -> None:
     # --- GSHP Optimization (Must run before battery) ---
     acc_temp_state = get_ha_state('sensor.mlp_varaajan_lampotila')
     current_acc_temp = 50.0
-    try:
-        current_acc_temp = float(acc_temp_state.get('state', 50.0))
-    except (TypeError, ValueError):
-        pass
+    if acc_temp_state is not None:
+        try:
+            current_acc_temp = float(acc_temp_state.get('state', 50.0))
+        except (TypeError, ValueError):
+            pass
     
     gshp_power_state = get_ha_state('sensor.mlp_teho')
     is_hp_currently_running = False
-    try:
-        is_hp_currently_running = float(gshp_power_state.get('state', 0)) > 100
-    except (TypeError, ValueError):
-        pass
+    if gshp_power_state is not None:
+        try:
+            is_hp_currently_running = float(gshp_power_state.get('state', 0)) > 100
+        except (TypeError, ValueError):
+            pass
 
     # Fireplace detection: check if accumulator temp is rising while GSHP is off
     is_fireplace_currently_on = False
     try:
         # Get recent accumulator temperature history (last 30 minutes)
-        acc_temp_history = fetch_states_history('sensor.mlp_varaajan_lampotila', hours=0.5)
+        acc_temp_history = fetch_states_history('sensor.mlp_varaajan_lampotila', hours=1)
         acc_df = acc_temp_history.get('sensor.mlp_varaajan_lampotila', pd.DataFrame())
         
         if len(acc_df) >= 2:
@@ -490,7 +492,7 @@ def optimize() -> None:
                 
                 # Check if accumulator is rising fast and GSHP is mostly off
                 # Using the same heuristic as in process_data.py
-                is_fireplace_currently_on = (acc_roc_15m > 0.3) and (float(gshp_power_state.get('state', 0)) < 100)
+                is_fireplace_currently_on = (acc_roc_15m > 0.3) and (gshp_power_state is not None and float(gshp_power_state.get('state', 0)) < 100)
     except Exception as e:
         print(f"⚠️ Error detecting fireplace status: {e}")
 
@@ -523,12 +525,12 @@ def optimize() -> None:
     # Filter indices where EV is at home
     home_indices = [i for i, p in enumerate(predictions_data) if p.get('ev_position', 1) == 1]
     
+    ev_power_kw = get_env_float('EV_CHARGE_POWER_KW', 3.5)
     if not home_indices:
         print("⚠️ Warning: EV (XPZ) not predicted to be home at any time in the plan window.")
         ev_plan = [0] * len(import_prices)
     else:
         # Calculate needed slots
-        ev_power_kw = get_env_float('EV_CHARGE_POWER_KW', 3.5)
         if current_soc is None:
             # Fallback to fixed duration if we don't know the SoC
             ev_charge_hours = get_env_float('EV_CHARGE_HOURS', 4.0)

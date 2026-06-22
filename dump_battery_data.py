@@ -188,8 +188,8 @@ def fetch_ha_snapshot(verbose: bool = False) -> dict[str, dict[str, Any]]:
 
 
 def fetch_predictions(
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
 ) -> list[FuturePredictionRecord]:
     """Load predictions from future_predictions.json."""
     preds = load_json_file('future_predictions.json')
@@ -218,8 +218,8 @@ def fetch_predictions(
 
 
 def fetch_nordpool_prices_from_ha(
-    start_time: str,
-    end_time: str,
+    start_time: datetime,
+    end_time: datetime,
     verbose: bool = False,
 ) -> list[PriceRecord]:
     """Fetch historical Nordpool prices from HA PostgreSQL database.
@@ -271,7 +271,7 @@ def fetch_nordpool_prices_from_ha(
                         continue
                 
                 # Skip if outside time range (shouldn't happen but be safe)
-                if ts < start_time or ts > end_time:
+                if ts < start_time or ts > end_time:  # type: ignore[operator]
                     continue
                 
                 prices.append({
@@ -294,8 +294,8 @@ def fetch_nordpool_prices_from_ha(
 
 
 def fetch_market_prices_range(
-    start_time: str,
-    end_time: str,
+    start_time: datetime,
+    end_time: datetime,
     verbose: bool = False,
 ) -> list[PriceRecord]:
     """Fetch market prices for the given time range.
@@ -398,8 +398,8 @@ def fetch_market_prices_range(
 
 def synthesize_predictions(
     measurements: list[dict[str, Any]],
-    start_time: str,
-    end_time: str,
+    start_time: datetime,
+    end_time: datetime,
     verbose: bool = False,
 ) -> list[dict[str, Any]]:
     """Synthesize realistic prediction archive from measurement data.
@@ -432,7 +432,7 @@ def synthesize_predictions(
         target_ts = ts
         
         # The forecast was "generated" 24 hours before
-        generated_ts = ts - pd.Timedelta(hours=24)
+        generated_ts = ts - pd.Timedelta(hours=24)  # type: ignore[operator]
         
         # Skip if generated time is before start of range
         if generated_ts < start_time:
@@ -501,8 +501,8 @@ def synthesize_predictions(
 
 
 def fetch_sqlite_predictions(
-    start_time: str,
-    end_time: str,
+    start_time: datetime,
+    end_time: datetime,
     verbose: bool = False,
 ) -> list[SqlitePredictionRecord]:
     """Fetch prediction archive from SQLite database, preserving generated_at.
@@ -598,8 +598,8 @@ def fetch_sqlite_predictions(
 
 
 def fetch_ha_measurements(
-    start_time: str,
-    end_time: str,
+    start_time: datetime,
+    end_time: datetime,
     verbose: bool = False,
 ) -> list[dict[str, Any]]:
     """Fetch actual measurements from Home Assistant PostgreSQL database.
@@ -709,8 +709,8 @@ def fetch_ha_measurements(
 
 
 def fetch_sqlite_history(
-    start_time: str,
-    end_time: str,
+    start_time: datetime,
+    end_time: datetime,
     verbose: bool = False,
 ) -> dict[str, Any]:
     """Wrapper to maintain backward compatibility. Combines predictions and measurements."""

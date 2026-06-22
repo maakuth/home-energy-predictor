@@ -6,7 +6,7 @@ import numpy as np
 import argparse
 import xgboost as xgb
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
@@ -373,11 +373,14 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
         'market_avg_price': None
     }
 
+    res_3h = pd.DataFrame()
+    mae = 0.0
+
     if comparison.empty:
         print("No overlapping data found between archived predictions (current version) and actuals.")
     else:
         # Filter out fallback prices
-        comparison_clean = comparison[comparison.get('is_fallback_price', 0) == 0]
+        comparison_clean: pd.DataFrame = cast(pd.DataFrame, comparison[comparison.get('is_fallback_price', 0) == 0])
         
         # 3-Hour Analysis
         res_3h = comparison_clean.resample('3h').mean(numeric_only=True).dropna()

@@ -18,7 +18,7 @@ def get_db_connection() -> psycopg2.extensions.connection:
 
 def fetch_states_history(
     entity_ids: str | list[str],
-    hours: int = 1,
+    hours: int | float = 1,
     start_time: Optional[datetime] = None,
 ) -> dict[str, pd.DataFrame]:
     """

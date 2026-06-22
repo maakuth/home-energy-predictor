@@ -1,27 +1,24 @@
 [tool.pyright]
 include = ["."]
 exclude = [".venv", "venv", ".git", "**/__pycache__"]
-typeCheckingMode = "basic"
+typeCheckingMode = "standard"
+
+# Stub quality: pandas/statsmodels stubs are incomplete
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
 reportUnknownParameterType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
 reportUnknownLambdaType = false
-reportOptionalSubscript = false
-reportOptionalMemberAccess = false
-reportOptionalIterable = false
-reportOptionalOperand = false
-reportOptionalCall = false
-reportArgumentType = false
-reportCallIssue = false
 reportAttributeAccessIssue = false
+reportCallIssue = false
 reportIndexIssue = false
-reportOperatorIssue = false
-reportAbstractUsage = false
 reportIncompatibleMethodOverride = false
 reportIncompatibleVariableOverride = false
 reportOverlappingOverload = false
+
+# Intentional suppression (uninteresting for this project)
+reportAbstractUsage = false
 reportUnusedImport = false
 reportUnusedClass = false
 reportUnusedFunction = false

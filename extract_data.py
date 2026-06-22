@@ -116,7 +116,7 @@ def main() -> None:
         # Resample to configured interval (default 15 minutes).
         if col_name == 'ev_position':
             # Is home if any state in the interval says 'home'.
-            resampled = df[col_name].resample(RESAMPLE_INTERVAL).apply(lambda x: 'home' in x.values if not x.empty else None)
+            resampled = df[col_name].resample(RESAMPLE_INTERVAL).apply(lambda x: 'home' in x.values if not x.empty else None)  # type: ignore[arg-type]
         elif col_name == 'mummun_energy':
             # Handle energy total to power conversion later
             resampled = df[col_name].resample(RESAMPLE_INTERVAL).mean()

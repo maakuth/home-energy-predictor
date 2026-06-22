@@ -25,7 +25,8 @@ def verify_postgres() -> None:
         print("✅ PostgreSQL connection successful!")
         cur = conn.cursor()
         cur.execute("SELECT version();")
-        print(f"PostgreSQL version: {cur.fetchone()[0]}")
+        row = cur.fetchone()
+        print(f"PostgreSQL version: {row[0] if row else 'unknown'}")
         cur.close()
         conn.close()
     except Exception as e:
