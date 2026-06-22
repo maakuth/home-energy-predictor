@@ -17,7 +17,8 @@ alternative algorithms can be plugged in without touching optimize_plan.py
 import os
 import numpy as np
 from typing import List, Any, Optional
-from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol
+from utils.type_defs import BatteryAction
 
 
 def get_env_float(name, default):
@@ -146,6 +147,7 @@ class SimpleRuleBasedPlanner(BatteryPlanner):
             charge_total = charge_from_solar + charge_from_grid
             discharge_total = discharge_to_load + discharge_to_export
             
+            battery_action: BatteryAction
             if charge_from_solar > 1e-9:
                 battery_action = 'charge_solar'
             elif discharge_to_load > 1e-9:

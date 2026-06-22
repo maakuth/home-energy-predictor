@@ -103,6 +103,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
+from utils.type_defs import BatteryConfig, GshpConfig, FuturePredictionRecord, SqlitePredictionRecord, PriceRecord
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -189,7 +190,7 @@ def fetch_ha_snapshot(verbose: bool = False) -> dict[str, dict[str, Any]]:
 def fetch_predictions(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
-) -> list[dict[str, Any]]:
+) -> list[FuturePredictionRecord]:
     """Load predictions from future_predictions.json."""
     preds = load_json_file('future_predictions.json')
     if not preds:
@@ -220,7 +221,7 @@ def fetch_nordpool_prices_from_ha(
     start_time: str,
     end_time: str,
     verbose: bool = False,
-) -> list[dict[str, Any]]:
+) -> list[PriceRecord]:
     """Fetch historical Nordpool prices from HA PostgreSQL database.
     
     Queries the states table for sensor.nordpool_total history.
@@ -296,7 +297,7 @@ def fetch_market_prices_range(
     start_time: str,
     end_time: str,
     verbose: bool = False,
-) -> list[dict[str, Any]]:
+) -> list[PriceRecord]:
     """Fetch market prices for the given time range.
     
     Tries multiple sources in order:
@@ -503,7 +504,7 @@ def fetch_sqlite_predictions(
     start_time: str,
     end_time: str,
     verbose: bool = False,
-) -> list[dict[str, Any]]:
+) -> list[SqlitePredictionRecord]:
     """Fetch prediction archive from SQLite database, preserving generated_at.
     
     Returns list of prediction records with target_timestamp, generated_at,
@@ -738,7 +739,7 @@ def fetch_sqlite_history(
     return history
 
 
-def get_battery_config() -> dict[str, Any]:
+def get_battery_config() -> BatteryConfig:
     """Get battery configuration from environment."""
     load_dotenv(override=True)
     
@@ -752,7 +753,7 @@ def get_battery_config() -> dict[str, Any]:
     }
 
 
-def get_gshp_config() -> dict[str, Any]:
+def get_gshp_config() -> GshpConfig:
     """Get GSHP configuration from environment."""
     load_dotenv(override=True)
     

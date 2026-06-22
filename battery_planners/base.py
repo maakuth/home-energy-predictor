@@ -2,9 +2,10 @@ from __future__ import annotations
 """Abstract base class and data structures for battery planners."""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, TypedDict, NotRequired
+from typing import List, Dict, Any, Optional, TypedDict, NotRequired, Protocol, runtime_checkable
 from dataclasses import dataclass
 import numpy as np
+from utils.type_defs import BatteryAction
 
 
 def should_idle_interval(
@@ -125,7 +126,7 @@ class BatteryPlanEntry:
     All prices are in EUR/kWh.
     """
     timestamp: str
-    battery_action: str  # 'idle', 'follow', 'charge_solar', 'charge_grid', 'discharge_load', 'discharge_export', etc.
+    battery_action: BatteryAction
     battery_power_kw: float  # Net power (positive = charging, negative = discharging)
     charge_from_solar_kwh: float
     charge_from_grid_kwh: float
@@ -211,3 +212,27 @@ class BatteryPlanner(ABC):
             List of :class:`BatteryPlanEntry` objects, one per interval.
         """
         pass
+
+
+@runtime_checkable
+class BatteryPlannerProtocol(Protocol):
+    """Structural typing protocol for battery planners.
+
+    Any object with a matching ``plan()`` method satisfies this protocol,
+    enabling duck-typed planner implementations that don't need to inherit
+    from :class:`BatteryPlanner`.
+    """
+
+    def plan(
+        self,
+        predictions_kwh: np.ndarray,
+        solar_kwh: np.ndarray,
+        import_prices: np.ndarray,
+        export_prices: np.ndarray,
+        prediction_timestamps: List[Any],
+        committed_load_kwh: Optional[np.ndarray] = None,
+        allow_export: bool = True,
+        initial_soc_pct: Optional[float] = None,
+        context: Optional[BatteryPlannerContext] = None,
+    ) -> List[BatteryPlanEntry]:
+        ...

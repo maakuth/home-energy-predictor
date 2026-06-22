@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import call_ha_service, get_ha_state
+from utils.type_defs import BatteryAction
 
 load_dotenv(override=True)
 
@@ -59,7 +60,7 @@ def is_battery_available() -> bool:
 
 def push_battery_control(
     battery_power_w: int,
-    battery_action: str = 'follow',
+    battery_action: BatteryAction = 'follow',
     battery_soc_pct: Optional[float] = None,
 ) -> bool:
     """

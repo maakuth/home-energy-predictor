@@ -11,7 +11,8 @@ import os
 import numpy as np
 from typing import List, Any, Optional
 from scipy.optimize import linprog
-from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, should_idle_interval
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol, should_idle_interval
+from utils.type_defs import BatteryAction
 from utils.battery_utils import estimate_follow_dispatch
 
 
@@ -484,6 +485,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
             f_charge = f['charge'] if f else 0.0
             f_discharge = f['discharge'] if f else 0.0
             
+            battery_action: BatteryAction
             if f:
                 battery_action = 'follow'
                 entry_c_solar = f_charge + c_solar

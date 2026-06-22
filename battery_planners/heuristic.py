@@ -17,7 +17,8 @@ import numpy as np
 from typing import List, Any, Optional
 from datetime import datetime
 
-from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, should_idle_interval
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol, should_idle_interval
+from utils.type_defs import BatteryAction
 
 
 def get_env_float(name, default):
@@ -478,6 +479,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
             charge_total = charge_from_solar + charge_from_grid
             discharge_total = discharge_to_load + discharge_to_export
             
+            battery_action: BatteryAction
             if charge_from_solar > 1e-9 and charge_from_grid > 1e-9:
                 battery_action = 'charge_mixed'
             elif charge_from_solar > 1e-9:
