@@ -106,6 +106,26 @@ ORDER BY version DESC;
   - If `planned_spread` is decreasing over time, the discharge thresholds in `.env` may need adaptive adjustment based on market volatility.
   - Use model versioning to identify which changes actually improved performance
 
+
+## Temporary development working copy
+When doing larger development, it's advisable to make a temporary working copy, as the original copy is often used in production on the same machine.
+The python virtualenv is quite large, so that should be reused with a symlink.
+All this can be achieved in the typical opencode environment like this:
+
+```bash
+cd /tmp
+git clone /workspace/
+ln -s /workspace/venv
+```
+
+After completing feature development, you can push the work back, but not in the checked out branch:
+```bash
+cd /tmp/workspace
+git push origin master:tmp
+cd /workspace
+git merge tmp
+```
+
 ## Running tests
 $ venv/bin/python3 -m pytest
 
