@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import pandas as pd
 import numpy as np
@@ -5,6 +6,7 @@ import xgboost as xgb
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, call_ha_service
 from utils.price_utils import fetch_market_prices
@@ -14,10 +16,10 @@ from utils.sqlite_utils import get_db_connection, get_db_path
 
 load_dotenv(override=True)
 
-PREDICTION_INTERVAL_MINUTES = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
+PREDICTION_INTERVAL_MINUTES: int = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
 
 
-def compute_baseload_at_lag(anchor_data, hours_back):
+def compute_baseload_at_lag(anchor_data: dict[str, pd.DataFrame], hours_back: float) -> float:
     """
     Compute baseload power at a given historical lag using combined DataFrame
     + forward-fill alignment across all sensors.
@@ -93,7 +95,15 @@ def compute_baseload_at_lag(anchor_data, hours_back):
         return 1.0
 
 
-def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df_weather, current_states, sauna_states):
+def generate_inference_data(
+    start_time: datetime,
+    end_time: datetime,
+    interval_minutes: int,
+    df_solar: pd.DataFrame,
+    df_weather: pd.DataFrame,
+    current_states: dict[str, Any],
+    sauna_states: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Generate inference data rows for the model.
     Extracted for testability.
@@ -201,7 +211,7 @@ def generate_inference_data(start_time, end_time, interval_minutes, df_solar, df
         
     return inference_data, timestamps
 
-def predict():
+def predict() -> None:
     print('Syncing with Home Assistant...')
     
     # fetch solar data

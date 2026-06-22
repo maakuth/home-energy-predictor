@@ -1,12 +1,12 @@
+from __future__ import annotations
 import os
 import psycopg2
 import requests
 from dotenv import load_dotenv
 
-# override=True ensures it reloads values even if they are already in the env
 load_dotenv(override=True)
 
-def verify_postgres():
+def verify_postgres() -> None:
     print("Verifying PostgreSQL access...")
     host = os.getenv("DB_HOST")
     port = os.getenv("DB_PORT")
@@ -31,7 +31,7 @@ def verify_postgres():
     except Exception as e:
         print(f"❌ PostgreSQL connection failed: {e}")
 
-def verify_home_assistant():
+def verify_home_assistant() -> None:
     print("\nVerifying Home Assistant API access...")
     host = os.getenv("HA_HOST")
     token = os.getenv("HA_TOKEN")

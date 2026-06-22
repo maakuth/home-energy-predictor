@@ -1,9 +1,11 @@
+from __future__ import annotations
 import os
 import pandas as pd
 import psycopg2
 from datetime import datetime, timedelta
+from typing import Any, Optional
 
-def get_db_connection():
+def get_db_connection() -> psycopg2.extensions.connection:
     """Establish and return a connection to the PostgreSQL database."""
     return psycopg2.connect(
         host=os.getenv("DB_HOST"),
@@ -14,7 +16,11 @@ def get_db_connection():
         connect_timeout=10
     )
 
-def fetch_states_history(entity_ids, hours=1, start_time=None):
+def fetch_states_history(
+    entity_ids: str | list[str],
+    hours: int = 1,
+    start_time: Optional[datetime] = None,
+) -> dict[str, pd.DataFrame]:
     """
     Fetch history for multiple entities from PostgreSQL.
     Returns a dictionary of DataFrames, keyed by entity_id.

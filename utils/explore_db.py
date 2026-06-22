@@ -1,10 +1,12 @@
+from __future__ import annotations
 import os
 import psycopg2
+from typing import Any
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-def connect():
+def connect() -> psycopg2.extensions.connection:
     return psycopg2.connect(
         host=os.getenv("DB_HOST"),
         port=os.getenv("DB_PORT"),
@@ -13,7 +15,7 @@ def connect():
         password=os.getenv("DB_PASSWORD")
     )
 
-def explore():
+def explore() -> None:
     conn = connect()
     cur = conn.cursor()
     

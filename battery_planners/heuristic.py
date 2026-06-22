@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Heuristic-based battery planner using opportunity cost analysis.
 
 This planner implements the original HEPO battery optimization logic,
@@ -236,9 +237,9 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         import_prices: np.ndarray,
         export_prices: np.ndarray,
         prediction_timestamps: List[Any],
-        committed_load_kwh: np.ndarray = None,
+        committed_load_kwh: Optional[np.ndarray] = None,
         allow_export: bool = True,
-        initial_soc_pct: float = None,
+        initial_soc_pct: Optional[float] = None,
         max_lookahead_hours: float = 8.0,
         context: Optional['BatteryPlannerContext'] = None,
     ) -> List[BatteryPlanEntry]:

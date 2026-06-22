@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Battery planner replay harness for realistic testing.
 

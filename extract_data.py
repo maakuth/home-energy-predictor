@@ -1,15 +1,17 @@
+from __future__ import annotations
 import os
 import psycopg2
 import pandas as pd
 import argparse
+from typing import Any
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
 load_dotenv(override=True)
 
-RESAMPLE_INTERVAL = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
+RESAMPLE_INTERVAL: str = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
 
-ENTITIES = {
+ENTITIES: dict[str, str] = {
     'sensor.ulkona_temperature_2': 'outside_temp',
     'sensor.mlp_teho': 'gshp_power',
     'sensor.saikaan_olohuone_current_power': 'aahp_living_power',
@@ -28,12 +30,12 @@ ENTITIES = {
     'weather.home': 'wind_speed' # Special handling for attribute
 }
 
-def get_metadata_ids(cur):
+def get_metadata_ids(cur: psycopg2.extensions.cursor) -> dict[str, int]:
     query = "SELECT metadata_id, entity_id FROM states_meta WHERE entity_id IN %s"
     cur.execute(query, (tuple(ENTITIES.keys()),))
     return {row[1]: row[0] for row in cur.fetchall()}
 
-def extract_states(cur, metadata_id, days=365):
+def extract_states(cur: psycopg2.extensions.cursor, metadata_id: int, days: int = 365) -> list[tuple[Any, ...]]:
     start_ts = (datetime.now() - timedelta(days=days)).timestamp()
     query = """
         SELECT last_updated_ts, state 
@@ -44,7 +46,7 @@ def extract_states(cur, metadata_id, days=365):
     cur.execute(query, (metadata_id, start_ts))
     return cur.fetchall()
 
-def extract_attribute(cur, metadata_id, attr_name, days=365):
+def extract_attribute(cur: psycopg2.extensions.cursor, metadata_id: int, attr_name: str, days: int = 365) -> list[tuple[Any, ...]]:
     """Extract a specific attribute from JSON for entities like weather.home."""
     start_ts = (datetime.now() - timedelta(days=days)).timestamp()
     # Try the modern schema (post 2023.4)
@@ -69,7 +71,7 @@ def extract_attribute(cur, metadata_id, attr_name, days=365):
         cur.execute(query, (attr_name, metadata_id, start_ts))
         return cur.fetchall()
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='Extract historical data from Home Assistant DB.')
     parser.add_argument('--days', type=int, default=365, help='Number of days to look back.')
     args = parser.parse_args()

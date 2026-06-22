@@ -1,9 +1,11 @@
+from __future__ import annotations
 import os
 import json
 import numpy as np
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, parse_ha_bool
 from utils.price_utils import fetch_market_prices, align_interval_prices
@@ -16,9 +18,16 @@ load_dotenv(override=True)
 
 
 # Backward compatibility wrapper for tests
-def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices,
-                         committed_load_kwh=None, allow_export=None, max_lookahead_hours=8.0,
-                         context=None):
+def plan_battery_dispatch(
+    predictions: list[float],
+    solar_array: list[float],
+    import_prices: list[float],
+    export_prices: list[float],
+    committed_load_kwh: Optional[list[float] | np.ndarray] = None,
+    allow_export: Optional[bool] = None,
+    max_lookahead_hours: float = 8.0,
+    context: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
     """
     Backward compatibility wrapper for tests.
 
@@ -46,13 +55,13 @@ def plan_battery_dispatch(predictions, solar_array, import_prices, export_prices
     # Convert back to dicts for test compatibility
     return [entry.to_dict() for entry in entries]
 
-def get_plan_interval_minutes():
+def get_plan_interval_minutes() -> int:
     return int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
 
-def get_plan_interval_hours():
+def get_plan_interval_hours() -> float:
     return max(get_plan_interval_minutes(), 1) / 60.0
 
-def get_env_float(name, default):
+def get_env_float(name: str, default: float) -> float:
     raw = os.getenv(name)
     if raw is None:
         return float(default)
@@ -63,14 +72,17 @@ def get_env_float(name, default):
         return float(default)
 
 
-def get_env_bool(name, default=False):
+def get_env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return bool(default)
     return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
-def load_predictions(file_path=None, sarima_path=None):
+def load_predictions(
+    file_path: Optional[str] = None,
+    sarima_path: Optional[str] = None,
+) -> tuple[Any, Any, Any, Any, pd.Series, pd.Series]:
     # Support environment variable overrides for testing
     if file_path is None:
         file_path = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
@@ -123,7 +135,7 @@ def load_predictions(file_path=None, sarima_path=None):
     return xgb_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper
 
 
-def build_tariff_prices(market_prices, is_inclusive=False):
+def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False) -> tuple[np.ndarray, np.ndarray]:
     grid_transfer = get_env_float('GRID_TRANSFER_EUR_PER_KWH', 0.0)
     electricity_tax = get_env_float('ELECTRICITY_TAX_EUR_PER_KWH', 0.0)
     import_fixed_adders = get_env_float('IMPORT_FIXED_ADDERS_EUR_PER_KWH', 0.0)
@@ -142,7 +154,7 @@ def build_tariff_prices(market_prices, is_inclusive=False):
     return import_unit_prices, export_unit_prices
 
 
-def is_battery_enabled():
+def is_battery_enabled() -> bool:
     """
     Check if battery optimization should be used.
     
@@ -171,7 +183,7 @@ def is_battery_enabled():
 
 
 
-def compute_effective_cost(entry):
+def compute_effective_cost(entry: dict[str, Any]) -> float:
     """
     Compute the marginal cost (EUR/kWh) of adding an extra load at this interval.
 
@@ -199,7 +211,13 @@ def compute_effective_cost(entry):
         return float(entry['import_unit_price'])
 
 
-def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_prices, committed_load_kwh=None):
+def plan_no_battery_dispatch(
+    predictions: np.ndarray,
+    solar_array: np.ndarray,
+    import_prices: np.ndarray,
+    export_prices: np.ndarray,
+    committed_load_kwh: Optional[np.ndarray] = None,
+) -> list[dict[str, Any]]:
     """
     Create a no-op battery plan when battery is disabled.
     
@@ -241,7 +259,14 @@ def plan_no_battery_dispatch(predictions, solar_array, import_prices, export_pri
 
 
 
-def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, export_prices=None, solar_forecast_kw=None):
+def plan_gshp_dispatch(
+    prediction_timestamps: list[Any],
+    is_sauna_active: list[Any],
+    outside_temps: list[float],
+    import_prices: np.ndarray,
+    export_prices: Optional[np.ndarray] = None,
+    solar_forecast_kw: Optional[np.ndarray] = None,
+) -> list[dict[str, Any]]:
     # Constants/Defaults (can be overridden by .env)
     p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
     p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)
@@ -401,7 +426,7 @@ def plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, im
     return gshp_plan
 
 
-def optimize():
+def optimize() -> None:
     print('Loading predictions...')
     try:
         predictions_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper = load_predictions()

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import requests
 import json
@@ -5,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-def inspect_solcast_today():
+def inspect_solcast_today() -> None:
     host = os.getenv('HA_HOST')
     token = os.getenv('HA_TOKEN')
     if host and not host.startswith(('http://', 'https://')):

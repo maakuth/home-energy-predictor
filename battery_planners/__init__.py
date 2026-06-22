@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Battery planning strategies for HEPO.
 
 This module provides pluggable battery dispatch planners with different

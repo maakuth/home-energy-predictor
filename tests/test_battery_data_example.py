@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Example test using pickled battery test data.
 

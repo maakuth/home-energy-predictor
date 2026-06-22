@@ -1,11 +1,18 @@
+from __future__ import annotations
 
 import os
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from typing import Any, Optional
 from utils.ha_utils import get_ha_state
 
-def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps, interval_minutes=15):
+def align_interval_prices(
+    raw_today: list[Any],
+    raw_tomorrow: list[Any],
+    prediction_timestamps: list[str],
+    interval_minutes: int = 15,
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     all_raw = raw_today + raw_tomorrow
     if not all_raw:
         return None, None
@@ -54,10 +61,13 @@ def align_interval_prices(raw_today, raw_tomorrow, prediction_timestamps, interv
     # and bfill for any gaps at the very start
     aligned_series = aligned_series.ffill().bfill()
 
-    return aligned_series.values, is_fallback.values
+    return aligned_series.to_numpy(), is_fallback.to_numpy()
 
 
-def fetch_market_prices(prediction_timestamps, interval_minutes=15):
+def fetch_market_prices(
+    prediction_timestamps: list[str],
+    interval_minutes: int = 15,
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[str], bool, bool]:
     candidate_sensors = [
         "sensor.average_electricity_price_today",
         "sensor.current_electricity_market_price",

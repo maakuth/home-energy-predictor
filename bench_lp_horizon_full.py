@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """Full-length LP horizon/discount benchmark (may take 30+ min)."""
 
 import os

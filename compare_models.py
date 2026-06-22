@@ -1,17 +1,14 @@
+from __future__ import annotations
 import pandas as pd
 import numpy as np
 import json
 import os
-import sqlite3
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from sarimax_predictor import load_historical_data as load_actual_baseload
 from utils.sqlite_utils import get_db_connection, db_exists
 
-# Comparison Script: compare_models.py
-# Compares the accuracy of the main XGBoost model vs the SARIMA benchmark.
-
-def get_archived_xgboost_predictions(days=2):
-    """Fetch archived XGBoost predictions from SQLite."""
+def get_archived_xgboost_predictions(days: int = 2) -> pd.DataFrame:
     if not db_exists():
         return pd.DataFrame()
     
@@ -32,7 +29,7 @@ def get_archived_xgboost_predictions(days=2):
     df['timestamp'] = pd.to_datetime(df['target_timestamp'], utc=True)
     return df.set_index('timestamp')[['predicted_baseload']]
 
-def load_sarima_latest_forecast(filename='sarimax_predictions.json'):
+def load_sarima_latest_forecast(filename: str = 'sarimax_predictions.json') -> pd.DataFrame:
     """Load the latest SARIMA forecast (note: this is only the latest one run)."""
     if not os.path.exists(filename):
         return pd.DataFrame()
@@ -44,7 +41,7 @@ def load_sarima_latest_forecast(filename='sarimax_predictions.json'):
     df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
     return df.set_index('timestamp')[['predicted_baseload']]
 
-def get_archived_sarima_predictions(days=2):
+def get_archived_sarima_predictions(days: int = 2) -> pd.DataFrame:
     """Fetch archived SARIMA predictions from SQLite."""
     if not db_exists():
         return pd.DataFrame()
@@ -70,7 +67,7 @@ def get_archived_sarima_predictions(days=2):
         conn.close()
         return pd.DataFrame()
 
-def compare():
+def compare() -> None:
     print("=== Model Comparison Analysis ===")
     
     # 1. Load actual historical baseload (Ground Truth)

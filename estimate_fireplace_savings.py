@@ -1,14 +1,16 @@
+from __future__ import annotations
 import os
-import sqlite3
 import pandas as pd
 import numpy as np
 import argparse
 from datetime import datetime, timedelta
+import sqlite3
+from typing import Any
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-def get_env_float(name, default):
+def get_env_float(name: str, default: float) -> float:
     raw = os.getenv(name)
     if raw is None:
         return float(default)
@@ -17,7 +19,7 @@ def get_env_float(name, default):
     except ValueError:
         return float(default)
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Estimate fireplace cost savings.")
     parser.add_argument('--days', type=int, default=None, help='Number of recent days to analyze. If omitted, analyzes all available data.')
     args = parser.parse_args()

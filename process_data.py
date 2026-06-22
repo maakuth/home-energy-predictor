@@ -1,8 +1,9 @@
-# Data processing and feature engineering
+from __future__ import annotations
 import pandas as pd
 import numpy as np
+from typing import Any
 
-def process_data():
+def process_data() -> None:
     print('Loading raw data...')
     try:
         df = pd.read_csv('raw_data.csv', index_col=0, low_memory=False)

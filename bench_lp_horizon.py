@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """Benchmark LP planner horizon/discount combinations against all fixtures."""
 
 import os

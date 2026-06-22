@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Parametrized replay tests for battery planners over realistic fixture data.
 

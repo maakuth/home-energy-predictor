@@ -1,23 +1,25 @@
+from __future__ import annotations
 import os
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
+from typing import Any, Optional
 
 load_dotenv(override=True)
 
 # Centralized configuration
-HA_HOST = os.getenv('HA_HOST')
-HA_TOKEN = os.getenv('HA_TOKEN')
+HA_HOST: Optional[str] = os.getenv('HA_HOST')
+HA_TOKEN: Optional[str] = os.getenv('HA_TOKEN')
 
 if HA_HOST and not HA_HOST.startswith(('http://', 'https://')):
     HA_HOST = f'http://{HA_HOST}'
 
-HEADERS = {
+HEADERS: dict[str, str] = {
     'Authorization': f'Bearer {HA_TOKEN}',
     'content-type': 'application/json',
 }
 
-def get_ha_state(entity_id):
+def get_ha_state(entity_id: str) -> Optional[dict[str, Any]]:
     """Fetch the state and attributes of a Home Assistant entity."""
     url = f'{HA_HOST}/api/states/{entity_id}'
     try:
@@ -28,7 +30,12 @@ def get_ha_state(entity_id):
         print(f'⚠️ Error fetching {entity_id}: {e}')
     return None
 
-def call_ha_service(domain, service, service_data=None, return_response=True):
+def call_ha_service(
+    domain: str,
+    service: str,
+    service_data: Optional[dict[str, Any]] = None,
+    return_response: bool = True,
+) -> Optional[dict[str, Any] | list[Any]]:
     """Call a Home Assistant service."""
     # Add ?return_response to allow receiving data back from modern HA service calls if requested
     query = '?return_response' if return_response else ''
@@ -43,15 +50,7 @@ def call_ha_service(domain, service, service_data=None, return_response=True):
         print(f'❌ Service call failed for {domain}.{service}: {e}')
     return None
 
-def parse_ha_bool(state_data, default=False):
-    """Parse a Home Assistant entity state as a boolean.
-
-    Handles common HA boolean representations:
-      'on', 'true', 'yes', '1'  -> True
-      'off', 'false', 'no', '0' -> False
-
-    Falls back to `default` if state_data is None, missing, or unparseable.
-    """
+def parse_ha_bool(state_data: Optional[dict[str, Any]], default: bool = False) -> bool:
     if state_data is None:
         return bool(default)
     raw = str(state_data.get('state', '')).strip().lower()
@@ -62,7 +61,7 @@ def parse_ha_bool(state_data, default=False):
     return bool(default)
 
 
-def push_ha_state(entity_id, state, attributes=None):
+def push_ha_state(entity_id: str, state: str, attributes: Optional[dict[str, Any]] = None) -> bool:
     """Push a state and attributes to a Home Assistant sensor."""
     url = f'{HA_HOST}/api/states/{entity_id}'
     payload = {

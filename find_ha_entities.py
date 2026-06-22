@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Find Home Assistant entities for battery planning test data.
 
@@ -46,7 +47,7 @@ def find_all_entities():
         return []
 
 
-def main():
+def main() -> None:
     load_dotenv(override=True)
     
     parser = argparse.ArgumentParser(

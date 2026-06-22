@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Abstract base class and data structures for battery planners."""
 
 from abc import ABC, abstractmethod
@@ -179,9 +180,9 @@ class BatteryPlanner(ABC):
         import_prices: np.ndarray,
         export_prices: np.ndarray,
         prediction_timestamps: List[Any],
-        committed_load_kwh: np.ndarray = None,
+        committed_load_kwh: Optional[np.ndarray] = None,
         allow_export: bool = True,
-        initial_soc_pct: float = None,
+        initial_soc_pct: Optional[float] = None,
         context: Optional[BatteryPlannerContext] = None,
     ) -> List[BatteryPlanEntry]:
         """

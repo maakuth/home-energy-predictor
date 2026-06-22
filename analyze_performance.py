@@ -1,11 +1,12 @@
+from __future__ import annotations
 import os
 import json
 import pandas as pd
 import numpy as np
-import sqlite3
 import argparse
 import xgboost as xgb
 from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
@@ -14,7 +15,7 @@ from utils.git_utils import get_model_version
 
 load_dotenv(override=True)
 
-def fetch_actuals(days=7):
+def fetch_actuals(days: int = 7) -> pd.DataFrame:
     """Fetch actual grid meter and solar data from HA/PostgreSQL."""
     print(f"Fetching actuals for last {days} days from PostgreSQL...")
     entities = {
@@ -46,7 +47,10 @@ def fetch_actuals(days=7):
     df_actual['gshp_actual_kw'] = df_actual.get('gshp_actual_w', 0) / 1000.0
     return df_actual[['actual_usage', 'solar_actual', 'gshp_actual_kw']]
 
-def get_archived_predictions(version=None, include_battery=False):
+def get_archived_predictions(
+    version: Optional[str] = None,
+    include_battery: bool = False,
+) -> pd.DataFrame:
     """Load predictions that were actually made in real-time from the SQLite DB."""
     if not db_exists():
         return pd.DataFrame()
@@ -77,7 +81,7 @@ def get_archived_predictions(version=None, include_battery=False):
         print(f"Error reading archived predictions: {e}")
         return pd.DataFrame()
 
-def summarize_gshp_performance(df_merged):
+def summarize_gshp_performance(df_merged: pd.DataFrame) -> dict[str, Any]:
     """
     Analyzes how well the GSHP load was timed relative to solar and spot prices.
     """
@@ -142,7 +146,7 @@ def summarize_gshp_performance(df_merged):
         'market_avg_price': float(market_avg_price)
     }
 
-def summarize_battery_performance(df_merged):
+def summarize_battery_performance(df_merged: pd.DataFrame) -> dict[str, Any]:
     """
     Analyzes how well the battery plan performed compared to a 'no battery' baseline.
     Uses the archived plan context (what we THOUGHT would happen).
@@ -219,7 +223,7 @@ def summarize_battery_performance(df_merged):
         'planned_spread': float(spread) if spread is not None else None
     }
 
-def store_performance_results(results):
+def store_performance_results(results: dict[str, Any]) -> None:
     """Store the analysis results into hepo.db for historical tracking and agent access."""
     try:
         conn = get_db_connection()
@@ -283,7 +287,7 @@ def store_performance_results(results):
     except Exception as e:
         print(f"⚠️ Error storing analysis results: {e}")
 
-def backtest_current_model(df_actual):
+def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
     """
     Run a 'hindsight' prediction using the CURRENT model on PAST features.
     This tells us if the NEW model is better at predicting the past than the OLD model was.
@@ -336,7 +340,7 @@ def backtest_current_model(df_actual):
         print(f"Error during hindsight backtest: {e}")
         return pd.DataFrame()
 
-def analyze(days=2, do_backtest=False):
+def analyze(days: int = 2, do_backtest: bool = False) -> None:
     print(f"=== Starting Performance Analysis (Window: {days} days) ===")
     
     df_actual = fetch_actuals(days=days)

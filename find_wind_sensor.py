@@ -1,10 +1,13 @@
+from __future__ import annotations
 import os
 import psycopg2
+import requests
+from typing import Any
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-def find_wind():
+def find_wind() -> None:
     conn = psycopg2.connect(
         host=os.getenv("DB_HOST"),
         port=os.getenv("DB_PORT"),

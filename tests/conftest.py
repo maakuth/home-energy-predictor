@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Pytest configuration for test isolation.
 

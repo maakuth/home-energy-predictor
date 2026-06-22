@@ -1,3 +1,4 @@
+from __future__ import annotations
 from utils.ha_utils import get_ha_state
 from dotenv import load_dotenv
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Nemotron-Linprog Battery Planner
 
@@ -57,9 +58,9 @@ class NemotronLinprogPlanner(BatteryPlanner):
         import_prices: np.ndarray,
         export_prices: np.ndarray,
         prediction_timestamps: List[Any],
-        committed_load_kwh: np.ndarray = None,
+        committed_load_kwh: Optional[np.ndarray] = None,
         allow_export: bool = True,
-        initial_soc_pct: float = None,
+        initial_soc_pct: Optional[float] = None,
         context: Optional[BatteryPlannerContext] = None,
     ) -> List[BatteryPlanEntry]:
         """Generate battery dispatch plan using linear programming."""

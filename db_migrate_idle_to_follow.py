@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Migration: rename battery_action 'idle' → 'follow'.
 
@@ -9,7 +10,7 @@ import sqlite3
 import os
 
 
-def migrate():
+def migrate() -> None:
     db_path = os.getenv('HEPO_DB_PATH', 'hepo.db')
     if not os.path.exists(db_path):
         print(f"DB not found at {db_path}, skipping migration.")

@@ -1,11 +1,12 @@
+from __future__ import annotations
 import json
-import sqlite3
 import os
+from typing import Any, Optional
 from utils.ha_utils import push_ha_state
 from utils.battery_utils import push_battery_control, get_current_plan_entry
 from utils.sqlite_utils import get_db_connection, db_exists
 
-def push_accuracy():
+def push_accuracy() -> None:
     """Reads the latest performance metrics from hepo.db and pushes to HA."""
     if not db_exists():
         return
@@ -39,7 +40,7 @@ def push_accuracy():
     except Exception as e:
         print(f"⚠️ Error pushing accuracy metrics: {e}")
 
-def push_plan():
+def push_plan() -> None:
     print('Loading optimization plan...')
     # Support environment variable override for testing
     plan_file = os.getenv('TEST_PLAN_FILE', 'optimization_plan.json')

@@ -1,12 +1,12 @@
+from __future__ import annotations
 import pandas as pd
 import numpy as np
 import xgboost as xgb
 import argparse
 from sklearn.metrics import mean_absolute_error
-import joblib
 import json
 
-def train(holdout_days=0):
+def train(holdout_days: int = 0) -> None:
     print('Loading processed data...')
     df = pd.read_csv('processed_data.csv', index_col=0)
     df.index = pd.to_datetime(df.index, utc=True)

@@ -1,14 +1,15 @@
+from __future__ import annotations
 import os
-import sqlite3
 import pandas as pd
 import numpy as np
-import argparse
 from datetime import datetime, timedelta, timezone
+import argparse
+from typing import Any
 from analyze_performance import fetch_actuals
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, db_exists
 
-def fetch_all_predictions(days=7):
+def fetch_all_predictions(days: int = 7) -> pd.DataFrame:
     """Fetch ALL archived predictions from the SQLite DB for the given period."""
     if not db_exists():
         print(f"⚠️ Database not found.")
@@ -41,7 +42,7 @@ def fetch_all_predictions(days=7):
         print(f"Error reading archived predictions: {e}")
         return pd.DataFrame()
 
-def analyze_evolution(days=7):
+def analyze_evolution(days: int = 7) -> None:
     print(f"=== Plan Evolution Analysis (Last {days} days) ===")
     
     df_actual = fetch_actuals(days=days)

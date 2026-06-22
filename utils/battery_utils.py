@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Battery control utilities for HEPO.
 
 Handles pushing battery control setpoint to Hoymiles inverter via Home Assistant.
@@ -11,34 +12,23 @@ silently continues without error (degradation mode for testing).
 import json
 import os
 from datetime import datetime
+from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import call_ha_service, get_ha_state
 
 load_dotenv(override=True)
 
 # Battery control entity ID — configurable via environment variable
-BATTERY_CONTROL_ENTITY_ID = os.getenv(
+BATTERY_CONTROL_ENTITY_ID: str = os.getenv(
     'BATTERY_CONTROL_ENTITY_ID',
     'number.hoymiles_remote_bridge_hoymiles_power_control_v5'
 )
 
 
-def get_current_plan_entry(plan, interval_minutes=15):
-    """
-    Find the plan entry that matches the current time interval.
-
-    The plan is generated at 15-minute intervals. This function finds the
-    entry whose timestamp falls within the current 15-minute slot, to avoid
-    executing the wrong interval's plan (e.g., using the 10:00 plan at 09:46).
-
-    Args:
-        plan (list): List of dict entries, each with 'timestamp' key (ISO format).
-        interval_minutes (int): Plan interval in minutes (default 15).
-
-    Returns:
-        dict or None: The matching plan entry, or None if plan is empty.
-                      Falls back to plan[0] if no entry matches current time.
-    """
+def get_current_plan_entry(
+    plan: list[dict[str, Any]],
+    interval_minutes: int = 15,
+) -> Optional[dict[str, Any]]:
     if not plan:
         return None
 
@@ -55,21 +45,10 @@ def get_current_plan_entry(plan, interval_minutes=15):
         if ts.replace(second=0, microsecond=0) == current_slot:
             return entry
 
-    # Fallback: return the first entry if no timestamp matches
     return plan[0]
 
 
-def is_battery_available():
-    """
-    Check if battery is available in Home Assistant.
-    
-    Uses the battery SoC sensor (sensor.be_soc) as the source of truth,
-    which is more reliable than the Hoymiles control entity that can
-    report unavailable while the battery itself is online.
-    
-    Returns:
-        bool: True if battery SoC sensor exists and is not unavailable, False otherwise
-    """
+def is_battery_available() -> bool:
     entity_id = 'sensor.be_soc'
     state = get_ha_state(entity_id)
     
@@ -78,7 +57,11 @@ def is_battery_available():
     return False
 
 
-def push_battery_control(battery_power_w, battery_action='follow', battery_soc_pct=None):
+def push_battery_control(
+    battery_power_w: int,
+    battery_action: str = 'follow',
+    battery_soc_pct: Optional[float] = None,
+) -> bool:
     """
     Push battery control setpoint to Hoymiles inverter.
     
@@ -141,7 +124,7 @@ def push_battery_control(battery_power_w, battery_action='follow', battery_soc_p
         return False
 
 
-def get_env_float(name, default):
+def get_env_float(name: str, default: float) -> float:
     """Safely get a float from environment variable."""
     raw = os.getenv(name)
     if raw is None:
@@ -152,11 +135,17 @@ def get_env_float(name, default):
         return float(default)
 
 
-def compute_load_following_setpoint(planned_battery_kw, planned_action,
-                                   solar_kw, grid_w, battery_w,
-                                   gshp_kw=0.0, leaf_kw=0.0,
-                                   max_battery_kw=10.0,
-                                   phase_currents=None):
+def compute_load_following_setpoint(
+    planned_battery_kw: float,
+    planned_action: str,
+    solar_kw: float,
+    grid_w: float,
+    battery_w: float,
+    gshp_kw: float = 0.0,
+    leaf_kw: float = 0.0,
+    max_battery_kw: float = 10.0,
+    phase_currents: Optional[list[Optional[float]]] = None,
+) -> tuple[float, str]:
     """
     Adjust planned battery setpoint based on real-time sensor readings.
 
@@ -303,7 +292,7 @@ def compute_load_following_setpoint(planned_battery_kw, planned_action,
     return adjusted_battery_kw, log_message
 
 
-def _load_net_metering_state(state_file=None):
+def _load_net_metering_state(state_file: Optional[str] = None) -> dict[str, Any]:
     """Load the persisted net metering state for interval tracking."""
     if state_file is None:
         state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'net_metering_state.json')
@@ -316,7 +305,7 @@ def _load_net_metering_state(state_file=None):
     return {}
 
 
-def _save_net_metering_state(state, state_file=None):
+def _save_net_metering_state(state: dict[str, Any], state_file: Optional[str] = None) -> None:
     """Persist the net metering state for interval tracking."""
     if state_file is None:
         state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'net_metering_state.json')
@@ -328,16 +317,16 @@ def _save_net_metering_state(state, state_file=None):
 
 
 def compute_net_metering_setpoint(
-    planned_battery_kw,
-    planned_grid_import_kwh,
-    planned_grid_export_kwh,
-    cumulative_import_kwh,
-    cumulative_export_kwh,
-    elapsed_minutes,
-    interval_minutes=15,
-    max_battery_kw=10.0,
-    state_file=None,
-):
+    planned_battery_kw: float,
+    planned_grid_import_kwh: float,
+    planned_grid_export_kwh: float,
+    cumulative_import_kwh: float,
+    cumulative_export_kwh: float,
+    elapsed_minutes: float,
+    interval_minutes: int = 15,
+    max_battery_kw: float = 10.0,
+    state_file: Optional[str] = None,
+) -> tuple[float, str]:
     """
     Adjust battery power to match the planned net energy for the current interval
     using cumulative energy meter readings.
@@ -430,7 +419,7 @@ def compute_net_metering_setpoint(
     return clamped, log_msg
 
 
-def adjust_charge_solar_for_real_time(
+def adjust_charge_solar_for_real_time(  # type: ignore[return]
     planned_battery_kw: float,
     planned_action: str,
     solar_kw: float,
@@ -471,8 +460,12 @@ def adjust_charge_solar_for_real_time(
     return -discharge_kw, 'discharge_load'
 
 
-def estimate_follow_dispatch(net_kw, interval_hours, max_follow_kw=2.0,
-                              deadband_kw=0.2):
+def estimate_follow_dispatch(
+    net_kw: float,
+    interval_hours: float,
+    max_follow_kw: float = 2.0,
+    deadband_kw: float = 0.2,
+) -> tuple[float, Optional[bool]]:
     """Estimate real-time load-following dispatch for a single interval.
     
     Returns (follow_kwh, is_discharge) or (0.0, None) if no follow activity

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pandas as pd
 import numpy as np
 import json
@@ -7,15 +8,16 @@ import pickle
 import fcntl
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from datetime import datetime, timezone
+from typing import Any, Optional
 from utils.sqlite_utils import get_db_connection, get_db_path
 
-# SARIMA Prediction Module: sarimax_predictor.py
-# Updated for fast frequent execution: loads pre-trained parameters and forecasts.
-
-# Physical sanity ceiling for home baseload (kW), excluding GSHP and EV
 BASELOAD_MAX_KW = 20.0
 
-def load_historical_data(file_path='processed_data.csv', target_col='baseload_power', last_n_days=14):
+def load_historical_data(
+    file_path: str = 'processed_data.csv',
+    target_col: str = 'baseload_power',
+    last_n_days: int = 14,
+) -> Optional[pd.Series]:
     """
     Loads historical baseload data for prediction anchoring.
     """
@@ -43,16 +45,14 @@ def load_historical_data(file_path='processed_data.csv', target_col='baseload_po
         print(f"Error loading historical data: {e}")
         return None
 
-def _get_safe_forecast(model, forecast_steps, start_params=None, max_ci_upper=100, max_mean_upper=BASELOAD_MAX_KW):
-    """
-    Fit SARIMA model and return forecast with reasonable confidence intervals.
-    
-    If start_params are provided, tries a warm-start fit first.
-    If the resulting CIs or mean explode (indicating numerical instability), falls back
-    to a clean fit without warm start.
-    If the clean fit also explodes, returns None so the caller can use a safe fallback.
-    """
-    def _is_reasonable(forecast):
+def _get_safe_forecast(
+    model: SARIMAX,
+    forecast_steps: int,
+    start_params: Optional[np.ndarray] = None,
+    max_ci_upper: float = 100,
+    max_mean_upper: float = BASELOAD_MAX_KW,
+) -> Any:
+    def _is_reasonable(forecast: Any) -> bool:
         ci = forecast.conf_int(alpha=0.05)
         max_upper = ci.iloc[:, 1].max()
         max_mean = forecast.predicted_mean.max()
@@ -84,7 +84,7 @@ def _get_safe_forecast(model, forecast_steps, start_params=None, max_ci_upper=10
     return None
 
 
-def _clamp_ci(val, low, high, historical_std=None):
+def _clamp_ci(val: float, low: float, high: float, historical_std: Optional[float] = None) -> tuple[float, float]:
     """Clamp confidence intervals to physically reasonable values for home baseload."""
     if historical_std is not None:
         max_reasonable = val + 3 * historical_std + 5
@@ -100,7 +100,11 @@ def _clamp_ci(val, low, high, historical_std=None):
     return lower, upper
 
 
-def predict_sarimax(ts_data, forecast_steps=96, params_path='sarima_model_params.pkl'):
+def predict_sarimax(
+    ts_data: pd.Series,
+    forecast_steps: int = 96,
+    params_path: str = 'sarima_model_params.pkl',
+) -> tuple[pd.Series, pd.DataFrame]:
     """
     Predicts future values using SARIMA model.
     If params_path exists, uses pre-trained parameters with fallback if CIs explode.
@@ -148,11 +152,16 @@ def predict_sarimax(ts_data, forecast_steps=96, params_path='sarima_model_params
         forecast_ci = forecast.conf_int(alpha=0.05)
     
     # Final safety caps: baseload must be >= 0 and <= physical ceiling
-    forecast_mean = np.clip(forecast_mean, 0, BASELOAD_MAX_KW)
+    forecast_mean = pd.Series(np.clip(forecast_mean, 0, BASELOAD_MAX_KW), index=forecast_mean.index)
     
     return forecast_mean, forecast_ci
 
-def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_predictions.json", historical_std=None):
+def save_benchmark_results(
+    forecast_mean: pd.Series,
+    forecast_ci: Optional[pd.DataFrame] = None,
+    filename: str = "sarimax_predictions.json",
+    historical_std: Optional[float] = None,
+) -> None:
     """Saves SARIMA forecast and confidence intervals."""
     if forecast_mean is not None:
         results = []
@@ -179,7 +188,11 @@ def save_benchmark_results(forecast_mean, forecast_ci=None, filename="sarimax_pr
             json.dump(results, f, indent=2)
         print(f"✅ SARIMA forecast with CI saved to {filename}")
 
-def archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=None):
+def archive_sarimax_predictions(
+    forecast_mean: pd.Series,
+    forecast_ci: Optional[pd.DataFrame] = None,
+    historical_std: Optional[float] = None,
+) -> None:
     """Archiving SARIMA predictions and CI to SQLite for later benchmarking."""
     if forecast_mean is None:
         return
@@ -233,7 +246,7 @@ def archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=None)
     except Exception as e:
         print(f"⚠️ Error archiving SARIMA to SQLite: {e}")
 
-def main():
+def main() -> None:
     # Support environment variable override for testing
     params_path = os.getenv('TEST_SARIMA_PARAMS', 'sarima_model_params.pkl')
 

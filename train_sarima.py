@@ -1,17 +1,15 @@
+from __future__ import annotations
 import pandas as pd
 import numpy as np
 import os
 import pickle
 import fcntl
 import argparse
+from typing import Optional
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sarimax_predictor import load_historical_data, BASELOAD_MAX_KW
 
-# SARIMA Training Module: train_sarima.py
-# Runs periodically to fit the SARIMA model on historical data.
-# Default: 14 days (for frequent runs), but 30 days recommended for weekly runs.
-
-def train_sarima(days=14, params_path=None):
+def train_sarima(days: int = 14, params_path: Optional[str] = None) -> None:
     print(f"Loading last {days} days for SARIMA training...")
     ts_data = load_historical_data(last_n_days=days)
     

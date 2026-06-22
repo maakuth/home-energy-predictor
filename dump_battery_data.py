@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Dump battery planning relevant variables from Home Assistant API and local database.
 
@@ -98,11 +99,11 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Optional
 from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
 
-# Add workspace to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.ha_utils import get_ha_state
@@ -111,8 +112,7 @@ from utils.sqlite_utils import get_db_connection
 from utils.git_utils import get_model_version
 
 
-def load_json_file(path):
-    """Load a JSON file, return empty list if not found."""
+def load_json_file(path: str) -> Optional[Any]:
     if not os.path.exists(path):
         return None
     try:
@@ -123,13 +123,7 @@ def load_json_file(path):
         return None
 
 
-def get_ha_relevant_entities():
-    """
-    Return list of Home Assistant entities relevant to battery planning.
-    
-    These are based on the actual entities used in the HEPO system.
-    Edit this list to match YOUR Home Assistant setup if your entities differ.
-    """
+def get_ha_relevant_entities() -> list[str]:
     load_dotenv(override=True)
     
     # Try to get custom entity list from environment
@@ -167,7 +161,7 @@ def get_ha_relevant_entities():
     ]
 
 
-def fetch_ha_snapshot(verbose=False):
+def fetch_ha_snapshot(verbose: bool = False) -> dict[str, dict[str, Any]]:
     """Fetch current state snapshot from Home Assistant."""
     entities = get_ha_relevant_entities()
     snapshot = {}
@@ -192,7 +186,10 @@ def fetch_ha_snapshot(verbose=False):
     return snapshot
 
 
-def fetch_predictions(start_time=None, end_time=None):
+def fetch_predictions(
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+) -> list[dict[str, Any]]:
     """Load predictions from future_predictions.json."""
     preds = load_json_file('future_predictions.json')
     if not preds:
@@ -219,7 +216,11 @@ def fetch_predictions(start_time=None, end_time=None):
     return preds
 
 
-def fetch_nordpool_prices_from_ha(start_time, end_time, verbose=False):
+def fetch_nordpool_prices_from_ha(
+    start_time: str,
+    end_time: str,
+    verbose: bool = False,
+) -> list[dict[str, Any]]:
     """Fetch historical Nordpool prices from HA PostgreSQL database.
     
     Queries the states table for sensor.nordpool_total history.
@@ -291,7 +292,11 @@ def fetch_nordpool_prices_from_ha(start_time, end_time, verbose=False):
         return prices
 
 
-def fetch_market_prices_range(start_time, end_time, verbose=False):
+def fetch_market_prices_range(
+    start_time: str,
+    end_time: str,
+    verbose: bool = False,
+) -> list[dict[str, Any]]:
     """Fetch market prices for the given time range.
     
     Tries multiple sources in order:
@@ -390,7 +395,12 @@ def fetch_market_prices_range(start_time, end_time, verbose=False):
     return prices
 
 
-def synthesize_predictions(measurements, start_time, end_time, verbose=False):
+def synthesize_predictions(
+    measurements: list[dict[str, Any]],
+    start_time: str,
+    end_time: str,
+    verbose: bool = False,
+) -> list[dict[str, Any]]:
     """Synthesize realistic prediction archive from measurement data.
     
     Creates predictions offset by MAE (mean absolute error) to simulate
@@ -489,7 +499,11 @@ def synthesize_predictions(measurements, start_time, end_time, verbose=False):
     return predictions
 
 
-def fetch_sqlite_predictions(start_time, end_time, verbose=False):
+def fetch_sqlite_predictions(
+    start_time: str,
+    end_time: str,
+    verbose: bool = False,
+) -> list[dict[str, Any]]:
     """Fetch prediction archive from SQLite database, preserving generated_at.
     
     Returns list of prediction records with target_timestamp, generated_at,
@@ -582,7 +596,11 @@ def fetch_sqlite_predictions(start_time, end_time, verbose=False):
     return predictions
 
 
-def fetch_ha_measurements(start_time, end_time, verbose=False):
+def fetch_ha_measurements(
+    start_time: str,
+    end_time: str,
+    verbose: bool = False,
+) -> list[dict[str, Any]]:
     """Fetch actual measurements from Home Assistant PostgreSQL database.
     
     Returns list of measurement records for grid power, solar, GSHP, Leaf, and other
@@ -689,9 +707,13 @@ def fetch_ha_measurements(start_time, end_time, verbose=False):
     return measurements
 
 
-def fetch_sqlite_history(start_time, end_time, verbose=False):
+def fetch_sqlite_history(
+    start_time: str,
+    end_time: str,
+    verbose: bool = False,
+) -> dict[str, Any]:
     """Wrapper to maintain backward compatibility. Combines predictions and measurements."""
-    history = {}
+    history: dict[str, Any] = {}
     
     if verbose:
         print(f"\nFetching history from SQLite and PostgreSQL for {start_time} to {end_time}...")
@@ -716,7 +738,7 @@ def fetch_sqlite_history(start_time, end_time, verbose=False):
     return history
 
 
-def get_battery_config():
+def get_battery_config() -> dict[str, Any]:
     """Get battery configuration from environment."""
     load_dotenv(override=True)
     
@@ -730,7 +752,7 @@ def get_battery_config():
     }
 
 
-def get_gshp_config():
+def get_gshp_config() -> dict[str, Any]:
     """Get GSHP configuration from environment."""
     load_dotenv(override=True)
     
@@ -740,7 +762,13 @@ def get_gshp_config():
     }
 
 
-def dump_battery_data(days=None, start=None, end=None, output='battery_test_data.pkl', verbose=False):
+def dump_battery_data(
+    days: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    output: str = 'battery_test_data.pkl',
+    verbose: bool = False,
+) -> bool:
     """
     Dump battery planning data to pickle file.
     
@@ -850,7 +878,7 @@ def dump_battery_data(days=None, start=None, end=None, output='battery_test_data
         return False
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description='Dump battery planning data from Home Assistant and database to pickle file',
         formatter_class=argparse.RawDescriptionHelpFormatter,

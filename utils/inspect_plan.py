@@ -1,44 +1,35 @@
+from __future__ import annotations
 """
 Plan inspection utility: read optimization_plan.json and display
 formatted tables, summaries, and filtered views.
-
-Usage:
-    venv/bin/python3 utils/inspect_plan.py
-    venv/bin/python3 utils/inspect_plan.py --summary
-    venv/bin/python3 utils/inspect_plan.py --detail
-    venv/bin/python3 utils/inspect_plan.py --start "2026-06-18T07:00" --end "2026-06-18T09:00"
-    venv/bin/python3 utils/inspect_plan.py --actions charge_grid,discharge_load
-    venv/bin/python3 utils/inspect_plan.py --n 20
-    venv/bin/python3 utils/inspect_plan.py --file /path/to/plan.json --detail
-    venv/bin/python3 utils/inspect_plan.py --charging
-    venv/bin/python3 utils/inspect_plan.py --charging --n 10
 """
 
 import json
 import argparse
 from datetime import datetime, timezone
 from collections import Counter
+from typing import Any
 
 
-def load_plan(path="optimization_plan.json"):
+def load_plan(path: str = "optimization_plan.json") -> list[dict[str, Any]]:
     with open(path) as f:
         return json.load(f)
 
 
-def parse_iso(s):
+def parse_iso(s: str) -> datetime:
     if s.endswith('Z'):
         s = s[:-1] + '+00:00'
     return datetime.fromisoformat(s)
 
 
-def format_ts(ts_str):
+def format_ts(ts_str: str) -> str:
     """Convert plan timestamp (ISO-8601 with offset) to local-timezone string."""
     dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
     local = dt.astimezone()
     return local.isoformat()
 
 
-def filter_entries(entries, args):
+def filter_entries(entries: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.start:
         t = parse_iso(args.start)
         entries = [e for e in entries if parse_iso(e['timestamp']) >= t]
@@ -51,7 +42,7 @@ def filter_entries(entries, args):
     return entries
 
 
-def show_summary(entries, args):
+def show_summary(entries: list[dict[str, Any]], args: argparse.Namespace) -> None:
     if not entries:
         print("No entries match filters.")
         return
@@ -86,7 +77,7 @@ def show_summary(entries, args):
     print(f"Dischg export: {total_discharge_export:8.3f} kWh")
 
 
-def show_detail(entries, args):
+def show_detail(entries: list[dict[str, Any]], args: argparse.Namespace) -> None:
     if not entries:
         print("No entries match filters.")
         return
@@ -119,7 +110,7 @@ def show_detail(entries, args):
         ))
 
 
-def show_charging(entries, args):
+def show_charging(entries: list[dict[str, Any]], args: argparse.Namespace) -> None:
     """Show charging analysis: only charge_solar/charge_grid actions."""
     entries = [e for e in entries if e.get('battery_action') in ('charge_solar', 'charge_grid')]
     if not entries:
@@ -156,7 +147,7 @@ def show_charging(entries, args):
         ))
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect battery plan entries")
     parser.add_argument('--file', default='optimization_plan.json', help='Plan JSON file path')
     parser.add_argument('--summary', action='store_true', help='Show summary only (default)')

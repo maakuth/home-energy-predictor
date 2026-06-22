@@ -1,7 +1,8 @@
+from __future__ import annotations
 import subprocess
 import os
 
-def get_model_version():
+def get_model_version() -> str:
     """
     Get the semantic version of the model training code.
     
@@ -22,7 +23,7 @@ def get_model_version():
     return "unknown"
 
 
-def get_git_version():
+def get_git_version() -> str:
     """
     DEPRECATED: Get the current git head (short hash).
     

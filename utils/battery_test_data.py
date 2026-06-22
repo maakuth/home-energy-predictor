@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Utilities for loading and using pickled battery test data.
 
