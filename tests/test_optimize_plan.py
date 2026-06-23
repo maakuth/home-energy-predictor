@@ -50,7 +50,7 @@ class OptimizeArchivingTests(unittest.TestCase):
     def test_optimize_archives_to_db(self, mock_db, mock_prices, mock_ha):
         # Mocking external calls
         mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
-        mock_prices.return_value = ([0.1], [0], "Nordpool", False, False)
+        mock_prices.return_value = ([0.1], [0], "Nordpool", False, False, None)
         mock_ha.return_value = {"state": "50.0"} # acc_temp
         
         # Run optimize
@@ -132,7 +132,7 @@ class OptimizeArchivingTests(unittest.TestCase):
 
         mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
         # Prices: first interval is neither cheapest import nor best export, so battery idles
-        mock_prices.return_value = ([0.15, 0.1, 0.2], [0, 0, 0], "Nordpool", False, False)
+        mock_prices.return_value = ([0.15, 0.1, 0.2], [0, 0, 0], "Nordpool", False, False, None)
 
         def ha_side_effect(entity_id):
             if entity_id == 'sensor.mlp_teho':

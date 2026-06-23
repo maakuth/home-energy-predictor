@@ -64,10 +64,40 @@ def align_interval_prices(
     return aligned_series.to_numpy(), is_fallback.to_numpy()
 
 
+def _fetch_sensor_prices(
+    entity_id: str,
+    prediction_timestamps: list[str],
+    interval_minutes: int,
+) -> Optional[np.ndarray]:
+    """Fetch and align prices from a single HA sensor entity."""
+    state_data = get_ha_state(entity_id)
+    if not state_data:
+        return None
+
+    attrs = state_data.get("attributes", {})
+    raw_today = attrs.get("raw_today") or attrs.get("today")
+    raw_tomorrow = attrs.get("raw_tomorrow") or attrs.get("tomorrow")
+
+    # ENTSO-e format: prices_today/prices_tomorrow/prices as list of {time, price}
+    if raw_today is None:
+        raw_today = attrs.get("prices_today") or attrs.get("prices")
+        if isinstance(raw_today, list) and len(raw_today) > 0 and isinstance(raw_today[0], dict):
+            raw_today = [{"start": item.get("time") or item.get("start"), "value": item["price"]} for item in raw_today]
+    if raw_tomorrow is None:
+        raw_tomorrow = attrs.get("prices_tomorrow")
+        if isinstance(raw_tomorrow, list) and len(raw_tomorrow) > 0 and isinstance(raw_tomorrow[0], dict):
+            raw_tomorrow = [{"start": item.get("time") or item.get("start"), "value": item["price"]} for item in raw_tomorrow]
+
+    if isinstance(raw_today, list) and len(raw_today) > 0:
+        aligned, _ = align_interval_prices(raw_today, raw_tomorrow or [], prediction_timestamps, interval_minutes)
+        return aligned
+    return None
+
+
 def fetch_market_prices(
     prediction_timestamps: list[str],
     interval_minutes: int = 15,
-) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[str], bool, bool]:
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[str], bool, bool, Optional[np.ndarray]]:
     candidate_sensors = [
         "sensor.nordpool_total",
         "sensor.nordpool_kwh_fi_eur_3_10_0",
@@ -107,6 +137,11 @@ def fetch_market_prices(
                 tomorrow_valid = False
                 if sensor in ["sensor.nordpool_kwh_fi_eur_3_10_0", "sensor.nordpool_total"]:
                     tomorrow_valid = bool(attrs.get("tomorrow_valid", False))
-                return aligned, is_fallback, sensor, is_inclusive, tomorrow_valid
+                # When using nordpool_total (inclusive), fetch separate export prices
+                # from average_electricity_price_today (raw energy only)
+                export_prices_base = None
+                if sensor == "sensor.nordpool_total":
+                    export_prices_base = _fetch_sensor_prices("sensor.average_electricity_price_today", prediction_timestamps, interval_minutes)
+                return aligned, is_fallback, sensor, is_inclusive, tomorrow_valid, export_prices_base
 
-    return None, None, None, False, False
+    return None, None, None, False, False, None

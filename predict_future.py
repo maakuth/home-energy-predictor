@@ -468,7 +468,7 @@ def predict() -> None:
     
     # Fetch market prices to identify fallbacks
     print('Fetching market prices for fallback detection...')
-    market_prices, is_fallback_price, _, _, _ = fetch_market_prices(timestamps, PREDICTION_INTERVAL_MINUTES)
+    market_prices, is_fallback_price, _, _, _, _ = fetch_market_prices(timestamps, PREDICTION_INTERVAL_MINUTES)
     if is_fallback_price is None:
         is_fallback_price = [0] * len(predictions)
 

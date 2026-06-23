@@ -135,7 +135,7 @@ def load_predictions(
     return xgb_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper
 
 
-def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False) -> tuple[np.ndarray, np.ndarray]:
+def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, export_base: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
     grid_transfer = get_env_float('GRID_TRANSFER_EUR_PER_KWH', 0.0)
     electricity_tax = get_env_float('ELECTRICITY_TAX_EUR_PER_KWH', 0.0)
     import_fixed_adders = get_env_float('IMPORT_FIXED_ADDERS_EUR_PER_KWH', 0.0)
@@ -149,7 +149,11 @@ def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False) -
     effective_tax = 0.0 if is_inclusive else electricity_tax
     
     import_unit_prices = (market_prices + effective_transfer + effective_tax + import_fixed_adders) * import_vat_multiplier
-    export_unit_prices = np.maximum(0.0, market_prices - export_deduction)
+
+    if export_base is not None:
+        export_unit_prices = np.maximum(0.0, np.array(export_base, dtype=float))
+    else:
+        export_unit_prices = np.maximum(0.0, market_prices - export_deduction)
 
     return import_unit_prices, export_unit_prices
 
@@ -435,13 +439,14 @@ def optimize() -> None:
         return
 
     print('Fetching market prices...')
-    market_prices, is_fallback_price, price_source, is_inclusive, tomorrow_valid = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
+    market_prices, is_fallback_price, price_source, is_inclusive, tomorrow_valid, export_prices_base = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
     if market_prices is None or is_fallback_price is None:
         print('Error: Could not fetch market prices from Home Assistant sensors.')
         return
 
     print(f'Using market prices from {price_source} (Inclusive of fees: {is_inclusive})')
-    import_prices, export_prices = build_tariff_prices(market_prices, is_inclusive)
+    import_prices, export_prices = build_tariff_prices(market_prices, is_inclusive, export_base=export_prices_base)
+    print(f'Import price: {import_prices[0]:.4f} EUR/kWh | Export price: {export_prices[0]:.4f} EUR/kWh')
 
     # Determine opportunity-cost lookahead window based on spot price availability
     from datetime import datetime, timedelta, time
