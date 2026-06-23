@@ -475,6 +475,108 @@ def adjust_charge_solar_for_real_time(  # type: ignore[return]
     return -discharge_kw, 'discharge_load'
 
 
+def _setpoint_smooth_state_path(state_file: str | None = None) -> str:
+    """Get the path for the setpoint smoothing state file."""
+    if state_file is not None:
+        return state_file
+    return os.getenv('HEPO_SETPOINT_SMOOTH_STATE_FILE', 'state/setpoint_smooth_state.json')
+
+
+def _load_setpoint_smooth_state(state_file: str | None = None) -> dict[str, Any]:
+    path = _setpoint_smooth_state_path(state_file)
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def _save_setpoint_smooth_state(state: dict[str, Any], state_file: str | None = None) -> None:
+    path = _setpoint_smooth_state_path(state_file)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, 'w') as f:
+            json.dump(state, f)
+    except IOError:
+        pass
+
+
+def smooth_planned_setpoint(
+    planned_battery_kw: float,
+    actual_battery_w: float,
+    plan: list[dict[str, Any]],
+    state_file: str | None = None,
+    interval_minutes: int = 15,
+    max_battery_kw: float = 10.0,
+) -> float:
+    """
+    Smooth battery setpoint across 15-min interval boundaries.
+
+    Uses: start_power = prior_avg_actual + (current_planned - prior_planned)
+
+    This preserves the optimizer's delta (load changes, price response) while
+    eliminating step-change oscillations from the plan reset at interval boundaries.
+
+    The output is clamped to [-max_battery_kw, max_battery_kw] to prevent
+    the delta formula from producing extreme values when prior_avg and
+    prior_planned diverge (e.g., after a period where the economic guard
+    blocked the net metering correction).
+
+    Args:
+        planned_battery_kw: Current interval's planned battery power (kW)
+        actual_battery_w: Current actual battery power (W)
+        plan: Full optimization plan (list of dicts with 'battery_power_kw')
+        state_file: Path to persistent state file
+        interval_minutes: Length of each interval (default 15)
+        max_battery_kw: Maximum battery power in kW for clamping (default 10)
+
+    Returns:
+        Smoothed battery setpoint in kW, clamped to [-max_battery_kw, max_battery_kw]
+    """
+    state = _load_setpoint_smooth_state(state_file)
+    now = datetime.now().astimezone()
+    interval_index = int(now.timestamp()) // (interval_minutes * 60)
+
+    prev_index = state.get('interval_index')
+
+    def _clamp(v: float) -> float:
+        return max(-max_battery_kw, min(max_battery_kw, v))
+
+    if prev_index is None:
+        clamped = _clamp(planned_battery_kw)
+        state['interval_index'] = interval_index
+        state['power_sum_kw'] = actual_battery_w / 1000.0
+        state['power_count'] = 1
+        state['prior_planned_kw'] = clamped
+        state['smoothed_setpoint_kw'] = clamped
+        _save_setpoint_smooth_state(state, state_file)
+        return clamped
+
+    if prev_index != interval_index:
+        count = state.get('power_count', 0)
+        prior_avg_kw = state.get('power_sum_kw', 0.0) / count if count > 0 else planned_battery_kw
+        prior_planned_kw = state.get('prior_planned_kw', planned_battery_kw)
+
+        smoothed = prior_avg_kw + (planned_battery_kw - prior_planned_kw)
+        clamped = _clamp(smoothed)
+
+        state['interval_index'] = interval_index
+        state['power_sum_kw'] = actual_battery_w / 1000.0
+        state['power_count'] = 1
+        state['prior_planned_kw'] = planned_battery_kw
+        state['smoothed_setpoint_kw'] = clamped
+        _save_setpoint_smooth_state(state, state_file)
+        return clamped
+
+    # Same interval: accumulate and return previously computed smoothed value
+    state['power_sum_kw'] = state.get('power_sum_kw', 0.0) + actual_battery_w / 1000.0
+    state['power_count'] = state.get('power_count', 0) + 1
+    _save_setpoint_smooth_state(state, state_file)
+    return _clamp(state.get('smoothed_setpoint_kw', planned_battery_kw))
+
+
 def estimate_follow_dispatch(
     net_kw: float,
     interval_hours: float,

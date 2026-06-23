@@ -9,6 +9,7 @@ from utils.battery_utils import (
     is_battery_available, compute_load_following_setpoint,
     get_current_plan_entry, compute_net_metering_setpoint,
     adjust_charge_solar_for_real_time,
+    smooth_planned_setpoint,
 )
 
 class TestPushToHA(unittest.TestCase):
@@ -1000,4 +1001,155 @@ if __name__ == '__main__':
         self.assertEqual(action, 'charge_solar')
 
 
+class TestSetpointSmoothing(unittest.TestCase):
+    """Tests for smooth_planned_setpoint interval-boundary smoothing."""
+
+    def setUp(self):
+        self.test_state_file = '/tmp/hepo_setpoint_smooth_test.json'
+        self.env_var = 'HEPO_SETPOINT_SMOOTH_STATE_FILE'
+        os.environ[self.env_var] = self.test_state_file
+        self._clean_state()
+
+    def tearDown(self):
+        self._clean_state()
+        if self.env_var in os.environ:
+            del os.environ[self.env_var]
+
+    def _clean_state(self):
+        if os.path.exists(self.test_state_file):
+            os.remove(self.test_state_file)
+
+    def _make_plan(self, powers: list[float]) -> list[dict]:
+        import datetime
+        base = datetime.datetime.now(datetime.timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+        plan = []
+        for i, p in enumerate(powers):
+            ts = (base + datetime.timedelta(minutes=15 * i)).isoformat()
+            plan.append({'timestamp': ts, 'battery_power_kw': p, 'battery_action': 'follow'})
+        return plan
+
+    def test_first_call_returns_planned(self):
+        """First call with no prior state returns the planned value unchanged."""
+        plan = self._make_plan([2.0, 1.0])
+        result = smooth_planned_setpoint(
+            planned_battery_kw=2.0, actual_battery_w=1500, plan=plan,
+        )
+        self.assertAlmostEqual(result, 2.0)
+
+    def test_within_same_interval_returns_stored_smoothed(self):
+        """Subsequent calls in the same interval return the previously computed smoothed value."""
+        plan = self._make_plan([2.0, 1.0])
+        smooth_planned_setpoint(
+            planned_battery_kw=2.0, actual_battery_w=1500, plan=plan,
+        )
+        result = smooth_planned_setpoint(
+            planned_battery_kw=2.0, actual_battery_w=1600, plan=plan,
+        )
+        self.assertAlmostEqual(result, 2.0)
+
+    def test_delta_preserves_planner_intent(self):
+        """Delta adjusts for planned load changes (GSHP, Leaf turning on/off)."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([2.0, 5.0])
+        state = {
+            'interval_index': interval_now - 1,
+            'power_sum_kw': 1.8,
+            'power_count': 1,
+            'prior_planned_kw': 2.0,
+            'smoothed_setpoint_kw': 2.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=5.0, actual_battery_w=3000, plan=plan,
+        )
+        # expected: 1.8 + (5.0 - 2.0) = 4.8
+        self.assertAlmostEqual(result, 4.8)
+
+    def test_delta_from_idle_to_charge(self):
+        """Transition from idle (0) to charging uses full planned power as delta."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([0.0, 3.0])
+        state = {
+            'interval_index': interval_now - 1,
+            'power_sum_kw': 0.1,
+            'power_count': 1,
+            'prior_planned_kw': 0.0,
+            'smoothed_setpoint_kw': 0.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=3.0, actual_battery_w=500, plan=plan,
+        )
+        # expected: 0.1 + (3.0 - 0.0) = 3.1
+        self.assertAlmostEqual(result, 3.1)
+
+    def test_clamps_to_max_battery_kw(self):
+        """Smoothed output is clamped to max_battery_kw."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([0.0, 50.0])
+        state = {
+            'interval_index': interval_now - 1,
+            'power_sum_kw': 0.0,
+            'power_count': 1,
+            'prior_planned_kw': 0.0,
+            'smoothed_setpoint_kw': 0.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=50.0, actual_battery_w=100, plan=plan,
+            max_battery_kw=10.0,
+        )
+        self.assertAlmostEqual(result, 10.0)
+
+    def test_clamps_to_negative_max_battery_kw(self):
+        """Smoothed output is clamped to -max_battery_kw."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([0.0, -50.0])
+        state = {
+            'interval_index': interval_now - 1,
+            'power_sum_kw': 0.0,
+            'power_count': 1,
+            'prior_planned_kw': 0.0,
+            'smoothed_setpoint_kw': 0.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=-50.0, actual_battery_w=-100, plan=plan,
+            max_battery_kw=10.0,
+        )
+        self.assertAlmostEqual(result, -10.0)
+
+    def test_first_call_clamps_to_max_battery_kw(self):
+        """First call also clamps to max_battery_kw."""
+        plan = self._make_plan([20.0, 5.0])
+        result = smooth_planned_setpoint(
+            planned_battery_kw=20.0, actual_battery_w=15000, plan=plan,
+            max_battery_kw=10.0,
+        )
+        self.assertAlmostEqual(result, 10.0)
+
+
+if __name__ == '__main__':
     unittest.main()
