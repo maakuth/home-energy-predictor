@@ -26,7 +26,7 @@ def process_data() -> None:
     if 'ev_soc' in df.columns:
         df['ev_soc'] = df['ev_soc'].ffill().fillna(0)
     if 'ev_position' in df.columns:
-        if df['ev_position'].dtype == object:
+        if not pd.api.types.is_integer_dtype(df['ev_position']):
             df['ev_position'] = (df['ev_position'] == 'home').astype(int)
         df['ev_position'] = df['ev_position'].ffill().fillna(0).astype(int)
 
