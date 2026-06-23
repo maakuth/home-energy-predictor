@@ -69,10 +69,10 @@ def fetch_market_prices(
     interval_minutes: int = 15,
 ) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[str], bool, bool]:
     candidate_sensors = [
+        "sensor.nordpool_total",
+        "sensor.nordpool_kwh_fi_eur_3_10_0",
         "sensor.average_electricity_price_today",
         "sensor.current_electricity_market_price",
-        "sensor.nordpool_kwh_fi_eur_3_10_0",
-        "sensor.nordpool_total",
     ]
 
     for sensor in candidate_sensors:
