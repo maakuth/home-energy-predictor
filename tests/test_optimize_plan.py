@@ -183,18 +183,14 @@ class OptimizePlanTests(unittest.TestCase):
     def test_build_tariff_prices_uses_asymmetric_pricing(self):
         with patched_env(
             {
-                "GRID_TRANSFER_EUR_PER_KWH": "0.05",
-                "ELECTRICITY_TAX_EUR_PER_KWH": "0.03",
-                "IMPORT_FIXED_ADDERS_EUR_PER_KWH": "0.01",
-                "IMPORT_VAT_MULTIPLIER": "1.24",
-                "EXPORT_DEDUCTION_EUR_PER_KWH": "0.02",
+                "GRID_FEES_EUR_PER_KWH": "0.06",
             }
         ):
             market = np.array([0.10, 0.20])
             import_prices, export_prices = build_tariff_prices(market)
 
-        expected_import = (market + 0.05 + 0.03 + 0.01) * 1.24
-        expected_export = np.maximum(0.0, market - 0.02)
+        expected_import = market + 0.06
+        expected_export = np.maximum(0.0, market)
 
         np.testing.assert_allclose(import_prices, expected_import, rtol=1e-9, atol=1e-9)
         np.testing.assert_allclose(export_prices, expected_export, rtol=1e-9, atol=1e-9)
@@ -202,16 +198,16 @@ class OptimizePlanTests(unittest.TestCase):
     def test_build_tariff_prices_skips_fees_when_inclusive(self):
         with patched_env(
             {
-                "GRID_TRANSFER_EUR_PER_KWH": "0.05",
-                "ELECTRICITY_TAX_EUR_PER_KWH": "0.03",
-                "IMPORT_VAT_MULTIPLIER": "1.0",
+                "GRID_FEES_EUR_PER_KWH": "0.06",
             }
         ):
             market = np.array([0.10])
-            # is_inclusive=True should skip 0.05 and 0.03
-            import_prices, _ = build_tariff_prices(market, is_inclusive=True)
+            # is_inclusive=True means market prices already include fees
+            import_prices, export_prices = build_tariff_prices(market, is_inclusive=True)
             
             self.assertEqual(import_prices[0], 0.10)
+            # Export should be market minus GRID_FEES when inclusive
+            self.assertAlmostEqual(export_prices[0], 0.04)
 
     def test_align_interval_prices_ffill_hourly_to_15min(self):
         # Hourly data

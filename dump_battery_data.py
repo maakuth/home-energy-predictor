@@ -108,7 +108,7 @@ from utils.type_defs import BatteryConfig, GshpConfig, FuturePredictionRecord, S
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.ha_utils import get_ha_state
-from utils.price_utils import fetch_market_prices
+from utils.price_utils import fetch_market_prices, estimate_export_prices
 from utils.sqlite_utils import get_db_connection
 from utils.git_utils import get_model_version
 
@@ -277,7 +277,7 @@ def fetch_nordpool_prices_from_ha(
                 prices.append({
                     'timestamp': ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
                     'import_price': import_price,
-                    'export_price': max(0, import_price - 0.05),  # Typical spread
+                    'export_price': float(estimate_export_prices(import_price)),
                 })
             except (ValueError, KeyError, TypeError):
                 continue
@@ -465,7 +465,7 @@ def synthesize_predictions(
         noise = np.random.normal(0, 0.01)
         
         import_price = max(0.05, base_hourly * day_factor + noise)
-        export_price = max(0, import_price - 0.05)
+        export_price = float(estimate_export_prices(import_price))
         
         # Get solar data if available, default to 0 if missing
         solar_forecast = row.get('solar_actual_kw', 0.0)

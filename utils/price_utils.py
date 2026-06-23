@@ -7,6 +7,19 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from utils.ha_utils import get_ha_state
 
+
+def get_grid_fees() -> float:
+    return float(os.getenv('GRID_FEES_EUR_PER_KWH', '0.06'))
+
+
+def estimate_export_prices(import_prices: np.ndarray | float) -> np.ndarray | float:
+    return np.maximum(0.0, np.asarray(import_prices, dtype=float) - get_grid_fees())
+
+
+def estimate_import_prices(export_prices: np.ndarray | float) -> np.ndarray | float:
+    return np.asarray(export_prices, dtype=float) + get_grid_fees()
+
+
 def align_interval_prices(
     raw_today: list[Any],
     raw_tomorrow: list[Any],

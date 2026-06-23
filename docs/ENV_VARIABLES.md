@@ -35,11 +35,7 @@ All monetary values are in **EUR per kWh** unless noted otherwise. These are con
 
 | Variable | Description | Example | Notes |
 |----------|-------------|---------|-------|
-| `ELECTRICITY_TAX_EUR_PER_KWH` | Government energy tax added to imported electricity. | `0.025` | Skipped if the fetched market prices are already inclusive of fees. |
-| `GRID_TRANSFER_EUR_PER_KWH` | Variable grid transmission / transfer fee. | `0.03` | Skipped if the fetched market prices are already inclusive of fees. |
-| `IMPORT_FIXED_ADDERS_EUR_PER_KWH` | Fixed non-variable adders added to the import price before VAT. | `0.01` | Always added, even when the source data is inclusive. |
-| `IMPORT_VAT_MULTIPLIER` | VAT multiplier applied to the total import price. | `1.24` | Applied after transfer, tax and adders are summed with the spot price. |
-| `EXPORT_DEDUCTION_EUR_PER_KWH` | Deduction subtracted from the spot price when calculating export revenue. | `0.02` | Result is clamped at `0.0` (never negative). |
+| `GRID_FEES_EUR_PER_KWH` | Single combined value for all grid transfer fees, taxes, VAT, and fixed adders. | `0.06` | When the fetched market prices are **already inclusive** of fees, this is subtracted to estimate export revenue. When prices are **raw spot prices**, this is added to compute the import price. |
 
 ---
 

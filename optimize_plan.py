@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, parse_ha_bool
-from utils.price_utils import fetch_market_prices, align_interval_prices
+from utils.price_utils import fetch_market_prices, align_interval_prices, get_grid_fees, estimate_export_prices
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.db_utils import fetch_states_history
@@ -136,24 +136,21 @@ def load_predictions(
 
 
 def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, export_base: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
-    grid_transfer = get_env_float('GRID_TRANSFER_EUR_PER_KWH', 0.0)
-    electricity_tax = get_env_float('ELECTRICITY_TAX_EUR_PER_KWH', 0.0)
-    import_fixed_adders = get_env_float('IMPORT_FIXED_ADDERS_EUR_PER_KWH', 0.0)
-    import_vat_multiplier = get_env_float('IMPORT_VAT_MULTIPLIER', 1.0)
-    export_deduction = get_env_float('EXPORT_DEDUCTION_EUR_PER_KWH', 0.0)
-
+    grid_fees = get_grid_fees()
     market_prices = np.array(market_prices, dtype=float)
-    
-    # If the source is already inclusive, we don't add transfer and tax again
-    effective_transfer = 0.0 if is_inclusive else grid_transfer
-    effective_tax = 0.0 if is_inclusive else electricity_tax
-    
-    import_unit_prices = (market_prices + effective_transfer + effective_tax + import_fixed_adders) * import_vat_multiplier
+
+    if is_inclusive:
+        import_unit_prices = market_prices
+    else:
+        import_unit_prices = market_prices + grid_fees
 
     if export_base is not None:
         export_unit_prices = np.maximum(0.0, np.array(export_base, dtype=float))
     else:
-        export_unit_prices = np.maximum(0.0, market_prices - export_deduction)
+        if is_inclusive:
+            export_unit_prices = estimate_export_prices(market_prices)
+        else:
+            export_unit_prices = np.maximum(0.0, market_prices)
 
     return import_unit_prices, export_unit_prices
 
