@@ -15,6 +15,12 @@
 - The development likely isn't running on the machine that has connectivity to the HA and psql, so don't bother trying to run it against them
 - You can get the up to date situation of from the original system by executing pull-from-murrikka.sh, though you might already be running at murrikka. Better check the timestamps of hepo.db, etc.
 
+## Script schedules
+This app runs as a number of scripts that are scheduled as systemd units. The schedules are like this:
+- run-often.py - every 20 seconds (load following)
+- run-frequent.sh - every 15 minutes (at spot pricing period break)
+- run-slow.sh - at :57 minute of every hour (slow processes, at least SARIMA)
+- run-weekly.sh - 02:00 every Monday (prediction accuracy statistics run)
 
 ## Model Versioning (IMPORTANT)
 

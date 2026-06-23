@@ -19,3 +19,6 @@ sarima_train_end.txt
 
 # Runtime state directory
 state/
+
+# Temporary log file
+recentlog.txt
