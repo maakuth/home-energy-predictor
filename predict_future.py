@@ -451,7 +451,14 @@ def predict() -> None:
         start_time, end_time, interval, df_solar, df_weather, current_states, sauna_states
     )
         
-    X_inference = pd.DataFrame(inference_data)[features]
+    X_inference = pd.DataFrame(inference_data)
+    missing = set(features) - set(X_inference.columns)
+    if missing:
+        defaults = {'ev_soc': 80.0}
+        print(f"⚠ Model expects features not in inference data: {missing}. Filling with defaults.")
+        for f in missing:
+            X_inference[f] = defaults.get(f, 0)
+    X_inference = X_inference[features]
     predictions = model.predict(X_inference)
     
     # Combine predictions with timestamps
