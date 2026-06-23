@@ -17,7 +17,7 @@ class TestPredictFuture(unittest.TestCase):
         self.df_solar = pd.DataFrame({'pv_estimate': [1.0] * 20}, index=solar_indices)
         
         # Mock current states
-        self.current_states = {'temp_val': 10.0, 'acc_val': 45.0, 'soc_val': 80.0}
+        self.current_states = {'temp_val': 10.0, 'acc_val': 45.0}
         self.sauna_states = {'is_sauna_detected': False, 'was_warm_yesterday': False, 'now': self.now}
 
     def test_forecast_mapping(self):

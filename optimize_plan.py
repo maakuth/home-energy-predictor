@@ -525,7 +525,7 @@ def optimize() -> None:
     # Filter indices where EV is at home
     home_indices = [i for i, p in enumerate(predictions_data) if p.get('ev_position', 1) == 1]
     
-    ev_power_kw = get_env_float('EV_CHARGE_POWER_KW', 3.5)
+    ev_power_kw = get_env_float('EV_CHARGE_POWER_KW', 7.0)
     if not home_indices:
         print("⚠️ Warning: EV (XPZ) not predicted to be home at any time in the plan window.")
         ev_plan = [0] * len(import_prices)
@@ -599,6 +599,14 @@ def optimize() -> None:
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.
     battery_optimization_load_kw = predictions + planned_gshp_kw
+
+    # NOTE: total_planned_load_kw double-counts EV and Leaf loads.
+    # The ML predictions already include learned EV/Leaf charging patterns
+    # (since those loads are baked into baseload_power in training data).
+    # Adding planned_ev_kw + planned_leaf_kw on top overestimates total usage.
+    # This is a known limitation: without a working XPZ integration we cannot
+    # distinguish EV charging from baseload, so we accept the overestimate.
+    # The battery planner correctly treats EV/Leaf as committed (non-battery) load.
     total_planned_load_kw = battery_optimization_load_kw + planned_ev_kw + planned_leaf_kw
 
     effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)

@@ -116,7 +116,6 @@ def generate_inference_data(
     wind_val = current_states.get('wind_val', 0.0)
     acc_val = current_states.get('acc_val', 45.0)
     p_temp_val = current_states.get('p_temp_val', np.nan)
-    soc_val = current_states.get('soc_val', 80.0)
     leaf_lag_val = current_states.get('leaf_lag_val', 0.0)
     leaf_energy_val = current_states.get('leaf_energy_val', 0.0)
     lag1h_val = current_states.get('lag1h_val', 1.0)
@@ -187,7 +186,6 @@ def generate_inference_data(
             'leaf_energy_24h': leaf_energy_val,
             'acc_roc': 0,
             'is_fireplace_lag1': 0,
-            'ev_soc': soc_val,
             'ev_position': ev_pos_proj,
             'baseload_lag_1h': lag1h_val,
             'baseload_lag_24h': lag24h_val,
@@ -399,19 +397,9 @@ def predict() -> None:
             was_warm_yesterday = True
             print("📅 Sauna was used yesterday evening.")
 
-    ev_soc = get_ha_state('sensor.xpz_491_battery_level')
-    soc_val = 80.0
-    if ev_soc is not None:
-        try:
-            soc_state = ev_soc.get('state')
-            if soc_state is not None and soc_state not in ['unknown', 'unavailable']:
-                soc_val = float(soc_state)
-        except (ValueError, TypeError, AttributeError):
-            pass
-
     ev_pos = get_ha_state('device_tracker.xpz_491_position')
     pos_val = 1 if ev_pos and ev_pos.get('state') == 'home' else 0
-    print(f"🚗 EV Status - SOC: {soc_val}%, Position: {'Home' if pos_val else 'Away'}")
+    print(f"🚗 EV Position: {'Home' if pos_val else 'Away'}")
 
     # Load model and features
     model = xgb.XGBRegressor()
@@ -451,7 +439,6 @@ def predict() -> None:
         'wind_val': wind_val,
         'acc_val': acc_val, 
         'p_temp_val': p_temp_val,
-        'soc_val': soc_val,
         'ev_pos_val': pos_val,
         'leaf_lag_val': leaf_lag1h,
         'leaf_energy_val': leaf_energy_24h,
