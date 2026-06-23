@@ -13,6 +13,7 @@ from utils.battery_utils import (
     get_current_plan_entry,
     adjust_charge_solar_for_real_time,
     smooth_planned_setpoint,
+    apply_ramp_rate,
 )
 
 load_dotenv(override=True)
@@ -157,6 +158,13 @@ def main():
 
     if log_msg:
         print(f'Load follow: {log_msg}')
+
+    ramp_rate = float(os.getenv('BATTERY_RAMP_RATE_KW_PER_MIN', '3.0'))
+    adjusted_battery_kw = apply_ramp_rate(
+        target_setpoint_kw=adjusted_battery_kw,
+        actual_battery_kw=battery_w / 1000.0,
+        ramp_rate_kw_per_min=ramp_rate,
+    )
 
     battery_control_w = int(-adjusted_battery_kw * 1000)
     push_battery_control(

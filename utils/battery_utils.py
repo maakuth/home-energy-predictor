@@ -391,7 +391,7 @@ def compute_net_metering_setpoint(
     deviation = actual_net - planned_net
     
     # Compute remaining time
-    remaining_minutes = max(interval_minutes - elapsed_minutes, 0.5)
+    remaining_minutes = max(interval_minutes - elapsed_minutes, 2.0)
     remaining_hours = remaining_minutes / 60.0
     
     # Correction power: opposite sign to deviation
@@ -596,3 +596,38 @@ def estimate_follow_dispatch(
     if abs_net < deadband_kw or abs_net > max_follow_kw:
         return 0.0, None
     return abs_net * interval_hours, (net_kw > 0)
+
+
+def apply_ramp_rate(
+    target_setpoint_kw: float,
+    actual_battery_kw: float,
+    ramp_rate_kw_per_min: float,
+    interval_seconds: float = 20.0,
+) -> float:
+    """Clamp battery setpoint changes to a maximum ramp rate.
+
+    Prevents sudden power swings from net metering end-of-interval corrections
+    or other sources of step changes. The ramp rate is relative to the actual
+    battery power (sensor reading), not the previous setpoint, so it respects
+    physical battery behaviour even if commands weren't followed perfectly.
+
+    Sign convention: positive=charge, negative=discharge (same as plan convention
+    and battery_w sensor). Pass ramp_rate_kw_per_min=0 to disable.
+
+    Args:
+        target_setpoint_kw: Desired battery setpoint in kW.
+        actual_battery_kw: Current actual battery power in kW (from sensor).
+        ramp_rate_kw_per_min: Maximum allowed change in kW per minute.
+            Set to 0 to disable ramping (passthrough).
+        interval_seconds: Time since last update in seconds (default 20).
+
+    Returns:
+        Clamped setpoint in kW, within ramp rate of actual_battery_kw.
+    """
+    if ramp_rate_kw_per_min <= 0:
+        return target_setpoint_kw
+    max_change_kw = ramp_rate_kw_per_min * (interval_seconds / 60.0)
+    return max(
+        actual_battery_kw - max_change_kw,
+        min(actual_battery_kw + max_change_kw, target_setpoint_kw),
+    )

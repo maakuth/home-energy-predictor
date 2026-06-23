@@ -10,6 +10,7 @@ from utils.battery_utils import (
     get_current_plan_entry, compute_net_metering_setpoint,
     adjust_charge_solar_for_real_time,
     smooth_planned_setpoint,
+    apply_ramp_rate,
 )
 
 class TestPushToHA(unittest.TestCase):
@@ -1149,6 +1150,77 @@ class TestSetpointSmoothing(unittest.TestCase):
             max_battery_kw=10.0,
         )
         self.assertAlmostEqual(result, 10.0)
+
+
+class TestRampRateLimiter(unittest.TestCase):
+    """Tests for apply_ramp_rate battery power smoothing."""
+
+    def test_disabled_passthrough(self):
+        """ramp_rate=0 returns target unchanged."""
+        result = apply_ramp_rate(target_setpoint_kw=5.0, actual_battery_kw=2.0, ramp_rate_kw_per_min=0.0)
+        self.assertAlmostEqual(result, 5.0)
+
+    def test_limits_large_change_positive(self):
+        """Large charge increase is ramped."""
+        result = apply_ramp_rate(
+            target_setpoint_kw=10.0, actual_battery_kw=0.0,
+            ramp_rate_kw_per_min=3.0, interval_seconds=20.0,
+        )
+        # max change = 3.0 * (20/60) = 1.0 kW
+        self.assertAlmostEqual(result, 1.0)
+
+    def test_limits_large_change_negative(self):
+        """Large discharge increase (more negative) is ramped."""
+        result = apply_ramp_rate(
+            target_setpoint_kw=-10.0, actual_battery_kw=0.0,
+            ramp_rate_kw_per_min=3.0, interval_seconds=20.0,
+        )
+        self.assertAlmostEqual(result, -1.0)
+
+    def test_small_change_passthrough(self):
+        """Small change within ramp limit passes through unchanged."""
+        result = apply_ramp_rate(
+            target_setpoint_kw=0.5, actual_battery_kw=0.0,
+            ramp_rate_kw_per_min=3.0, interval_seconds=20.0,
+        )
+        # max change = 1.0 kW, 0.5 < 1.0, so passthrough
+        self.assertAlmostEqual(result, 0.5)
+
+    def test_flip_from_charge_to_discharge_is_ramped(self):
+        """Flipping from +5kW charge to -5kW discharge is ramped over cycles."""
+        cycle1 = apply_ramp_rate(5.0, 0.0, 3.0, 20.0)   # actual=0, target=+5
+        self.assertAlmostEqual(cycle1, 1.0)                # can only move 1 kW
+        cycle2 = apply_ramp_rate(5.0, cycle1, 3.0, 20.0) # actual=1, target=+5
+        self.assertAlmostEqual(cycle2, 2.0)                # can only move 1 kW
+
+        # Flip to discharge
+        cycle3 = apply_ramp_rate(-5.0, cycle2, 3.0, 20.0) # actual=2, target=-5
+        self.assertAlmostEqual(cycle3, 1.0)                 # can only move 1 kW towards -5
+        cycle4 = apply_ramp_rate(-5.0, cycle3, 3.0, 20.0) # actual=1, target=-5
+        self.assertAlmostEqual(cycle4, 0.0)                 # crosses zero
+
+    def test_zero_actual_battery(self):
+        """When battery sensor reads 0, ramp from zero."""
+        result = apply_ramp_rate(
+            target_setpoint_kw=3.0, actual_battery_kw=0.0,
+            ramp_rate_kw_per_min=6.0, interval_seconds=10.0,
+        )
+        # max change = 6.0 * (10/60) = 1.0 kW
+        self.assertAlmostEqual(result, 1.0)
+
+    def test_custom_interval(self):
+        """Custom interval_seconds changes max step size."""
+        # 60 second cycle with 2 kW/min ramp = 2 kW max change
+        result = apply_ramp_rate(
+            target_setpoint_kw=5.0, actual_battery_kw=0.0,
+            ramp_rate_kw_per_min=2.0, interval_seconds=60.0,
+        )
+        self.assertAlmostEqual(result, 2.0)
+
+    def test_negative_ramp_rate_disables(self):
+        """Negative ramp_rate is treated as disabled (passthrough)."""
+        result = apply_ramp_rate(target_setpoint_kw=3.0, actual_battery_kw=0.0, ramp_rate_kw_per_min=-1.0)
+        self.assertAlmostEqual(result, 3.0)
 
 
 if __name__ == '__main__':
