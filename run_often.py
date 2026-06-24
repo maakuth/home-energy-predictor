@@ -57,7 +57,8 @@ def main():
 
     soc_str = f'{soc_pct:.1f}' if soc_pct is not None else 'unavailable'
     print(f'Battery SoC: {soc_str}%')
-    print(f'Battery Power: {battery_w:.0f}W')
+    direction = 'charging' if battery_w >= 0 else 'discharging'
+    print(f'Battery Power: {abs(battery_w):.0f}W ({direction})')
     print(f'Grid Power: {grid_w:.0f}W')
     print(f'Solar: {solar_kw:.2f}kW')
     print(f'GSHP: {gshp_kw:.2f}kW')

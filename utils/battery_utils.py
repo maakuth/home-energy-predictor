@@ -89,9 +89,11 @@ def push_battery_control(
         # Degradation mode: battery not available, skip gracefully
         action_str = f"({battery_action})" if battery_action != 'idle' else ""
         if battery_soc_pct is not None:
-            print(f'⊘ Battery Unavailable: {battery_power_w}W {action_str} [SoC {battery_soc_pct:.1f}%] (skipped)')
+            bat_dir = 'discharging' if battery_power_w >= 0 else 'charging'
+            print(f'⊘ Battery Unavailable: {abs(battery_power_w)}W ({bat_dir}) {action_str} [SoC {battery_soc_pct:.1f}%] (skipped)')
         else:
-            print(f'⊘ Battery Unavailable: {battery_power_w}W {action_str} (skipped)')
+            bat_dir = 'discharging' if battery_power_w >= 0 else 'charging'
+            print(f'⊘ Battery Unavailable: {abs(battery_power_w)}W ({bat_dir}) {action_str} (skipped)')
         return True  # Still return True to not break the plan
     
     try:
@@ -112,9 +114,11 @@ def push_battery_control(
         if result is not None:
             action_str = f"({battery_action})" if battery_action != 'idle' else ""
             if battery_soc_pct is not None:
-                print(f'✅ Battery Control: {battery_power_w}W {action_str} [SoC {battery_soc_pct:.1f}%]')
+                bat_dir = 'discharging' if battery_power_w >= 0 else 'charging'
+                print(f'✅ Battery Control: {abs(battery_power_w)}W ({bat_dir}) {action_str} [SoC {battery_soc_pct:.1f}%]')
             else:
-                print(f'✅ Battery Control: {battery_power_w}W {action_str}')
+                bat_dir = 'discharging' if battery_power_w >= 0 else 'charging'
+                print(f'✅ Battery Control: {abs(battery_power_w)}W ({bat_dir}) {action_str}')
             return True
         else:
             # result is None means error was already printed by call_ha_service
