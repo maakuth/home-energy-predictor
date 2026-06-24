@@ -320,6 +320,7 @@ def _save_net_metering_state(state: dict[str, Any], state_file: Optional[str] = 
 
 def compute_net_metering_setpoint(
     planned_battery_kw: float,
+    planned_action: str,
     planned_grid_import_kwh: float,
     planned_grid_export_kwh: float,
     cumulative_import_kwh: float,
@@ -333,13 +334,16 @@ def compute_net_metering_setpoint(
     Adjust battery power to match the planned net energy for the current interval
     using cumulative energy meter readings.
 
-    With net metering, the grid meter only cares about net energy per quarter.
-    This function uses a feedback loop: it compares actual net energy so far
-    against the planned net energy, and adjusts battery power so that the
-    remaining energy needed is spread evenly over the remaining interval.
+    Only applies correction for actions with meaningful net-energy targets:
+        charge_solar/discharge_load  — aim for the plan's grid targets
+        charge_grid/discharge_export — aim for the plan's grid targets
+
+    For idle and follow actions, no useful net-energy target exists so the
+    planned battery setpoint is returned unchanged.
 
     Args:
         planned_battery_kw: Planned battery power (positive=charge, negative=discharge)
+        planned_action: Battery action from the plan (idle, follow, charge_solar, etc.)
         planned_grid_import_kwh: Planned grid import for this interval
         planned_grid_export_kwh: Planned grid export for this interval
         cumulative_import_kwh: Current cumulative active import reading (kWh)
@@ -352,6 +356,10 @@ def compute_net_metering_setpoint(
     Returns:
         tuple: (adjusted_battery_kw, log_message)
     """
+    # Pass-through for actions without meaningful net-energy targets
+    if planned_action in ('idle', 'follow'):
+        return planned_battery_kw, ""
+
     state = _load_net_metering_state(state_file)
     
     # Interval start detection
@@ -505,6 +513,7 @@ def _save_setpoint_smooth_state(state: dict[str, Any], state_file: str | None = 
 
 def smooth_planned_setpoint(
     planned_battery_kw: float,
+    planned_action: str,
     actual_battery_w: float,
     plan: list[dict[str, Any]],
     state_file: str | None = None,
@@ -519,6 +528,10 @@ def smooth_planned_setpoint(
     This preserves the optimizer's delta (load changes, price response) while
     eliminating step-change oscillations from the plan reset at interval boundaries.
 
+    When transitioning to action 'idle', the setpoint is forced to zero —
+    carrying forward a prior charge/discharge bias to an idle interval creates
+    a deadlock with the net metering economic guard.
+
     The output is clamped to [-max_battery_kw, max_battery_kw] to prevent
     the delta formula from producing extreme values when prior_avg and
     prior_planned diverge (e.g., after a period where the economic guard
@@ -526,6 +539,7 @@ def smooth_planned_setpoint(
 
     Args:
         planned_battery_kw: Current interval's planned battery power (kW)
+        planned_action: Current interval's battery action (idle, follow, etc.)
         actual_battery_w: Current actual battery power (W)
         plan: Full optimization plan (list of dicts with 'battery_power_kw')
         state_file: Path to persistent state file
@@ -559,7 +573,10 @@ def smooth_planned_setpoint(
         prior_avg_kw = state.get('power_sum_kw', 0.0) / count if count > 0 else planned_battery_kw
         prior_planned_kw = state.get('prior_planned_kw', planned_battery_kw)
 
-        smoothed = prior_avg_kw + (planned_battery_kw - prior_planned_kw)
+        if planned_action == 'idle':
+            smoothed = 0.0
+        else:
+            smoothed = prior_avg_kw + (planned_battery_kw - prior_planned_kw)
         clamped = _clamp(smoothed)
 
         state['interval_index'] = interval_index

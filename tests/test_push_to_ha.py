@@ -554,6 +554,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: capture baseline
         compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.1,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -568,6 +569,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # Adjusted = -1.0 + (-2.4) = -3.4 kW
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.1,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.5,
@@ -583,6 +585,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: capture baseline
         compute_net_metering_setpoint(
             planned_battery_kw=2.0,
+            planned_action='charge_solar',
             planned_grid_import_kwh=0.0,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -597,6 +600,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # Adjusted = 2.0 + 1.8 = 3.8 kW (charge more to absorb the export)
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=2.0,
+            planned_action='charge_solar',
             planned_grid_import_kwh=0.0,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -612,6 +616,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: capture baseline
         compute_net_metering_setpoint(
             planned_battery_kw=-1.5,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.375,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -622,6 +627,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # Second call: actual matches planned
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=-1.5,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.375,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.375,
@@ -637,6 +643,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: interval starts, captures baseline
         adjusted1, log1 = compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.1,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=100.0,
@@ -651,6 +658,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # Second call: 5 minutes later, cumulative import increased by 0.5
         adjusted2, log2 = compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.1,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=100.5,
@@ -669,6 +677,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: capture baseline
         compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.1,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -680,6 +689,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # Second call: large deviation
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.1,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=5.0,
@@ -696,6 +706,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         """At interval start with zero elapsed, return planned power."""
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.1,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=100.0,
@@ -715,6 +726,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: capture baseline
         compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.0,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -729,6 +741,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # Adjusted = -1.0 + 1.8 = +0.8 kW (charge to absorb excess export)
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=-1.0,
+            planned_action='discharge_load',
             planned_grid_import_kwh=0.0,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -750,6 +763,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: capture baseline
         compute_net_metering_setpoint(
             planned_battery_kw=-2.0,
+            planned_action='discharge_export',
             planned_grid_import_kwh=0.0,
             planned_grid_export_kwh=0.4,
             cumulative_import_kwh=0.0,
@@ -766,6 +780,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # With guard: deviation>0 & planned_net<0 → cap at planned_battery_kw
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=-2.0,
+            planned_action='discharge_export',
             planned_grid_import_kwh=0.0,
             planned_grid_export_kwh=0.4,
             cumulative_import_kwh=0.0,
@@ -788,6 +803,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # First call: capture baseline
         compute_net_metering_setpoint(
             planned_battery_kw=2.0,
+            planned_action='charge_grid',
             planned_grid_import_kwh=0.4,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.0,
@@ -804,6 +820,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # With guard: deviation<0 & planned_net>0 → cap at planned_battery_kw
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=2.0,
+            planned_action='charge_grid',
             planned_grid_import_kwh=0.4,
             planned_grid_export_kwh=0.0,
             cumulative_import_kwh=0.1,
@@ -814,6 +831,36 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         # Guard should cap adjustment, not go above planned 2.0
         self.assertLessEqual(adjusted, 2.0)
         self.assertNotAlmostEqual(adjusted, 3.8, places=1)
+
+    def test_net_metering_idle_passes_through(self):
+        """Idle action passes planned setpoint through regardless of deviation."""
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.950,
+            cumulative_import_kwh=100.5,
+            cumulative_export_kwh=50.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+        )
+        self.assertAlmostEqual(adjusted, 0.0, places=2)
+        self.assertEqual(log, '')
+
+    def test_net_metering_follow_passes_through(self):
+        """Follow action passes planned setpoint through regardless of deviation."""
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=2.0,
+            planned_action='follow',
+            planned_grid_import_kwh=0.0,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=101.0,
+            cumulative_export_kwh=50.0,
+            elapsed_minutes=7,
+            interval_minutes=15,
+        )
+        self.assertAlmostEqual(adjusted, 2.0, places=2)
+        self.assertEqual(log, '')
 
 
 class TestAdjustChargeSolarRealTime(unittest.TestCase):
@@ -1035,7 +1082,8 @@ class TestSetpointSmoothing(unittest.TestCase):
         """First call with no prior state returns the planned value unchanged."""
         plan = self._make_plan([2.0, 1.0])
         result = smooth_planned_setpoint(
-            planned_battery_kw=2.0, actual_battery_w=1500, plan=plan,
+            planned_battery_kw=2.0, planned_action='follow',
+            actual_battery_w=1500, plan=plan,
         )
         self.assertAlmostEqual(result, 2.0)
 
@@ -1043,10 +1091,12 @@ class TestSetpointSmoothing(unittest.TestCase):
         """Subsequent calls in the same interval return the previously computed smoothed value."""
         plan = self._make_plan([2.0, 1.0])
         smooth_planned_setpoint(
-            planned_battery_kw=2.0, actual_battery_w=1500, plan=plan,
+            planned_battery_kw=2.0, planned_action='follow',
+            actual_battery_w=1500, plan=plan,
         )
         result = smooth_planned_setpoint(
-            planned_battery_kw=2.0, actual_battery_w=1600, plan=plan,
+            planned_battery_kw=2.0, planned_action='follow',
+            actual_battery_w=1600, plan=plan,
         )
         self.assertAlmostEqual(result, 2.0)
 
@@ -1068,7 +1118,8 @@ class TestSetpointSmoothing(unittest.TestCase):
             json.dump(state, f)
 
         result = smooth_planned_setpoint(
-            planned_battery_kw=5.0, actual_battery_w=3000, plan=plan,
+            planned_battery_kw=5.0, planned_action='follow',
+            actual_battery_w=3000, plan=plan,
         )
         # expected: 1.8 + (5.0 - 2.0) = 4.8
         self.assertAlmostEqual(result, 4.8)
@@ -1091,7 +1142,8 @@ class TestSetpointSmoothing(unittest.TestCase):
             json.dump(state, f)
 
         result = smooth_planned_setpoint(
-            planned_battery_kw=3.0, actual_battery_w=500, plan=plan,
+            planned_battery_kw=3.0, planned_action='follow',
+            actual_battery_w=500, plan=plan,
         )
         # expected: 0.1 + (3.0 - 0.0) = 3.1
         self.assertAlmostEqual(result, 3.1)
@@ -1114,7 +1166,8 @@ class TestSetpointSmoothing(unittest.TestCase):
             json.dump(state, f)
 
         result = smooth_planned_setpoint(
-            planned_battery_kw=50.0, actual_battery_w=100, plan=plan,
+            planned_battery_kw=50.0, planned_action='follow',
+            actual_battery_w=100, plan=plan,
             max_battery_kw=10.0,
         )
         self.assertAlmostEqual(result, 10.0)
@@ -1137,7 +1190,8 @@ class TestSetpointSmoothing(unittest.TestCase):
             json.dump(state, f)
 
         result = smooth_planned_setpoint(
-            planned_battery_kw=-50.0, actual_battery_w=-100, plan=plan,
+            planned_battery_kw=-50.0, planned_action='follow',
+            actual_battery_w=-100, plan=plan,
             max_battery_kw=10.0,
         )
         self.assertAlmostEqual(result, -10.0)
@@ -1146,10 +1200,58 @@ class TestSetpointSmoothing(unittest.TestCase):
         """First call also clamps to max_battery_kw."""
         plan = self._make_plan([20.0, 5.0])
         result = smooth_planned_setpoint(
-            planned_battery_kw=20.0, actual_battery_w=15000, plan=plan,
+            planned_battery_kw=20.0, planned_action='follow',
+            actual_battery_w=15000, plan=plan,
             max_battery_kw=10.0,
         )
         self.assertAlmostEqual(result, 10.0)
+
+    def test_idle_resets_to_zero(self):
+        """Transition from charge to idle forces smoothed setpoint to 0."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([4.0, 0.0])
+        state = {
+            'interval_index': interval_now - 1,
+            'power_sum_kw': 3.5,
+            'power_count': 1,
+            'prior_planned_kw': 4.0,
+            'smoothed_setpoint_kw': 4.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=0.0, planned_action='idle',
+            actual_battery_w=3500, plan=plan,
+        )
+        # idle forces reset to 0 regardless of prior avg
+        self.assertAlmostEqual(result, 0.0)
+
+    def test_idle_to_idle_stays_zero(self):
+        """Consecutive idle intervals keep setpoint at 0."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([0.0, 0.0])
+        state = {
+            'interval_index': interval_now - 1,
+            'power_sum_kw': 0.0,
+            'power_count': 1,
+            'prior_planned_kw': 0.0,
+            'smoothed_setpoint_kw': 0.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=0.0, planned_action='idle',
+            actual_battery_w=100, plan=plan,
+        )
+        self.assertAlmostEqual(result, 0.0)
 
 
 class TestRampRateLimiter(unittest.TestCase):

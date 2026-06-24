@@ -89,6 +89,7 @@ def main():
     # Smooth setpoint across interval boundaries using prior interval's average
     planned_battery_kw = smooth_planned_setpoint(
         planned_battery_kw=planned_battery_kw,
+        planned_action=planned_action,
         actual_battery_w=battery_w,
         plan=plan,
         max_battery_kw=max_battery_kw,
@@ -115,6 +116,7 @@ def main():
 
         adjusted_battery_kw, log_msg = compute_net_metering_setpoint(
             planned_battery_kw=planned_battery_kw,
+            planned_action=planned_action,
             planned_grid_import_kwh=planned_grid_import_kwh,
             planned_grid_export_kwh=planned_grid_export_kwh,
             cumulative_import_kwh=import_kwh,
