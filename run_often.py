@@ -131,8 +131,14 @@ def main():
         try:
             with open(net_state_file) as f:
                 net_state = json.load(f)
-            i_start = net_state.get('import_start', import_kwh)
-            e_start = net_state.get('export_start', export_kwh)
+            if 'import_start' not in net_state:
+                net_state['import_start'] = import_kwh
+                net_state['export_start'] = export_kwh
+                os.makedirs(os.path.dirname(net_state_file), exist_ok=True)
+                with open(net_state_file, 'w') as f:
+                    json.dump(net_state, f)
+            i_start = net_state['import_start']
+            e_start = net_state['export_start']
             interval_import = import_kwh - i_start
             interval_export = export_kwh - e_start
             interval_net = interval_import - interval_export
