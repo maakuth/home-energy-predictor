@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
-from utils.ha_utils import get_ha_state
+from utils.ha_utils import get_ha_state, push_ha_state
 from typing import cast
 from utils.type_defs import BatteryAction
 from utils.battery_utils import (
@@ -150,6 +150,15 @@ def main():
             else:
                 direction = 'net export'
             print(f'Net metering interval: {direction}, import={interval_import:.3f}kWh, export={interval_export:.3f}kWh, net={interval_net:+.3f}kWh, target={planned_net:+.3f}kWh')
+
+            push_ha_state('sensor.hepo_period_balance', f"{interval_net:.3f}", {
+                'friendly_name': 'HEPO Period Power Balance',
+                'unit_of_measurement': 'kWh',
+                'import_kwh': round(interval_import, 3),
+                'export_kwh': round(interval_export, 3),
+                'net_kw': round(interval_net * 4.0, 3),
+                'target_net_kwh': round(planned_net, 3),
+            })
         except (FileNotFoundError, KeyError, TypeError):
             pass
 

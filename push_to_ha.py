@@ -128,19 +128,6 @@ def push_plan() -> None:
     }
     push_ha_state('sensor.hepo_predicted_24h_usage', f"{usage_24h:.2f}", attributes_24h)
 
-    # Push current period power balance
-    current_import = current.get('grid_import_kwh', 0.0)
-    current_export = current.get('grid_export_kwh', 0.0)
-    current_net = current_import - current_export
-    push_ha_state('sensor.hepo_period_balance', f"{current_net:.3f}", {
-        'friendly_name': 'HEPO Period Power Balance',
-        'unit_of_measurement': 'kWh',
-        'import_kwh': round(current_import, 3),
-        'export_kwh': round(current_export, 3),
-        'net_kw': round(current_net * 4.0, 3),  # kWh to kW for 15-min interval
-    })
-    print(f'✅ Period Balance pushed: net={current_net:.3f} kWh (import={current_import:.3f}, export={current_export:.3f})')
-
 if __name__ == '__main__':
     push_plan()
     push_accuracy()

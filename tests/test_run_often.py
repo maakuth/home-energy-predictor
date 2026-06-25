@@ -78,6 +78,52 @@ class TestRunOften(unittest.TestCase):
 
         mock_push.assert_called_once()
 
+    @patch('run_often.push_ha_state')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_push_period_balance(self, mock_get_ha, mock_push_battery, mock_push_state):
+        """Period balance sensor is pushed with actual interval import/export values."""
+        # Set up cumulative meters that differ from baseline to get non-zero deltas
+        def state_side_effect(eid: str):
+            vals = {
+                'sensor.be_soc': '26.6',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '0.0',
+                'sensor.solarh_63038_real_power_kw': '0.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.8',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        # Pre-seed net metering state with baselines that differ from current readings
+        net_state = {
+            'interval_start': 97.5,
+            'import_start': 47.5,
+            'export_start': 50.0,
+            'planned_battery_kw': 0.0,
+        }
+        with open(os.path.join(self.test_dir, 'state', 'net_metering_state.json'), 'w') as f:
+            json.dump(net_state, f)
+
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '1'}):
+            from run_often import main
+            main()
+
+        mock_push_state.assert_called_once()
+        args, kwargs = mock_push_state.call_args
+        self.assertEqual(args[0], 'sensor.hepo_period_balance')
+        self.assertEqual(args[1], '1.700')  # 2.5 - 0.8
+        self.assertEqual(args[2]['import_kwh'], 2.5)
+        self.assertEqual(args[2]['export_kwh'], 0.8)
+        self.assertEqual(args[2]['net_kw'], 6.8)  # 1.7 * 4
+        self.assertEqual(args[2]['target_net_kwh'], 2.0)  # from plan: 2.0 - 0.0
+
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')
     def test_graceful_when_sensors_unavailable(self, mock_get_ha, mock_push):
