@@ -200,6 +200,48 @@ class TestPushPlan(unittest.TestCase):
         self.assertIsNotNone(low_cost_call, "low_cost_signal sensor push not found")
         self.assertEqual(low_cost_call[0][1], 'OFF')
 
+    @patch('push_to_ha.push_ha_state')
+    @patch('utils.battery_utils.is_battery_available')
+    @patch('utils.battery_utils.call_ha_service')
+    def test_push_period_balance(self, mock_service, mock_battery_available, mock_push):
+        """Test that period power balance sensor is pushed with import/export attributes."""
+        mock_battery_available.return_value = True
+        mock_service.return_value = {}
+
+        plan_data = [
+            {
+                'predicted_usage_kwh': 0.5,
+                'effective_cost': 0.08,
+                'gshp_intent': 'STOP',
+                'leaf_intent': 'OFF',
+                'battery_power_kw': 0.0,
+                'battery_action': 'follow',
+                'soc_pct': 50.0,
+                'grid_import_kwh': 2.5,
+                'grid_export_kwh': 0.8,
+            }
+        ]
+        plan_data.extend([plan_data[0].copy() for _ in range(95)])
+
+        with open(self.plan_file, 'w') as f:
+            json.dump(plan_data, f)
+
+        push_plan()
+
+        # Find the period balance push call
+        balance_call = None
+        for call in mock_push.call_args_list:
+            args, kwargs = call
+            if args[0] == 'sensor.hepo_period_balance':
+                balance_call = call
+                break
+
+        self.assertIsNotNone(balance_call, "period balance sensor push not found")
+        self.assertEqual(balance_call[0][1], '1.700')  # 2.5 - 0.8
+        self.assertEqual(balance_call[0][2]['import_kwh'], 2.5)
+        self.assertEqual(balance_call[0][2]['export_kwh'], 0.8)
+        self.assertEqual(balance_call[0][2]['net_kw'], 6.8)  # 1.7 * 4
+
 class TestBatteryAvailability(unittest.TestCase):
     @patch('utils.battery_utils.get_ha_state')
     def test_available_when_soc_sensor_online(self, mock_get_state):
