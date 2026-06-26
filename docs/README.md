@@ -1,4 +1,4 @@
-# Home Energy Predictor (HEPO) v1.7.0
+# Home Energy Predictor (HEPO) v1.13.1
 
 An ML-powered agent that predicts household energy consumption and optimizes usage against electricity spot prices using a Model Predictive Control (MPC) approach.
 
@@ -33,6 +33,7 @@ Licensed under AGPL-3.0.
 Pluggable architecture under `battery_planners/`:
 - **Heuristic Planner**: Marginal opportunity-cost ranking with gradual ramps.
 - **Nemotron-Linprog Planner**: LP-based dispatch using `scipy.optimize.linprog` (HiGHS) with configurable horizon, discount, terminal value, and degradation cost.
+- **Example Rule-Based Planner**: Simple threshold-based dispatch for reference/testing.
 - **Factory pattern** (`factory.py`) selects planner via `BATTERY_PLANNER_TYPE` env var.
 
 ### 5. Performance Analysis
@@ -42,35 +43,14 @@ Pluggable architecture under `battery_planners/`:
 
 ## Usage
 
-### Frequent Optimization (every 15-60 min)
-```bash
-./run_frequent.sh
-```
-Extracts 3 days, predicts from "now", optimizes battery/GSHP/EV, pushes to HA.
+See `docs/SCHEDULES.md` for detailed schedules and systemd timer examples.
 
-### Mid-Cycle Update (every 2-5 min)
-```bash
-./run_often.py
-```
-Lightweight: reads current HA state, computes battery setpoint from existing plan, pushes single power command.
-
-### Weekly Retraining
-```bash
-./run_weekly.sh
-```
-Extracts 730 days, retrains XGBoost + SARIMA, runs analysis for last 14 days.
-
-### Automation (Cron)
-```bash
-# Battery setpoint update every 5 minutes
-*/5 * * * * /path/to/hepo/.venv/bin/python3 /path/to/hepo/run_often.py >> /path/to/hepo/frequent.log 2>&1
-
-# Full re-optimization every 30 minutes
-*/30 * * * * /path/to/hepo/run_frequent.sh >> /path/to/hepo/frequent.log 2>&1
-
-# Weekly retraining every Sunday at 04:00
-0 4 * * 0 /path/to/hepo/run_weekly.sh >> /path/to/hepo/weekly.log 2>&1
-```
+| Script | Frequency | Purpose |
+|--------|-----------|---------|
+| `run_often.py` | Every 20 seconds | Load-following battery setpoint from current plan |
+| `run_frequent.sh` | Every 15 minutes | Full re-optimization (extract, predict, optimize, push) |
+| `run_slow.sh` | Every hour at :57 | SARIMA benchmark prediction (non-critical) |
+| `run_weekly.sh` | Monday 02:00 | Retrain models, run performance analysis |
 
 ## Configuration
 
@@ -102,14 +82,28 @@ See `docs/ENV_VARIABLES.md` for detailed documentation of all parameters.
 | `battery_planners/` | Pluggable battery dispatch algorithms |
 | `check_battery_state.py` | Quick HA battery SOC/power diagnostic |
 | `compare_models.py` | Compare XGBoost vs SARIMA performance |
+| `run_often.py` | Load-following battery setpoint (high-frequency) |
+| `run_frequent.sh` | Full re-optimization pipeline |
+| `run_slow.sh` | SARIMA benchmark prediction |
+| `run_weekly.sh` | Weekly retraining + analysis |
+| `dump_battery_data.py` | Export battery/sensor data for replay testing |
+| `find_ha_entities.py` | Discover and list HA sensor entity IDs |
+| `find_wind_sensor.py` | Locate wind sensor entity |
+| `estimate_fireplace_savings.py` | Estimate savings from fireplace usage |
+| `bench_lp_horizon.py` | LP planner horizon benchmark (quick) |
+| `bench_lp_horizon_full.py` | LP planner horizon benchmark (full-length) |
+| `db_migrate_idle_to_follow.py` | DB migration utility |
+| `utils/` | Shared utility modules (HA, DB, prices, battery, etc.) |
+| `tests/` | Pytest test suite |
 | `hepo.db` | SQLite database for predictions & metrics |
+| `VERSION` | Semantic version string |
 
 ## Tests
 
 ```bash
 venv/bin/python3 -m pytest
-# Fast subset (skip slow SARIMA tests):
-venv/bin/python -m pytest -k 'not sarima'
+# Fast subset (skip slow tests):
+venv/bin/python -m pytest -k 'not slow'
 ```
 
 Run full suite before committing. See `AGENTS.md` for development guidelines.
