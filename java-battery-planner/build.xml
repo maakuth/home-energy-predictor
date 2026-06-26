@@ -1,0 +1,99 @@
+<project name="battery-planner" default="test">
+
+  <property name="src.dir" location="src/main/java"/>
+  <property name="test.src.dir" location="src/test/java"/>
+  <property name="build.dir" location="build"/>
+  <property name="classes.dir" location="${build.dir}/classes"/>
+  <property name="test.classes.dir" location="${build.dir}/test-classes"/>
+  <property name="reports.dir" location="${build.dir}/test-reports"/>
+  <property name="lib.dir" location="${build.dir}/lib"/>
+  <property name="fixtures.dir" location="fixtures"/>
+  <property name="ivy.version" value="2.5.3"/>
+  <property name="ivy.jar.dir" value="${user.home}/.ant/lib"/>
+  <property name="ivy.jar.file" value="${ivy.jar.dir}/ivy-${ivy.version}.jar"/>
+
+  <path id="lib.path">
+    <fileset dir="${lib.dir}" includes="*.jar" excludes="*-javadoc.jar *-sources.jar"/>
+  </path>
+
+  <available file="${ivy.jar.file}" property="ivy.available"/>
+
+  <target name="bootstrap" description="Download Ivy if not present" unless="ivy.available">
+    <mkdir dir="${ivy.jar.dir}"/>
+    <get src="https://repo1.maven.org/maven2/org/apache/ivy/ivy/${ivy.version}/ivy-${ivy.version}.jar"
+         dest="${ivy.jar.file}" usetimestamp="true"/>
+  </target>
+
+  <target name="ivy-init" depends="bootstrap" unless="ivy.init">
+    <taskdef name="ivy-retrieve" classname="org.apache.ivy.ant.IvyRetrieve"
+             classpath="${ivy.jar.file}"/>
+    <property name="ivy.init" value="true"/>
+  </target>
+
+  <target name="resolve" depends="ivy-init" description="Resolve dependencies via Ivy">
+    <ivy-retrieve pattern="${lib.dir}/[artifact]-[revision](-[classifier]).[ext]" sync="true"/>
+  </target>
+
+  <target name="compile" depends="resolve" description="Compile main sources">
+    <mkdir dir="${classes.dir}"/>
+    <javac srcdir="${src.dir}" destdir="${classes.dir}" release="21"
+           includeantruntime="false" encoding="UTF-8">
+      <classpath refid="lib.path"/>
+    </javac>
+  </target>
+
+  <target name="compile-tests" depends="compile" description="Compile test sources">
+    <mkdir dir="${test.classes.dir}"/>
+    <javac srcdir="${test.src.dir}" destdir="${test.classes.dir}" release="21"
+           includeantruntime="false" encoding="UTF-8">
+      <classpath>
+        <pathelement location="${classes.dir}"/>
+        <path refid="lib.path"/>
+      </classpath>
+    </javac>
+  </target>
+
+  <target name="fixtures" description="Convert Python .pkl fixtures to .json">
+    <exec executable="python3" dir="${basedir}">
+      <arg value="scripts/convert_pkl_to_json.py"/>
+      <arg value="--input-dir"/>
+      <arg value="../tests/fixtures"/>
+      <arg value="--output-dir"/>
+      <arg value="fixtures"/>
+    </exec>
+  </target>
+
+  <target name="test" depends="compile-tests" description="Run JUnit 5 tests">
+    <mkdir dir="${reports.dir}"/>
+    <java classname="org.junit.platform.console.ConsoleLauncher" fork="true"
+          failonerror="true" logError="true">
+      <classpath>
+        <pathelement location="${classes.dir}"/>
+        <pathelement location="${test.classes.dir}"/>
+        <path refid="lib.path"/>
+      </classpath>
+      <arg value="--select-package=batteryplanner"/>
+      <arg value="--reports-dir=${reports.dir}"/>
+      <arg value="--disable-ansi-colors"/>
+      <arg value="--details=none"/>
+    </java>
+  </target>
+
+  <target name="run" depends="compile" description="Run demo with first fixture">
+    <java classname="batteryplanner.BatteryPlannerReplayTest" fork="true" failonerror="true">
+      <classpath>
+        <pathelement location="${classes.dir}"/>
+        <path refid="lib.path"/>
+      </classpath>
+    </java>
+  </target>
+
+  <target name="clean" description="Remove build artifacts">
+    <delete dir="${build.dir}"/>
+  </target>
+
+  <target name="clean-all" depends="clean" description="Remove build artifacts and Ivy cache">
+    <delete dir="${ivy.jar.dir}"/>
+  </target>
+
+</project>
