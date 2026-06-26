@@ -17,8 +17,18 @@ source .venv/bin/activate
   # SARIMA Prediction (Benchmark)
   # This runs the benchmark model and archives predictions for later analysis.
   # Does not affect the house plan — slow tasks are safe to skip/run infrequently.
+
+  # Snapshot shared state files for exclusive slow-task use (cp + atomic mv)
+  # so we never compete with run_frequent.sh / run_weekly.sh writes.
+  cp state/processed_data.csv state/.processed_data_slow.tmp 2>/dev/null && \
+    mv state/.processed_data_slow.tmp state/processed_data_slow.csv 2>/dev/null || true
+  cp state/sarima_model_params.pkl state/.sarima_model_params_slow.tmp 2>/dev/null && \
+    mv state/.sarima_model_params_slow.tmp state/sarima_model_params_slow.pkl 2>/dev/null || true
+
   echo "[1/1] Predicting Future (SARIMA Benchmark)..."
-  python3 sarimax_predictor.py
+  SLOW_DATA_PATH=state/processed_data_slow.csv \
+  SLOW_PARAMS_PATH=state/sarima_model_params_slow.pkl \
+    python3 sarimax_predictor.py
 
   echo "=== Slow Task Complete: $(date) ==="
 

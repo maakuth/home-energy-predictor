@@ -247,8 +247,8 @@ def archive_sarimax_predictions(
         print(f"⚠️ Error archiving SARIMA to SQLite: {e}")
 
 def main() -> None:
-    # Support environment variable override for testing
-    params_path = os.getenv('TEST_SARIMA_PARAMS', 'state/sarima_model_params.pkl')
+    # Support environment variable override for testing and slow-task isolation
+    params_path = os.getenv('SLOW_PARAMS_PATH') or os.getenv('TEST_SARIMA_PARAMS', 'state/sarima_model_params.pkl')
 
     if not os.path.exists(params_path):
         print(f"⚠️ No SARIMA parameters found at {params_path}. Please run train_sarima.py first.")
@@ -262,7 +262,8 @@ def main() -> None:
         fcntl.flock(f, fcntl.LOCK_UN)
     
     # 2. Load latest data for anchoring (at least 2 days to maintain seasonal state)
-    ts_data = load_historical_data(last_n_days=3)
+    data_path = os.getenv('SLOW_DATA_PATH', 'state/processed_data.csv')
+    ts_data = load_historical_data(file_path=data_path, last_n_days=3)
     if ts_data is None:
         return
 
