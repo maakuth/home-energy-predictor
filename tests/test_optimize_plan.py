@@ -950,6 +950,40 @@ class OptimizePlanTests(unittest.TestCase):
                         "Should not charge on unprofitable micro-spread")
         self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 0.0, places=5)
 
+    def test_import_price_floor_suppresses_grid_charge_at_sub_floor_prices(self):
+        """Import price floor prevents treating ultra-low spot as cheap charging opportunity.
+
+        Scenario: floor=0.10, spots=[0.01, 0.10]. Without floor, interval 0 looks
+        like a cheap 0.01 charging opportunity vs future 0.10 → grid charges.
+        With floor, interval 0 appears as 0.10 == future → no profit → no grid charge.
+        """
+        with patched_env(
+            {
+                "BATTERY_CAPACITY_KWH": "10",
+                "BATTERY_MIN_SOC_PCT": "10",
+                "BATTERY_MAX_SOC_PCT": "90",
+                "BATTERY_INITIAL_SOC_PCT": "10",
+                "BATTERY_MAX_CHARGE_KW": "5",
+                "BATTERY_MAX_DISCHARGE_KW": "5",
+                "BATTERY_CHARGE_EFFICIENCY": "1.0",
+                "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
+                "BATTERY_ALLOW_EXPORT": "false",
+                "IMPORT_PRICE_FLOOR_EUR_PER_KWH": "0.10",
+            }
+        ):
+            # Spot 0.01 → floored to 0.10, matching future price 0.10 → no spread
+            predictions = np.array([0.0, 2.0])
+            solar = np.array([0.0, 0.0])
+            import_prices = np.array([0.01, 0.10])
+            export_prices = np.array([0.01, 0.10])
+
+            with patched_env({"PLAN_INTERVAL_MINUTES": "60"}):
+                plan = plan_battery_dispatch(predictions, solar, import_prices, export_prices)
+
+        # Interval 0: price floored to 0.10 == best future value 0.10 → not profitable
+        self.assertEqual(plan[0]["battery_action"], "idle")
+        self.assertAlmostEqual(plan[0]["charge_from_grid_kwh"], 0.0, places=5)
+
     def test_solar_inclusive_arbitrage(self):
         """Battery should grid-charge for near-term arbitrage even with solar present."""
         with patched_env(

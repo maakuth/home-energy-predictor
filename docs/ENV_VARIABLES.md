@@ -36,6 +36,7 @@ All monetary values are in **EUR per kWh** unless noted otherwise. These are con
 | Variable | Description | Example | Notes |
 |----------|-------------|---------|-------|
 | `GRID_FEES_EUR_PER_KWH` | Single combined value for all grid transfer fees, taxes, VAT, and fixed adders. | `0.06` | When the fetched market prices are **already inclusive** of fees, this is subtracted to estimate export revenue. When prices are **raw spot prices**, this is added to compute the import price. |
+| `IMPORT_PRICE_FLOOR_EUR_PER_KWH` | Minimum import price for the battery optimiser. Prices below this floor are raised to the floor before any battery charge/discharge decision. | `0.0` | Default `0.0` (no effect). Set > 0 (e.g. `0.03`) when your contract has a fixing point + variable delta such that ultra-low spot prices aren't realised. Only affects battery planners; EV, GSHP, Leaf see real spot prices. Applied in both `HeuristicBatteryPlanner` and `NemotronLinprogPlanner`. |
 
 ---
 

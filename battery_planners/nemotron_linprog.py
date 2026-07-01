@@ -111,6 +111,11 @@ class NemotronLinprogPlanner(BatteryPlanner):
         # Predictions and solar are already in kWh per interval (API contract)
         import_prices = np.array(import_prices, dtype=float)
         export_prices = np.array(export_prices, dtype=float)
+
+        # Apply import price floor (contract fixing point + variable delta)
+        import_price_floor = get_env_float('IMPORT_PRICE_FLOOR_EUR_PER_KWH', 0.0)
+        if import_price_floor > 0:
+            import_prices = np.maximum(import_prices, import_price_floor)
         
         # Net load without battery (positive = load, negative = solar surplus)
         net_without_battery_kwh = np.array(predictions_kwh, dtype=float) - np.array(solar_kwh, dtype=float)

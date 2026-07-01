@@ -276,6 +276,11 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         max_soc_kwh = capacity_kwh * max(max_soc_pct, 0.0) / 100.0
         soc_kwh = min(max(capacity_kwh * effective_initial_soc_pct / 100.0, min_soc_kwh), max_soc_kwh)
         
+        # Apply import price floor (contract fixing point + variable delta)
+        import_price_floor = get_env_float('IMPORT_PRICE_FLOOR_EUR_PER_KWH', 0.0)
+        if import_price_floor > 0:
+            import_prices = np.maximum(import_prices, import_price_floor)
+
         horizon = len(predictions_kwh)
         net_without_battery = np.array(predictions_kwh, dtype=float) - np.array(solar_kwh, dtype=float)
         
