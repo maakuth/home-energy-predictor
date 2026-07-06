@@ -31,7 +31,7 @@ class OftenLogParser:
 
     SENSOR_PATTERNS: dict[str, re.Pattern] = {
         'soc':       re.compile(r"Battery SoC:\s*([\d.]+)%"),
-        'batt_power': re.compile(r"Battery Power:\s*([\d-]+)W\s*\((.*?)\)"),
+        'batt_power': re.compile(r"Battery Power:\s*([\d-]+)W(?:\s*\((.*?)\))?"),
         'grid_power': re.compile(r"Grid Power:\s*([\d-]+)W"),
         'solar':     re.compile(r"Solar:\s*([\d.]+)kW"),
         'gshp':      re.compile(r"GSHP:\s*([\d.]+)kW"),
@@ -56,7 +56,7 @@ class OftenLogParser:
                     if m:
                         if key == 'batt_power':
                             entry['batt_power_w'] = float(m.group(1))
-                            entry['batt_mode'] = m.group(2).strip()
+                            entry['batt_mode'] = m.group(2).strip() if m.lastindex and m.group(2) is not None else 'unknown'
                         else:
                             entry[key] = float(m.group(1))
                         found = True
@@ -298,6 +298,7 @@ def build_comparison(
             'solar_kw': actual_resampled['solar_kw'][i],
             'grid_w': actual_resampled['grid_power_w'][i],
             'batt_power_w': actual_resampled['batt_power_w'][i],
+            'leaf_kw': actual_resampled['leaf_kw'][i] if 'leaf_kw' in actual_resampled else 0,
         }
 
     results = []
@@ -340,6 +341,14 @@ def build_comparison(
             gshp_diff = None
             solar_diff = None
 
+        # Reconstruct actual baseload from actual measurements
+        actual_grid_kw = (actual['grid_w'] / 1000.0) if actual and actual['grid_w'] is not None else None
+        actual_batt_kw = (actual['batt_power_w'] / 1000.0) if actual and actual['batt_power_w'] is not None else 0.0
+        actual_leaf_kw = actual['leaf_kw'] if actual and actual['leaf_kw'] is not None else 0.0
+        actual_baseload = None
+        if actual_grid_kw is not None and actual['solar_kw'] is not None and actual['gshp_kw'] is not None:
+            actual_baseload = max(0.0, actual_grid_kw + actual['solar_kw'] - actual['gshp_kw'] - actual_batt_kw - actual_leaf_kw)
+
         results.append({
             'time': entry['time'],
             'plan_soc': entry['soc'],
@@ -353,10 +362,158 @@ def build_comparison(
             'solar_diff': solar_diff,
             'plan_grid': entry['grid_kw'],
             'plan_baseload': entry['baseload'],
+            'actual_baseload': actual_baseload,
+            'actual_grid_kw': actual_grid_kw,
+            'actual_batt_kw': actual_batt_kw,
             'battery_intent': entry.get('battery_intent', ''),
         })
 
     return results
+
+
+def compute_attribution(
+    comparison: list[dict],
+    battery_capacity_kwh: float = 50.0,
+    interval_hours: float = 0.25,
+) -> dict:
+    """Decompose SoC error into GSHP, baseload, and solar contributions.
+
+    The total load error = (planned_gshp + planned_baseload) - (actual_gshp + actual_baseload).
+    Each component's contribution is its share of this total error, converted
+    to kWh energy and then to SoC percentage impact.
+
+    Returns dict with per-component error breakdown and cumulative totals.
+    """
+    total_gshp_kwh = 0.0
+    total_baseload_kwh = 0.0
+    total_solar_kwh = 0.0
+    total_actual_soc_delta = 0.0
+    periods = 0
+
+    for r in comparison:
+        if r['actual_baseload'] is None:
+            continue
+        pg = r['plan_gshp'] or 0.0
+        ag = r['actual_gshp'] or 0.0
+        pb = r['plan_baseload'] or 0.0
+        ab = r['actual_baseload'] or 0.0
+        ps = r['plan_solar'] or 0.0
+        a_s = r['actual_solar'] or 0.0
+
+        gshp_err_kw = pg - ag
+        baseload_err_kw = pb - ab
+        solar_err_kw = a_s - ps  # inverted: more solar = less grid need
+        total_err_kw = (pg + pb) - (ag + ab)
+
+        es = gshp_err_kw * interval_hours
+        eb = baseload_err_kw * interval_hours
+        eso = solar_err_kw * interval_hours
+
+        total_gshp_kwh += es
+        total_baseload_kwh += eb
+        total_solar_kwh += eso
+        periods += 1
+
+    total_err_kwh = total_gshp_kwh + total_baseload_kwh + total_solar_kwh
+    soc_impact = total_err_kwh / battery_capacity_kwh * 100 if battery_capacity_kwh > 0 else 0
+
+    abs_total = abs(total_gshp_kwh) + abs(total_baseload_kwh) + abs(total_solar_kwh)
+    if abs_total > 0:
+        gshp_pct = abs(total_gshp_kwh) / abs_total * 100
+        baseload_pct = abs(total_baseload_kwh) / abs_total * 100
+        solar_pct = abs(total_solar_kwh) / abs_total * 100
+    else:
+        gshp_pct = baseload_pct = solar_pct = 0
+
+    return {
+        'periods': periods,
+        'gshp_kwh': total_gshp_kwh,
+        'baseload_kwh': total_baseload_kwh,
+        'solar_kwh': total_solar_kwh,
+        'total_err_kwh': total_err_kwh,
+        'soc_impact_pct': soc_impact,
+        'gshp_pct': gshp_pct,
+        'baseload_pct': baseload_pct,
+        'solar_pct': solar_pct,
+    }
+
+
+def print_attribution(comparison: list[dict], battery_capacity_kwh: float = 50.0) -> None:
+    """Print error attribution table."""
+    attr = compute_attribution(comparison, battery_capacity_kwh)
+
+    if attr['periods'] == 0:
+        print("No data for attribution.")
+        return
+
+    # Also compute per-interval deltas for the last few periods
+    print(f"{'='*60}")
+    print(f"  ERROR ATTRIBUTION (capacity={battery_capacity_kwh:.0f} kWh)")
+    print(f"{'='*60}")
+    fmt = "{:<16s} {:>10s} {:>10s} {:>12s} {:>10s}"
+    print(fmt.format("Component", "Error kWh", "SoC Impact", "% of Abs Error", "Direction"))
+    print(f"  {'-'*58}")
+    print(fmt.format("GSHP", f"{attr['gshp_kwh']:+.2f}", f"{attr['gshp_kwh']/battery_capacity_kwh*100:+.2f}%",
+                     f"{attr['gshp_pct']:.0f}%",
+                     "over-predicted" if attr['gshp_kwh'] > 0 else "under-predicted"))
+    print(fmt.format("Baseload", f"{attr['baseload_kwh']:+.2f}", f"{attr['baseload_kwh']/battery_capacity_kwh*100:+.2f}%",
+                     f"{attr['baseload_pct']:.0f}%",
+                     "over-predicted" if attr['baseload_kwh'] > 0 else "under-predicted"))
+    print(fmt.format("Solar", f"{attr['solar_kwh']:+.2f}", f"{attr['solar_kwh']/battery_capacity_kwh*100:+.2f}%",
+                     f"{attr['solar_pct']:.0f}%",
+                     "over-forecast" if attr['solar_kwh'] > 0 else "under-forecast"))
+    print(f"  {'-'*58}")
+    print(fmt.format("Total", f"{attr['total_err_kwh']:+.2f}", f"{attr['soc_impact_pct']:+.2f}%",
+                     "100%", ""))
+    print(f"  Periods: {attr['periods']}")
+
+
+def print_trending(
+    often: OftenLogParser,
+    frequent: FrequentLogParser,
+    every_n: int = 50,
+    battery_capacity_kwh: float = 50.0,
+) -> None:
+    """Sweep through plans and show key metrics over time."""
+    n_plans = len(frequent.plans)
+    print(f"{'='*80}")
+    print(f"  PLAN TRENDING (every {every_n}th plan of {n_plans} total)")
+    print(f"{'='*80}")
+    fmt = "{:<6s} {:<10s} {:>8s} {:>10s} {:>12s} {:>10s} {:>6s}"
+    print(fmt.format("Plan#", "Date", "SoC MAE", "GSHP Factor", "Baseload Bias", "Solar Bias", "Samples"))
+    print(f"  {'-'*62}")
+
+    for idx in range(0, n_plans, every_n):
+        comp = build_comparison(often, frequent, plan_index=idx)
+        if not comp:
+            continue
+
+        soc_diffs = [r['soc_diff'] for r in comp if r['soc_diff'] is not None]
+        if not soc_diffs:
+            continue
+
+        mae = sum(abs(d) for d in soc_diffs) / len(soc_diffs)
+
+        plan_gshp_on = sum(1 for r in comp if r['plan_gshp'] is not None and r['plan_gshp'] > 0.5)
+        actual_gshp_on = sum(1 for r in comp if r['actual_gshp'] is not None and r['actual_gshp'] > 0.5)
+        gshp_factor = plan_gshp_on / max(actual_gshp_on, 1)
+
+        baseload_diffs = [
+            (r['plan_baseload'] or 0) - (r['actual_baseload'] or 0)
+            for r in comp if r['actual_baseload'] is not None
+        ]
+        baseload_bias = sum(baseload_diffs) / len(baseload_diffs) if baseload_diffs else 0
+
+        solar_diffs = [
+            (r['plan_solar'] or 0) - (r['actual_solar'] or 0)
+            for r in comp if r['actual_solar'] is not None
+        ]
+        solar_bias = sum(solar_diffs) / len(solar_diffs) if solar_diffs else 0
+
+        date = comp[0]['time'][:5]
+        print(f"  {idx:<4}  {date:<8} {mae:>7.2f}%  {gshp_factor:>7.1f}x  {baseload_bias:>+10.3f}kW  {solar_bias:>+8.3f}kW  {len(comp):>5d}")
+
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +680,14 @@ def main():
                         help='Show hourly average comparison')
     parser.add_argument('--stats', action='store_true',
                         help='Show detailed statistics (MAE, bias, RMSE)')
+    parser.add_argument('--attribution', action='store_true',
+                        help='Decompose SoC error into GSHP/baseload/solar contributions')
+    parser.add_argument('--trending', action='store_true',
+                        help='Show key metrics across multiple plans over time')
+    parser.add_argument('--every-n', type=int, default=50,
+                        help='Sample every Nth plan for trending (default: 50)')
+    parser.add_argument('--battery-capacity', type=float, default=50.0,
+                        help='Battery capacity in kWh for attribution (default: 50.0)')
     args = parser.parse_args()
 
     print(f"Parsing run-often log: {args.often}")
@@ -539,6 +704,10 @@ def main():
         print_plans_list(frequent)
         return
 
+    if args.trending:
+        print_trending(often, frequent, every_n=args.every_n, battery_capacity_kwh=args.battery_capacity)
+        return
+
     comparison = build_comparison(often, frequent, plan_index=args.plan)
 
     # Filter by time range if requested
@@ -553,7 +722,9 @@ def main():
             filtered.append(r)
         comparison = filtered
 
-    if args.detail:
+    if args.attribution:
+        print_attribution(comparison, battery_capacity_kwh=args.battery_capacity)
+    elif args.detail:
         print_detail(comparison, n=args.n)
     elif args.gshp:
         print_gshp_analysis(comparison, args.n)
