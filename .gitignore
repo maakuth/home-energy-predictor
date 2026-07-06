@@ -13,6 +13,10 @@ ENV/
 # Data and Model Artifacts
 *.csv
 *.json
+
+# But allow JSON fixtures for the Java battery planner tests
+!java-battery-planner/fixtures/*.json
+
 hepo.db
 sarima_model_params.pkl
 sarima_train_end.txt
@@ -20,5 +24,6 @@ sarima_train_end.txt
 # Runtime state directory
 state/
 
-# Temporary log file
+# Temporary log files
 recentlog.txt
+recentlog-*.txt

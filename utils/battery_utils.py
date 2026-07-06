@@ -580,7 +580,18 @@ def smooth_planned_setpoint(
         if planned_action == 'idle':
             smoothed = 0.0
         else:
+            # Delta smoothing: preserve prior interval's trajectory but
+            # under current plan's delta. However, net metering corrections
+            # in the prior interval can drive actual power far from the plan,
+            # which then bleeds across the boundary as a sign inversion
+            # (e.g. discharge_load -0.02kW becomes +2.93kW charging).
+            # Clamp to zero when the smoothed value flips direction vs
+            # the current plan's intended sign.
             smoothed = prior_avg_kw + (planned_battery_kw - prior_planned_kw)
+            if planned_battery_kw > 0 and smoothed < 0:
+                smoothed = 0.0
+            elif planned_battery_kw < 0 and smoothed > 0:
+                smoothed = 0.0
         clamped = _clamp(smoothed)
 
         state['interval_index'] = interval_index

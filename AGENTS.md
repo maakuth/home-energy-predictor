@@ -167,3 +167,34 @@ Example: LP horizon sweep gave these results:
 - Quick (24h): 6h avg +19.9%, 12h avg +4.0%, 24h avg -16.3%
 - Full-length: 6h avg +13.4%, 12h avg +41.8%, 24h avg +46.0%
 → The quick test's ranking was completely inverted vs reality.
+
+## Log Analysis Utilities
+
+### `utils/compare_plan_logs.py`
+Compare optimisation plans (from run-frequent logs) against actual measurements
+(from run-often logs). Parses syslog-style logs, resamples 20s readings to 15min
+intervals, then compares planned vs actual SoC/GSHP/solar/grid.
+
+```bash
+# Default: use recentlog.txt and recentlog-frequent.txt in cwd
+venv/bin/python3 utils/compare_plan_logs.py --summary
+
+# List available plans (154 shown, one per 15-min run):
+venv/bin/python3 utils/compare_plan_logs.py --plans
+
+# Compare against a specific plan (e.g. plan #55 from midday):
+venv/bin/python3 utils/compare_plan_logs.py --plan 55 --summary
+
+# Point to arbitrary log files (e.g. archived logs):
+venv/bin/python3 utils/compare_plan_logs.py \
+  --often /path/to/old-recentlog.txt \
+  --frequent /path/to/old-recentlog-frequent.txt \
+  --summary
+
+# Detailed views:
+venv/bin/python3 utils/compare_plan_logs.py --detail --n 24   # first 24 rows
+venv/bin/python3 utils/compare_plan_logs.py --gshp --n 20     # GSHP focus
+venv/bin/python3 utils/compare_plan_logs.py --solar            # solar focus
+venv/bin/python3 utils/compare_plan_logs.py --hourly           # hourly averages
+venv/bin/python3 utils/compare_plan_logs.py --stats            # MAE/RMSE/bias
+```

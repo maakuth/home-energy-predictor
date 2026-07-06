@@ -901,6 +901,7 @@ class OptimizePlanTests(unittest.TestCase):
                 "BATTERY_DISCHARGE_EFFICIENCY": "1.0",
                 "BATTERY_ALLOW_EXPORT": "false",
                 "BATTERY_GRID_CHARGE_MIN_MARGIN_EUR_PER_KWH": "0.005",
+                "IMPORT_PRICE_FLOOR_EUR_PER_KWH": "0.0",
             }
         ):
             # Prices: 0.05 (cheap), 0.20 (expensive), 0.20, 0.03 (cheaper, far away)
