@@ -287,6 +287,24 @@ def store_performance_results(results: dict[str, Any]) -> None:
     except Exception as e:
         print(f"⚠️ Error storing analysis results: {e}")
 
+def backtest_sarima_model(df_actual: pd.DataFrame) -> pd.DataFrame:
+    """Compare archived SARIMA predictions against actuals for hindsight evaluation."""
+    from compare_models import get_archived_sarima_predictions
+
+    sarima_df = get_archived_sarima_predictions(days=14)
+    if sarima_df.empty:
+        print("⚠️ No archived SARIMA predictions found. Skipping SARIMA backtest.")
+        return pd.DataFrame()
+
+    df_hindsight = sarima_df.join(df_actual, how='inner')
+    if df_hindsight.empty:
+        print("⚠️ No overlapping data between SARIMA predictions and actuals.")
+        return pd.DataFrame()
+
+    df_hindsight.columns = ['hindsight_usage', 'actual_usage']
+    return df_hindsight
+
+
 def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
     """
     Run a 'hindsight' prediction using the CURRENT model on PAST features.
@@ -426,11 +444,10 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
             store_performance_results(results)
             print("✅ Performance analysis stored in hepo.db")
 
-    # 2. Hindsight Backtest (How would the current model have done?)
+    # 2a. Hindsight Backtest (How would the current XGBoost model have done?)
     if do_backtest:
         df_hindsight = backtest_current_model(df_actual)
         if not df_hindsight.empty:
-            # Join hindsight with actuals
             hindsight_comp = df_hindsight.join(df_actual, how='inner')
             h_res_3h = hindsight_comp.resample('3h').mean(numeric_only=True).dropna()
             
@@ -439,13 +456,28 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
                 h_mae = h_res_3h['error'].abs().mean()
                 h_bias = h_res_3h['error'].mean()
                 
-                print(f"\nHINDSIGHT PERFORMANCE (Current Model on same history):")
+                print(f"\nHINDSIGHT PERFORMANCE (XGBoost on same history):")
                 print(f"  MAE:  {h_mae:.3f} kW")
                 print(f"  Bias: {h_bias:+.3f} kW")
                 
                 if not comparison.empty and not res_3h.empty:
                     improvement = ((mae - h_mae) / mae) * 100 if mae > 0 else 0
                     print(f"  Improvement vs Real-time: {improvement:+.1f}%")
+
+    # 2b. SARIMA Backtest (Archived SARIMA predictions vs actuals)
+    if do_backtest:
+        df_sarima_bt = backtest_sarima_model(df_actual)
+        if not df_sarima_bt.empty:
+            s_res_3h = df_sarima_bt.resample('3h').mean(numeric_only=True).dropna()
+            
+            if not s_res_3h.empty:
+                s_res_3h['error'] = s_res_3h['hindsight_usage'] - s_res_3h['actual_usage']
+                s_mae = s_res_3h['error'].abs().mean()
+                s_bias = s_res_3h['error'].mean()
+                
+                print(f"\nHINDSIGHT PERFORMANCE (Archived SARIMA predictions):")
+                print(f"  MAE:  {s_mae:.3f} kW")
+                print(f"  Bias: {s_bias:+.3f} kW")
 
     print("\n✅ Analysis complete.")
 

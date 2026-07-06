@@ -111,15 +111,13 @@ def load_predictions(
             df_sarima = df_sarima.set_index('timestamp')
             
             # Align SARIMA (15min) to XGBoost (1min) using interpolation
-            # Only blend for the overlapping period
             common_idx = df_xgb.index.union(df_sarima.index).sort_values()
             df_sarima_resampled = df_sarima[['predicted_baseload', 'lower_95', 'upper_95']].reindex(common_idx).interpolate(method='time').reindex(df_xgb.index)
             
-            # Weighting: 50% SARIMA, 50% XGBoost
-            # Balanced approach for seasonal stability (SARIMA) and feature awareness (XGBoost)
-            print(f"Blending XGBoost with SARIMA (50/50 weight)...")
-            final_baseload = (0.5 * df_xgb['predicted_baseload']) + (0.5 * df_sarima_resampled['predicted_baseload'])
-            # Fill any NaNs (if SARIMA horizon is shorter) with XGBoost
+            # Use 100% SARIMA as primary prediction model (lower bias, lower MAE)
+            # Fall back to XGBoost for intervals beyond SARIMA's 24h horizon
+            print(f"Using SARIMA as primary prediction model (XGBoost fill beyond {len(df_sarima)} intervals)...")
+            final_baseload = df_sarima_resampled['predicted_baseload'].copy()
             final_baseload = final_baseload.fillna(df_xgb['predicted_baseload'])
             
             sarima_lower = df_sarima_resampled['lower_95']
