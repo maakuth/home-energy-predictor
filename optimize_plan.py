@@ -295,6 +295,24 @@ def plan_gshp_dispatch(
     # Don't strategically stop if we are too close to min_temp
     stop_temp_buffer = 1.0 
 
+    def _gshp_demand(o_temp: float) -> float:
+        """Compute total thermal demand (kW) including envelope heat loss and DHW baseline.
+
+        Envelope heat loss is zero at ≥15°C outside (no space heating needed).
+        DHW/circulation baseline is reduced above 10°C, halved by 15°C.
+        """
+        if o_temp >= 15.0:
+            envelope_kw = 0.0
+            eff_baseline = baseline_demand_kw * 0.5
+        elif o_temp >= 10.0:
+            fraction = (o_temp - 10.0) / 5.0
+            envelope_kw = max(0.0, (20.0 - o_temp) * heat_loss_k) * (1.0 - fraction)
+            eff_baseline = baseline_demand_kw * (1.0 - fraction * 0.5)
+        else:
+            envelope_kw = max(0.0, (20.0 - o_temp) * heat_loss_k)
+            eff_baseline = baseline_demand_kw
+        return eff_baseline + envelope_kw
+
     horizon = len(prediction_timestamps)
     interval_h = get_plan_interval_hours()
     current_temp = initial_temp
@@ -329,9 +347,8 @@ def plan_gshp_dispatch(
         o_temp = outside_temps[i]
         is_sauna = is_sauna_active[i]
 
-        # Calculate base heat demand (house loss) plus baseline for DHW/circulation/standby
-        demand_kw = baseline_demand_kw + max(0, (20.0 - o_temp) * heat_loss_k)
-        # Add sauna-induced hot water demand
+        # Calculate total heat demand (envelope + DHW) + sauna
+        demand_kw = _gshp_demand(o_temp)
         if is_sauna:
             demand_kw += sauna_demand_kw
 
@@ -349,7 +366,7 @@ def plan_gshp_dispatch(
                     intervals_to_min = horizon - i
                     for j in range(i, min(i + lookahead_intervals, horizon)):
                         o_j = outside_temps[j]
-                        d_j = max(0, (20.0 - o_j) * heat_loss_k)
+                        d_j = _gshp_demand(o_j)
                         if is_sauna_active[j]:
                             d_j += sauna_demand_kw
                         temp_sim -= (d_j * interval_h) / kwh_per_degree
