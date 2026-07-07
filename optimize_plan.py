@@ -617,14 +617,15 @@ def optimize() -> None:
     # Charging an EV from a stationary battery is double-conversion loss.
     battery_optimization_load_kw = predictions + planned_gshp_kw
 
-    # NOTE: total_planned_load_kw double-counts EV and Leaf loads.
-    # The ML predictions already include learned EV/Leaf charging patterns
-    # (since those loads are baked into baseload_power in training data).
-    # Adding planned_ev_kw + planned_leaf_kw on top overestimates total usage.
-    # This is a known limitation: without a working XPZ integration we cannot
-    # distinguish EV charging from baseload, so we accept the overestimate.
-    # The battery planner correctly treats EV/Leaf as committed (non-battery) load.
-    total_planned_load_kw = battery_optimization_load_kw + planned_ev_kw + planned_leaf_kw
+    # NOTE: planned_ev_kw is NOT included in total_planned_load_kw.
+    # The ML baseload training target (total_power - gshp - leaf) already
+    # includes EV charging, so planned_ev_kw would double-count it.
+    # Without working XPZ sensors (SoC + position), we cannot cleanly
+    # separate EV from baseload, so we omit it from the optimizer's total.
+    # Leaf IS correctly separated (subtracted from training target), so
+    # planned_leaf_kw is included. EV/Leaf are treated as committed load
+    # for grid capacity planning below.
+    total_planned_load_kw = battery_optimization_load_kw + planned_leaf_kw
 
     effective_prices = np.where(solar_array > 0.5, 0.0, import_prices)
     price_threshold = np.percentile(effective_prices, 20)
