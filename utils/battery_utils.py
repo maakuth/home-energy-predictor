@@ -361,7 +361,7 @@ def compute_net_metering_setpoint(
         tuple: (adjusted_battery_kw, log_message)
     """
     # Pass-through for actions without meaningful net-energy targets
-    if planned_action in ('idle', 'follow'):
+    if planned_action == 'idle':
         return planned_battery_kw, ""
 
     state = _load_net_metering_state(state_file)

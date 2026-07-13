@@ -186,6 +186,65 @@ class TestRunOften(unittest.TestCase):
 
         mock_push.assert_called_once()
 
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_follow_in_net_metering_uses_load_following(self, mock_get_ha, mock_push):
+        """When net metering is enabled and action is 'follow', load-following
+        logic should be used (not net metering PI controller).
+
+        Regression test: 'follow' was passed through unchanged by
+        compute_net_metering_setpoint, causing the battery to blindly
+        follow wrong SARIMA predictions and export excess energy.
+        """
+        now = datetime.now(timezone.utc)
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        plan = [{
+            'timestamp': slot.isoformat(),
+            'battery_power_kw': -4.0,
+            'battery_action': 'follow',
+            'soc_pct': 29.5,
+            'grid_import_kwh': 1.0,
+            'grid_export_kwh': 0.0,
+        }]
+        state_dir = os.path.join(self.test_dir, 'state')
+        with open(os.path.join(state_dir, 'optimization_plan.json'), 'w') as f:
+            json.dump(plan, f)
+
+        def state_side_effect(eid: str):
+            vals = {
+                'sensor.be_soc': '29.5',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '1.0',
+                'sensor.solarh_63038_real_power_kw': '0.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '100.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '0',
+        }):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        battery_w = args[1]['battery_power_w']
+        # Load-following should discharge ~1 kW to zero out grid import,
+        # NOT follow the plan's -4.0 kW discharge.
+        self.assertGreater(battery_w, 0, "Battery should discharge")
+        self.assertLess(battery_w, 2500,
+                        "Should discharge ~1 kW to follow load, NOT 4 kW")
+        self.assertGreater(battery_w, 500,
+                           "Should discharge at least 0.5 kW to follow load")
+
 
 if __name__ == '__main__':
     unittest.main()

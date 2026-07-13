@@ -847,8 +847,9 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         self.assertAlmostEqual(adjusted, 0.0, places=2)
         self.assertEqual(log, '')
 
-    def test_net_metering_follow_passes_through(self):
-        """Follow action passes planned setpoint through regardless of deviation."""
+    def test_net_metering_follow_gets_correction(self):
+        """Follow action gets PI correction when reaching compute_net_metering_setpoint
+        directly (normally it's routed to load-following in run_often.py)."""
         adjusted, log = compute_net_metering_setpoint(
             planned_battery_kw=2.0,
             planned_action='follow',
@@ -859,8 +860,9 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
             elapsed_minutes=7,
             interval_minutes=15,
         )
+        # First call establishes baseline — returns planned setpoint
         self.assertAlmostEqual(adjusted, 2.0, places=2)
-        self.assertEqual(log, '')
+        self.assertIn('baseline', log)
 
 
 class TestAdjustChargeSolarRealTime(unittest.TestCase):

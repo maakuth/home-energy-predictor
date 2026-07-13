@@ -115,16 +115,32 @@ def main():
         planned_grid_import_kwh = current.get('grid_import_kwh', 0.0) if current else 0.0
         planned_grid_export_kwh = current.get('grid_export_kwh', 0.0) if current else 0.0
 
-        adjusted_battery_kw, log_msg = compute_net_metering_setpoint(
-            planned_battery_kw=planned_battery_kw,
-            planned_action=planned_action,
-            planned_grid_import_kwh=planned_grid_import_kwh,
-            planned_grid_export_kwh=planned_grid_export_kwh,
-            cumulative_import_kwh=import_kwh,
-            cumulative_export_kwh=export_kwh,
-            elapsed_minutes=elapsed_minutes,
-            interval_minutes=interval_minutes,
-        )
+        if planned_action == 'follow':
+            # Follow uses instantaneous load-following, not interval energy targets.
+            # Net metering PI controller has no meaningful target for 'follow'
+            # and would pass through the plan unchanged — causing the battery
+            # to blindly follow wrong SARIMA predictions.
+            adjusted_battery_kw, log_msg = compute_load_following_setpoint(
+                planned_battery_kw=planned_battery_kw,
+                planned_action=planned_action,
+                solar_kw=solar_kw,
+                grid_w=grid_w,
+                battery_w=battery_w,
+                gshp_kw=gshp_kw,
+                leaf_kw=leaf_kw,
+                phase_currents=[i_p1, i_p2, i_p3],
+            )
+        else:
+            adjusted_battery_kw, log_msg = compute_net_metering_setpoint(
+                planned_battery_kw=planned_battery_kw,
+                planned_action=planned_action,
+                planned_grid_import_kwh=planned_grid_import_kwh,
+                planned_grid_export_kwh=planned_grid_export_kwh,
+                cumulative_import_kwh=import_kwh,
+                cumulative_export_kwh=export_kwh,
+                elapsed_minutes=elapsed_minutes,
+                interval_minutes=interval_minutes,
+            )
         planned_action = 'net_metering'
 
         net_state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'state/net_metering_state.json')
