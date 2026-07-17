@@ -296,7 +296,7 @@ def backtest_sarima_model(df_actual: pd.DataFrame) -> pd.DataFrame:
         print("⚠️ No archived SARIMA predictions found. Skipping SARIMA backtest.")
         return pd.DataFrame()
 
-    df_hindsight = sarima_df.join(df_actual, how='inner')
+    df_hindsight = sarima_df[['predicted_baseload']].join(df_actual[['actual_usage']], how='inner')
     if df_hindsight.empty:
         print("⚠️ No overlapping data between SARIMA predictions and actuals.")
         return pd.DataFrame()

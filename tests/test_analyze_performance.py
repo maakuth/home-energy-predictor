@@ -188,5 +188,30 @@ class TestAnalyzePerformance(unittest.TestCase):
         mock_push.assert_not_called()
 
 
+class TestBacktestSarimaModel(unittest.TestCase):
+    """Test backtest_sarima_model with realistic multi-column df_actual."""
+
+    def test_handles_multi_column_df_actual(self):
+        from analyze_performance import backtest_sarima_model
+
+        idx = pd.date_range('2026-07-01', periods=4, freq='15min', tz='UTC')
+
+        # get_archived_sarima_predictions returns ['predicted_baseload']
+        sarima_df = pd.DataFrame({'predicted_baseload': [1.0, 1.1, 1.2, 1.3]}, index=idx)
+
+        # fetch_actuals returns 3 columns: actual_usage, solar_actual, gshp_actual_kw
+        df_actual = pd.DataFrame({
+            'actual_usage': [1.1, 1.2, 1.3, 1.4],
+            'solar_actual': [0.0, 0.1, 0.2, 0.3],
+            'gshp_actual_kw': [0.5, 0.5, 0.5, 0.5],
+        }, index=idx)
+
+        with patch('compare_models.get_archived_sarima_predictions', return_value=sarima_df):
+            result = backtest_sarima_model(df_actual)
+
+        self.assertEqual(list(result.columns), ['hindsight_usage', 'actual_usage'])
+        self.assertEqual(len(result), 4)
+
+
 if __name__ == '__main__':
     unittest.main()
