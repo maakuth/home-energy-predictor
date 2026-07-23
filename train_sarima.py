@@ -53,8 +53,8 @@ def train_sarima(days: int = 14, params_path: Optional[str] = None) -> None:
         max_mean = float(forecast_mean.max())
         min_mean = float(forecast_mean.min())
         
-        if min_mean < 0 or max_mean > BASELOAD_MAX_KW:
-            print(f"⚠️ SARIMA model validation failed: forecast mean range [{min_mean:.2f}, {max_mean:.2f}] kW exceeds physical limits [0, {BASELOAD_MAX_KW}] kW.")
+        if min_mean < -0.5 or max_mean > BASELOAD_MAX_KW:
+            print(f"⚠️ SARIMA model validation failed: forecast mean range [{min_mean:.2f}, {max_mean:.2f}] kW exceeds physical limits [-0.5, {BASELOAD_MAX_KW}] kW.")
             print(f"⚠️ Keeping existing params. Not overwriting {params_path}.")
             return
         

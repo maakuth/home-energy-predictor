@@ -99,23 +99,54 @@ class TestTrainSarimaSanityCheck(unittest.TestCase):
         # Old params should be preserved since new forecast was rejected
         self.assertIn('test_marker', model_data['params'])
 
+    @pytest.mark.slow
+    @patch('train_sarima.load_historical_data')
+    def test_saves_params_when_forecast_has_small_negative(self, mock_load):
+        """Small negative forecasts (within tolerance) should be accepted since inference clips."""
+        ts_data = pd.read_csv(self.csv_file, index_col=0)
+        ts_data.index = pd.to_datetime(ts_data.index, utc=True)
+        ts_data = ts_data.sort_index()['baseload_power'].resample('15min').mean().ffill()
+        mock_load.return_value = ts_data
+
+        # Mock forecast with small negative min (like the real -0.3 case)
+        mock_results = MagicMock()
+        mock_forecast = MagicMock()
+        mock_forecast.predicted_mean = pd.Series([-0.3, 0.5, 1.2, 0.8, 1.0, 0.3, 0.1, 0.7, 1.1, 0.9])
+        mock_results.get_forecast.return_value = mock_forecast
+        mock_results.params = pd.Series({'ar.L1': 0.5, 'ma.L1': 0.1, 'ar.S.L96': 0.3, 'sigma2': 1.0})
+
+        with patch('statsmodels.tsa.statespace.sarimax.SARIMAX.fit', return_value=mock_results):
+            train_sarima(days=3, params_path=self.params_path)
+
+        # Params file should be written (forecast accepted)
+        self.assertTrue(os.path.exists(self.params_path))
+        with open(self.params_path, 'rb') as f:
+            model_data = pickle.load(f)
+        self.assertIn('ar.L1', model_data['params'])
+
     def test_validation_threshold(self):
         """Direct test: verify the validation threshold logic."""
         # BASELOAD_MAX_KW is 20.0
         self.assertEqual(BASELOAD_MAX_KW, 20.0)
-        
-        # Simulate what train_sarima does: if min < 0 or max > BASELOAD_MAX_KW, reject
+
+        # Rejection cases: min < -0.5 or max > BASELOAD_MAX_KW
         min_mean = -1.0
         max_mean = 5.0
-        self.assertTrue(min_mean < 0 or max_mean > BASELOAD_MAX_KW)
-        
+        self.assertTrue(min_mean < -0.5 or max_mean > BASELOAD_MAX_KW)
+
         min_mean = 0.5
         max_mean = 25.0
-        self.assertTrue(min_mean < 0 or max_mean > BASELOAD_MAX_KW)
-        
+        self.assertTrue(min_mean < -0.5 or max_mean > BASELOAD_MAX_KW)
+
+        # Accept: small negative within tolerance (clipped at inference)
+        min_mean = -0.3
+        max_mean = 5.0
+        self.assertFalse(min_mean < -0.5 or max_mean > BASELOAD_MAX_KW)
+
+        # Accept: normal range
         min_mean = 0.5
         max_mean = 15.0
-        self.assertFalse(min_mean < 0 or max_mean > BASELOAD_MAX_KW)
+        self.assertFalse(min_mean < -0.5 or max_mean > BASELOAD_MAX_KW)
 
 
 if __name__ == '__main__':
