@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 from predict_future import generate_inference_data, predict, compute_baseload_at_lag
@@ -406,6 +408,48 @@ class TestComputeBaseloadAtLag(unittest.TestCase):
         result = compute_baseload_at_lag(anchor, 24)
         # baseload = 2.5 + 1.5 - 0 - 0 - 0 = 4.0
         self.assertAlmostEqual(result, 4.0, places=5)
+
+    @patch.dict(os.environ, {'SOLAR_FALLBACK_TO_FORECAST': 'true'})
+    def test_solar_forecast_fallback_when_actual_missing(self):
+        """When solar actual sensor is missing, fall back to solar forecast DataFrame."""
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        # anchor_data has NO solar sensor data (simulates offline)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 2.0)],
+            'sensor.mlp_teho':              [(0, 0.0)],
+            'sensor.tasmota_energy_power_3':[(0, 0.0)],
+            'sensor.be_stat_batt_power':    [(0, 0.0)],
+        }, base_ts=ts)
+
+        # Create solar forecast with a value at the target timestamp
+        solar_forecast = pd.DataFrame(
+            {'pv_estimate': [2.5]},
+            index=[ts],
+        )
+
+        result = compute_baseload_at_lag(anchor, 1, solar_forecast_df=solar_forecast)
+        # baseload = 2.0 + 2.5 - 0 - 0 - 0 = 4.5  (forecast substituted for actual)
+        self.assertAlmostEqual(result, 4.5, places=5)
+
+    @patch.dict(os.environ, {'SOLAR_FALLBACK_TO_FORECAST': 'false'})
+    def test_solar_forecast_fallback_disabled(self):
+        """When fallback is disabled, missing solar actual stays at 0."""
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        anchor = self._make_anchor_data({
+            'sensor.sahkokauppa_nyt':       [(0, 2.0)],
+            'sensor.mlp_teho':              [(0, 0.0)],
+            'sensor.tasmota_energy_power_3':[(0, 0.0)],
+            'sensor.be_stat_batt_power':    [(0, 0.0)],
+        }, base_ts=ts)
+
+        solar_forecast = pd.DataFrame(
+            {'pv_estimate': [2.5]},
+            index=[ts],
+        )
+
+        result = compute_baseload_at_lag(anchor, 1, solar_forecast_df=solar_forecast)
+        # baseload = 2.0 + 0 - 0 - 0 - 0 = 2.0  (forecast ignored when disabled)
+        self.assertAlmostEqual(result, 2.0, places=5)
 
 
 if __name__ == '__main__':

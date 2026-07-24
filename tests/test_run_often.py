@@ -27,18 +27,21 @@ class TestRunOften(unittest.TestCase):
         os.chdir(self.orig_cwd)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
-    def _make_plan_file(self, state_dir: str):
+    def _make_plan_file(self, state_dir: str, extra_fields: dict | None = None):
         """Create a minimal optimization_plan.json."""
         now = datetime.now(timezone.utc)
         slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
-        plan = [{
+        plan_entry = {
             'timestamp': slot.isoformat(),
             'battery_power_kw': 1.5,
             'battery_action': 'charge',
             'soc_pct': 50.0,
             'grid_import_kwh': 2.0,
             'grid_export_kwh': 0.0,
-        }]
+        }
+        if extra_fields:
+            plan_entry.update(extra_fields)
+        plan = [plan_entry]
         with open(os.path.join(state_dir, 'optimization_plan.json'), 'w') as f:
             json.dump(plan, f)
 
@@ -244,6 +247,84 @@ class TestRunOften(unittest.TestCase):
                         "Should discharge ~1 kW to follow load, NOT 4 kW")
         self.assertGreater(battery_w, 500,
                            "Should discharge at least 0.5 kW to follow load")
+
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_solar_forecast_fallback_when_real_time_unavailable(self, mock_get_ha, mock_push):
+        """When solar sensor is unavailable, fall back to solar_forecast_kw from plan."""
+        state_dir = os.path.join(self.test_dir, 'state')
+        self._make_plan_file(state_dir, extra_fields={'solar_forecast_kw': 3.5})
+
+        def state_side_effect(eid: str):
+            vals = {
+                'sensor.be_soc': '50.0',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '0.0',
+                'sensor.solarh_63038_real_power_kw': 'unavailable',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '0',
+            'SOLAR_FALLBACK_TO_FORECAST': 'true',
+        }):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        battery_w = args[1]['battery_power_w']
+        # With solar_kw=3.5 and grid_w=0 / battery_w=0,
+        # load_following should see enough solar and NOT discharge.
+        # Solar 3.5kW > load 0kW → surplus → battery should charge (negative power).
+        self.assertLess(battery_w, 0, "Battery should charge with solar surplus from forecast")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_solar_forecast_fallback_disabled(self, mock_get_ha, mock_push):
+        """When SOLAR_FALLBACK_TO_FORECAST=false, unavailable solar stays 0."""
+        state_dir = os.path.join(self.test_dir, 'state')
+        self._make_plan_file(state_dir, extra_fields={'solar_forecast_kw': 3.5})
+
+        def state_side_effect(eid: str):
+            vals = {
+                'sensor.be_soc': '50.0',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '0.0',
+                'sensor.solarh_63038_real_power_kw': 'unavailable',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '0',
+            'SOLAR_FALLBACK_TO_FORECAST': 'false',
+        }):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        # When fallback is disabled: solar_kw stays 0.
+        # plan says charge at 1.5kW; push_battery_control uses convention negative=charge.
+        args = mock_push.call_args
+        battery_w = args[1]['battery_power_w']
+        self.assertLess(battery_w, 0, "Battery should charge per plan when fallback is disabled (negative=charge)")
 
 
 if __name__ == '__main__':

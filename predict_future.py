@@ -19,7 +19,11 @@ load_dotenv(override=True)
 PREDICTION_INTERVAL_MINUTES: int = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
 
 
-def compute_baseload_at_lag(anchor_data: dict[str, pd.DataFrame], hours_back: float) -> float:
+def compute_baseload_at_lag(
+    anchor_data: dict[str, pd.DataFrame],
+    hours_back: float,
+    solar_forecast_df: pd.DataFrame | None = None,
+) -> float:
     """
     Compute baseload power at a given historical lag using combined DataFrame
     + forward-fill alignment across all sensors.
@@ -34,6 +38,10 @@ def compute_baseload_at_lag(anchor_data: dict[str, pd.DataFrame], hours_back: fl
     forward-filling gaps, then picks values from the same row.  This ensures
     the five quantities (grid, solar, GSHP, EV, battery) represent
     approximately the same moment.
+
+    When ``SOLAR_FALLBACK_TO_FORECAST`` is enabled and the real-time solar
+    sensor has no data at the target timestamp, the Solcast forecast
+    (``solar_forecast_df``) is used as a substitute.
 
     Returns
     -------
@@ -79,6 +87,17 @@ def compute_baseload_at_lag(anchor_data: dict[str, pd.DataFrame], hours_back: fl
         total = float(total) if pd.notna(total) else 0.0
         solar = row.get('solar', 0.0)
         solar = float(solar) if pd.notna(solar) else 0.0
+
+        if solar == 0.0 and os.getenv('SOLAR_FALLBACK_TO_FORECAST', 'true').strip().lower() in {'1', 'true', 'yes', 'on'} and solar_forecast_df is not None and not solar_forecast_df.empty:
+            try:
+                f_idx = solar_forecast_df.index.get_indexer([target_ts], method='nearest')[0]
+                if f_idx >= 0:
+                    from_forecast = float(solar_forecast_df.iloc[f_idx].get('pv_estimate', 0.0))
+                    if from_forecast > 0:
+                        solar = from_forecast
+            except Exception:
+                pass
+
         gshp = row.get('gshp', 0.0)
         gshp = float(gshp) if pd.notna(gshp) else 0.0
         leaf = row.get('leaf', 0.0)
@@ -286,7 +305,7 @@ def predict() -> None:
     anchor_data = fetch_states_history(anchor_entities, hours=25)
     
     def get_baseload_at_lag(hours_back):
-        return compute_baseload_at_lag(anchor_data, hours_back)
+        return compute_baseload_at_lag(anchor_data, hours_back, solar_forecast_df=df_solar)
 
     def get_leaf_features():
         # Get Leaf power 1h ago and energy sum for last 24h

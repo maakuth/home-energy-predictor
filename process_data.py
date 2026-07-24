@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import pandas as pd
 import numpy as np
 from typing import Any
@@ -22,7 +23,13 @@ def process_data() -> None:
     for col in fill_zero_cols:
         if col in df.columns:
             df[col] = df[col].fillna(0)
-            
+
+    if os.getenv('SOLAR_FALLBACK_TO_FORECAST', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}:
+        if 'solar_actual' in df.columns and 'solar_forecast' in df.columns:
+            if df['solar_actual'].max() == 0.0 and df['solar_forecast'].max() > 0:
+                print('⚠ Solar actual sensor appears offline (all zeros), substituting solar forecast')
+                df['solar_actual'] = df['solar_forecast']
+
     if 'ev_soc' in df.columns:
         df['ev_soc'] = df['ev_soc'].ffill().fillna(0)
     if 'ev_position' in df.columns:

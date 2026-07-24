@@ -123,6 +123,34 @@ class TestProcessData(unittest.TestCase):
         self.assertTrue(df['is_extended_complex'].isin([0, 1]).all(),
                         "is_extended_complex should be 0 or 1")
 
+    def test_solar_actual_fallback_to_forecast(self):
+        """When solar_actual is all zeros and forecast has data, fall back to forecast."""
+        # Override the synthetic data with all-zero solar_actual and non-zero forecast
+        state_dir = os.path.join(self.test_dir, 'state')
+        raw_path = os.path.join(state_dir, 'raw_data.csv')
+        df = pd.read_csv(raw_path, index_col=0)
+        df.index = pd.to_datetime(df.index, utc=True)
+        df['solar_actual'] = 0.0
+        df['solar_forecast'] = 3.0
+        df.to_csv(raw_path)
+
+        with unittest.mock.patch.dict(os.environ, {'SOLAR_FALLBACK_TO_FORECAST': 'true'}):
+            from process_data import process_data
+            process_data()
+
+        output_path = os.path.join(self.test_dir, 'state', 'processed_data.csv')
+        result = pd.read_csv(output_path, index_col=0)
+        # The solar_actual column should no longer be all zeros after substitution,
+        # despite the 15-point median filter smoothing the edges.
+        self.assertGreater(result['solar_actual'].max(), 0.0,
+                           "solar_actual should be non-zero after falling back to forecast")
+        # total_home_power should approximately equal total_power + solar_actual
+        # (allowing for median filter smoothing at the edges)
+        raw = result['total_power'] + result['solar_actual'] - (result['battery_power'] / 1000.0)
+        mae = np.abs(result['total_home_power'] - raw).mean()
+        self.assertLess(mae, 0.5,
+                        f"total_home_power MAE vs expected formula: {mae:.4f}")
+
 
 if __name__ == '__main__':
     unittest.main()

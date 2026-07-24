@@ -45,7 +45,8 @@ def main():
     soc_pct = _get_float(soc)
     battery_w = _get_float(battery_power) or 0.0
     grid_w = (_get_float(grid_power) or 0.0) * 1000.0
-    solar_kw = _get_float(solar) or 0.0
+    solar_raw = _get_float(solar)
+    solar_kw = solar_raw if solar_raw is not None else 0.0
     gshp_kw = (_get_float(gshp) or 0.0) / 1000.0
     leaf_kw = (_get_float(leaf) or 0.0) / 1000.0
     i_p1 = _get_float(p1)
@@ -84,6 +85,13 @@ def main():
     planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
     planned_action = current.get('battery_action', 'idle') if current else 'idle'
     planned_soc = current.get('soc_pct') if current else None
+
+    solar_fallback_enabled = os.getenv('SOLAR_FALLBACK_TO_FORECAST', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
+    if solar_raw is None and solar_fallback_enabled and current:
+        forecast_kw = current.get('solar_forecast_kw', 0.0)
+        if forecast_kw > 0:
+            solar_kw = forecast_kw
+            print(f'Solar sensor unavailable, using forecast: {solar_kw:.2f}kW')
 
     max_battery_kw = float(os.getenv('BATTERY_MAX_CHARGE_KW', '10.0'))
 
