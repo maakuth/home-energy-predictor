@@ -95,6 +95,29 @@ def main():
 
     max_battery_kw = float(os.getenv('BATTERY_MAX_CHARGE_KW', '10.0'))
 
+    _MANUAL_ACTIONS = {
+        'idle', 'follow', 'charge_solar', 'charge_grid', 'charge_mixed',
+        'discharge_load', 'discharge_export', 'discharge_mixed',
+    }
+    manual_override = False
+    battery_action_state = get_ha_state(
+        os.getenv('BATTERY_ACTION_SELECT_ENTITY', 'input_select.hepo_battery_action')
+    )
+    if battery_action_state:
+        action_state = battery_action_state.get('state', 'auto')
+        if action_state not in ('unknown', 'unavailable', 'auto') and action_state in _MANUAL_ACTIONS:
+            manual_override = True
+            planned_action = action_state
+            if planned_action == 'idle':
+                planned_battery_kw = 0.0
+            elif planned_action in ('charge_solar', 'charge_grid', 'charge_mixed'):
+                planned_battery_kw = max_battery_kw
+            elif planned_action in ('discharge_load', 'discharge_export', 'discharge_mixed'):
+                planned_battery_kw = -max_battery_kw
+            elif planned_action == 'follow':
+                planned_battery_kw = 0.0
+            print(f'Manual battery override: {planned_action}')
+
     # Smooth setpoint across interval boundaries using prior interval's average
     planned_battery_kw = smooth_planned_setpoint(
         planned_battery_kw=planned_battery_kw,
@@ -115,7 +138,7 @@ def main():
 
     net_metering = os.getenv('BATTERY_NET_METERING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
-    if net_metering and import_kwh is not None and export_kwh is not None:
+    if net_metering and import_kwh is not None and export_kwh is not None and not manual_override:
         now = datetime.now()
         elapsed_minutes = now.minute % 15 + now.second / 60.0
         interval_minutes = 15

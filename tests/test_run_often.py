@@ -326,6 +326,180 @@ class TestRunOften(unittest.TestCase):
         battery_w = args[1]['battery_power_w']
         self.assertLess(battery_w, 0, "Battery should charge per plan when fallback is disabled (negative=charge)")
 
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_manual_override_auto(self, mock_get_ha, mock_push):
+        """When input_select is 'auto', normal flow proceeds (net metering active)."""
+        def state_side_effect(eid: str):
+            vals = {
+                'input_select.hepo_battery_action': 'auto',
+                'sensor.be_soc': '50.0',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '0.0',
+                'sensor.solarh_63038_real_power_kw': '0.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '1'}):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        self.assertEqual(args[1]['battery_action'], 'net_metering',
+                         "Normal net metering flow when override is 'auto'")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_manual_override_idle(self, mock_get_ha, mock_push):
+        """When input_select is 'idle', battery is forced to 0W and load-following is used."""
+        def state_side_effect(eid: str):
+            vals = {
+                'input_select.hepo_battery_action': 'idle',
+                'sensor.be_soc': '50.0',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '0.0',
+                'sensor.solarh_63038_real_power_kw': '0.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '1'}):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        self.assertEqual(args[1]['battery_power_w'], 0,
+                         "Battery should be forced to 0W when override is 'idle'")
+        self.assertEqual(args[1]['battery_action'], 'idle',
+                         "Battery action should be overridden to 'idle'")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_manual_override_charge_solar_skips_net_metering(self, mock_get_ha, mock_push):
+        """When input_select is 'charge_solar', net metering is skipped even if enabled."""
+        now = datetime.now(timezone.utc)
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        plan = [{
+            'timestamp': slot.isoformat(),
+            'battery_power_kw': 0.0,
+            'battery_action': 'follow',
+            'soc_pct': 50.0,
+            'grid_import_kwh': 1.0,
+            'grid_export_kwh': 0.0,
+        }]
+        state_dir = os.path.join(self.test_dir, 'state')
+        with open(os.path.join(state_dir, 'optimization_plan.json'), 'w') as f:
+            json.dump(plan, f)
+
+        def state_side_effect(eid: str):
+            vals = {
+                'input_select.hepo_battery_action': 'charge_solar',
+                'sensor.be_soc': '50.0',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '-0.5',
+                'sensor.solarh_63038_real_power_kw': '2.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '1'}):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        self.assertEqual(args[1]['battery_action'], 'charge_solar',
+                         "Battery action should be overridden to 'charge_solar'")
+        battery_w = args[1]['battery_power_w']
+        self.assertLess(battery_w, 0,
+                        "Battery should charge (negative power = charge) from solar surplus")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_manual_override_unknown_falls_back(self, mock_get_ha, mock_push):
+        """When input_select state is 'unknown', normal flow proceeds (no override)."""
+        def state_side_effect(eid: str):
+            vals = {
+                'input_select.hepo_battery_action': 'unknown',
+                'sensor.be_soc': '50.0',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '0.0',
+                'sensor.solarh_63038_real_power_kw': '0.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '1'}):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        self.assertEqual(args[1]['battery_action'], 'net_metering',
+                         "Normal net metering flow when override is 'unknown'")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_manual_override_unavailable_falls_back(self, mock_get_ha, mock_push):
+        """When input_select state is 'unavailable', normal flow proceeds (no override)."""
+        def state_side_effect(eid: str):
+            vals = {
+                'input_select.hepo_battery_action': 'unavailable',
+                'sensor.be_soc': '50.0',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '0.0',
+                'sensor.solarh_63038_real_power_kw': '0.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': None,
+                'sensor.current_phase_2': None,
+                'sensor.current_phase_3': None,
+                'sensor.cumulative_active_import': '50.0',
+                'sensor.cumulative_active_export': '50.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '1'}):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        self.assertEqual(args[1]['battery_action'], 'net_metering',
+                         "Normal net metering flow when override is 'unavailable'")
+
 
 if __name__ == '__main__':
     unittest.main()
