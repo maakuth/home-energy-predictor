@@ -138,6 +138,7 @@ def main():
 
     net_metering = os.getenv('BATTERY_NET_METERING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
+    # Battery control: net metering PI only when applicable and not manually overridden
     if net_metering and import_kwh is not None and export_kwh is not None and not manual_override:
         now = datetime.now()
         elapsed_minutes = now.minute % 15 + now.second / 60.0
@@ -147,10 +148,6 @@ def main():
         planned_grid_export_kwh = current.get('grid_export_kwh', 0.0) if current else 0.0
 
         if planned_action == 'follow':
-            # Follow uses instantaneous load-following, not interval energy targets.
-            # Net metering PI controller has no meaningful target for 'follow'
-            # and would pass through the plan unchanged — causing the battery
-            # to blindly follow wrong SARIMA predictions.
             adjusted_battery_kw, log_msg = compute_load_following_setpoint(
                 planned_battery_kw=planned_battery_kw,
                 planned_action=planned_action,
@@ -173,7 +170,20 @@ def main():
                 interval_minutes=interval_minutes,
             )
         planned_action = 'net_metering'
+    else:
+        adjusted_battery_kw, log_msg = compute_load_following_setpoint(
+            planned_battery_kw=planned_battery_kw,
+            planned_action=planned_action,
+            solar_kw=solar_kw,
+            grid_w=grid_w,
+            battery_w=battery_w,
+            gshp_kw=gshp_kw,
+            leaf_kw=leaf_kw,
+            phase_currents=[i_p1, i_p2, i_p3],
+        )
 
+    # Period balance reporting: always publish when meter data is available
+    if import_kwh is not None and export_kwh is not None:
         net_state_file = os.getenv('HEPO_NET_METERING_STATE_FILE', 'state/net_metering_state.json')
         try:
             with open(net_state_file) as f:
@@ -189,6 +199,8 @@ def main():
             interval_import = import_kwh - i_start
             interval_export = export_kwh - e_start
             interval_net = interval_import - interval_export
+            planned_grid_import_kwh = current.get('grid_import_kwh', 0.0) if current else 0.0
+            planned_grid_export_kwh = current.get('grid_export_kwh', 0.0) if current else 0.0
             planned_net = planned_grid_import_kwh - planned_grid_export_kwh
             if abs(interval_net) < 0.001:
                 direction = 'balanced'
@@ -208,18 +220,6 @@ def main():
             })
         except (FileNotFoundError, KeyError, TypeError):
             pass
-
-    else:
-        adjusted_battery_kw, log_msg = compute_load_following_setpoint(
-            planned_battery_kw=planned_battery_kw,
-            planned_action=planned_action,
-            solar_kw=solar_kw,
-            grid_w=grid_w,
-            battery_w=battery_w,
-            gshp_kw=gshp_kw,
-            leaf_kw=leaf_kw,
-            phase_currents=[i_p1, i_p2, i_p3],
-        )
 
     if log_msg:
         print(f'Load follow: {log_msg}')
