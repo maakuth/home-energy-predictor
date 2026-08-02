@@ -17,7 +17,7 @@ import numpy as np
 from typing import List, Any, Optional
 from datetime import datetime
 
-from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol, should_idle_interval
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol, should_idle_interval, compute_discharge_budget
 from utils.type_defs import BatteryAction
 
 
@@ -173,37 +173,6 @@ def _compute_reserved_kwh(sim_soc, start_idx, horizon, net_without_battery,
             break
 
     return min(reserved, total_available_output_kwh)
-
-
-def _compute_discharge_budget(
-    soc_kwh, min_soc_kwh, discharge_eff,
-    max_discharge_kw, interval_hours,
-    current_price, future_prices, min_factor=0.10,
-):
-    """Compute the max discharge-to-load kWh budget for a single interval.
-
-    The budget is proportional to how attractive the current import price is
-    relative to the remaining horizon: cheap intervals get a small budget
-    (battery helps a little while load-following, but energy is conserved for
-    later), expensive intervals get a large budget.  This replaces the binary
-    "discharge everything / idle completely" decision with a gradual one.
-
-    The budget is always at least ``min_factor`` of the maximum interval
-    discharge, so the battery still contributes *some* load-following during
-    the cheapest periods (unlike the old all-or-nothing idle logic).
-    """
-    max_interval_kwh = max_discharge_kw * interval_hours
-    usable_kwh = max(0.0, (soc_kwh - min_soc_kwh) * discharge_eff)
-
-    if usable_kwh < 1e-9:
-        return 0.0
-
-    if len(future_prices) == 0:
-        price_percentile = 1.0
-    else:
-        price_percentile = float(np.mean(future_prices <= current_price))
-    factor = min_factor + (1.0 - min_factor) * price_percentile
-    return min(max_interval_kwh, usable_kwh) * factor
 
 
 def _find_near_term_discharge_need(
@@ -551,7 +520,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
             # Per-interval discharge budget: caps how much energy the battery
             # may spend load-following during this interval, scaled by price
             # attractiveness so cheap periods conserve energy for expensive ones.
-            budget = _compute_discharge_budget(
+            budget = compute_discharge_budget(
                 soc_kwh, min_soc_kwh, discharge_eff,
                 max_discharge_kw, interval_hours,
                 current_import, import_prices[i:],

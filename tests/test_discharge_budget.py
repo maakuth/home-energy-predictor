@@ -16,7 +16,9 @@ from datetime import datetime, timezone, timedelta
 import numpy as np
 
 from optimize_plan import plan_battery_dispatch
-from battery_planners.heuristic import _compute_discharge_budget
+from battery_planners.base import compute_discharge_budget
+from battery_planners.nemotron_linprog import _interval_discharge_budget
+from battery_planners import BatteryPlannerFactory
 from utils.battery_utils import (
     apply_discharge_budget,
     accumulate_interval_discharge,
@@ -47,15 +49,15 @@ class DischargeBudgetFormulaTests(unittest.TestCase):
 
     def test_expensive_interval_gets_larger_budget(self):
         prices = np.array([0.03, 0.03, 0.08, 0.15, 0.20])
-        cheap = _compute_discharge_budget(
+        cheap = compute_discharge_budget(
             30.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices)
-        expensive = _compute_discharge_budget(
+        expensive = compute_discharge_budget(
             30.0, 5.0, 0.95, 10.0, 0.25, prices[-1], prices)
         self.assertGreater(expensive, cheap)
 
     def test_budget_floor_keeps_some_discharge_in_cheapest_interval(self):
         prices = np.array([0.03, 0.10, 0.15, 0.20])
-        budget = _compute_discharge_budget(
+        budget = compute_discharge_budget(
             30.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices, min_factor=0.10)
         floor = 0.10 * 10.0 * 0.25
         # Even the cheapest interval keeps at least the floor budget, so the
@@ -68,19 +70,19 @@ class DischargeBudgetFormulaTests(unittest.TestCase):
         # When current price ties all future prices, discharging now is as good
         # as later, so the budget should be the full max interval discharge.
         prices = np.array([0.03, 0.03, 0.03])
-        budget = _compute_discharge_budget(
+        budget = compute_discharge_budget(
             30.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices, min_factor=0.10)
         self.assertAlmostEqual(budget, 10.0 * 0.25, places=3)
 
     def test_zero_when_battery_empty(self):
         prices = np.array([0.03, 0.15, 0.20])
-        budget = _compute_discharge_budget(
+        budget = compute_discharge_budget(
             5.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices)
         self.assertEqual(budget, 0.0)
 
     def test_budget_capped_by_max_discharge_power(self):
         prices = np.array([0.03, 0.15, 0.20])
-        budget = _compute_discharge_budget(
+        budget = compute_discharge_budget(
             30.0, 5.0, 0.95, 10.0, 0.25, prices[-1], prices, min_factor=0.10)
         self.assertLessEqual(budget, 10.0 * 0.25)
 
@@ -223,6 +225,62 @@ class PlannerBudgetIntegrationTests(unittest.TestCase):
         # The cheap first interval should get a larger budget with a high floor.
         self.assertGreater(
             high_floor[0]['discharge_budget_kwh'], base[0]['discharge_budget_kwh'])
+
+
+class NemotronBudgetTests(unittest.TestCase):
+    """discharge_budget_kwh must be populated by the nemotron-linprog planner."""
+
+    def _plan(self, prices, initial_soc_pct=80):
+        prices = np.asarray(prices, dtype=float)
+        env = {
+            "BATTERY_CAPACITY_KWH": "40",
+            "BATTERY_INITIAL_SOC_PCT": str(initial_soc_pct),
+            "PLAN_INTERVAL_MINUTES": "60",
+            "BATTERY_PLANNER_TYPE": "nemotron-linprog",
+        }
+        with patched_env(env):
+            planner = BatteryPlannerFactory.create('nemotron-linprog')
+            return planner.plan(
+                np.full(len(prices), 2.0), np.zeros(len(prices)),
+                prices, np.zeros(len(prices)),
+                [f'i{i}' for i in range(len(prices))])
+
+    def test_every_entry_has_non_null_budget(self):
+        plan = self._plan([0.05, 0.10, 0.15, 0.20])
+        self.assertEqual(len(plan), 4)
+        for entry in plan:
+            self.assertIsNotNone(entry.discharge_budget_kwh)
+
+    def test_budget_never_undercuts_planned_discharge(self):
+        plan = self._plan([0.20, 0.20])
+        for entry in plan:
+            self.assertGreaterEqual(
+                entry.discharge_budget_kwh,
+                entry.discharge_to_load_kwh - 1e-9,
+            )
+
+    def test_budget_adds_follow_headroom_when_planned_discharge_is_low(self):
+        # With a low initial SoC the LP cannot discharge much, so the
+        # price-scaled formula exceeds planned discharge and the budget must
+        # reflect that headroom rather than just mirroring the plan.
+        plan = self._plan([0.05, 0.05, 0.15, 0.15], initial_soc_pct=30)
+        self.assertTrue(any(
+            e.discharge_budget_kwh > e.discharge_to_load_kwh + 1e-9
+            for e in plan))
+
+    def test_helper_scale_by_price(self):
+        import_prices = np.array([0.05, 0.05, 0.15, 0.15], dtype=float)
+        cheap = _interval_discharge_budget(
+            30.0, 4.0, 0.95, 10.0, 1.0, import_prices, 0, 0.0)
+        expensive = _interval_discharge_budget(
+            30.0, 4.0, 0.95, 10.0, 1.0, import_prices, 2, 0.0)
+        self.assertGreater(expensive, cheap)
+
+    def test_helper_never_undercuts_planned(self):
+        import_prices = np.array([0.05, 0.15], dtype=float)
+        budget = _interval_discharge_budget(
+            30.0, 4.0, 0.95, 10.0, 1.0, import_prices, 0, 9.5)
+        self.assertGreaterEqual(budget, 9.5 - 1e-9)
 
 
 if __name__ == '__main__':

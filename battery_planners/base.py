@@ -57,6 +57,55 @@ def should_idle_interval(
     return (round_trip_degradation + eff_cost) > benefit
 
 
+def compute_discharge_budget(
+    soc_kwh: float,
+    min_soc_kwh: float,
+    discharge_eff: float,
+    max_discharge_kw: float,
+    interval_hours: float,
+    current_price: float,
+    future_prices: np.ndarray,
+    min_factor: float = 0.10,
+) -> float:
+    """Compute the max discharge-to-load kWh budget for a single interval.
+
+    The budget is proportional to how attractive the current import price is
+    relative to the remaining horizon: cheap intervals get a small budget
+    (battery helps a little while load-following, but energy is conserved for
+    later), expensive intervals get a large budget.  This replaces the binary
+    "discharge everything / idle completely" decision with a gradual one.
+
+    The budget is always at least ``min_factor`` of the maximum interval
+    discharge, so the battery still contributes *some* load-following during
+    the cheapest periods (unlike the old all-or-nothing idle logic).
+
+    Args:
+        soc_kwh: Current battery state of charge (kWh).
+        min_soc_kwh: Minimum allowed SoC (kWh).
+        discharge_eff: Discharge efficiency (0..1).
+        max_discharge_kw: Max discharge power (kW).
+        interval_hours: Interval length (hours).
+        current_price: Current import price (EUR/kWh).
+        future_prices: Import prices from the current interval onward.
+        min_factor: Minimum budget fraction of max interval discharge.
+
+    Returns:
+        Max discharge-to-load kWh budget for this interval.
+    """
+    max_interval_kwh = max_discharge_kw * interval_hours
+    usable_kwh = max(0.0, (soc_kwh - min_soc_kwh) * discharge_eff)
+
+    if usable_kwh < 1e-9:
+        return 0.0
+
+    if len(future_prices) == 0:
+        price_percentile = 1.0
+    else:
+        price_percentile = float(np.mean(future_prices <= current_price))
+    factor = min_factor + (1.0 - min_factor) * price_percentile
+    return min(max_interval_kwh, usable_kwh) * factor
+
+
 class BatteryPlannerContext(TypedDict, total=False):
     """Optional context data available to battery planners.
 

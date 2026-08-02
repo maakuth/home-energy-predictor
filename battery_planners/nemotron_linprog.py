@@ -11,7 +11,7 @@ import os
 import numpy as np
 from typing import List, Any, Optional
 from scipy.optimize import linprog
-from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol, should_idle_interval
+from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol, should_idle_interval, compute_discharge_budget
 from utils.type_defs import BatteryAction
 from utils.battery_utils import estimate_follow_dispatch
 
@@ -36,6 +36,34 @@ def get_env_int(name, default):
         return int(raw)
     except ValueError:
         return int(default)
+
+
+def _interval_discharge_budget(
+    soc_kwh: float,
+    min_soc_kwh: float,
+    discharge_eff: float,
+    max_discharge_kw: float,
+    interval_hours: float,
+    import_prices: np.ndarray,
+    i: int,
+    planned_discharge_kwh: float,
+) -> float:
+    """Compute the per-interval discharge budget, never undercutting the
+    planned discharge-to-load for this interval."""
+    if len(import_prices) == 0:
+        current_price = 0.0
+        future_prices = import_prices
+    else:
+        idx = min(i, len(import_prices) - 1)
+        current_price = float(import_prices[idx])
+        future_prices = import_prices[i:]
+    budget = compute_discharge_budget(
+        soc_kwh, min_soc_kwh, discharge_eff,
+        max_discharge_kw, interval_hours,
+        current_price, future_prices,
+        min_factor=get_env_float('BATTERY_FOLLOW_BUDGET_MIN_FACTOR', 0.10),
+    )
+    return max(budget, planned_discharge_kwh)
 
 
 class NemotronLinprogPlanner(BatteryPlanner):
@@ -304,7 +332,8 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 print(f"LP FAILED: {result.message}")
                 # Fallback to idle plan
                 return self._create_follow_plan(horizon, prediction_timestamps, initial_soc_kwh, 
-                                              capacity_kwh, net_without_battery_kwh)
+                                              capacity_kwh, net_without_battery_kwh,
+                                              import_prices, max_discharge_kw)
             
             x = result.x
             
@@ -332,7 +361,8 @@ class NemotronLinprogPlanner(BatteryPlanner):
             
             if total_plan_cost >= total_no_battery_cost - 0.001:
                 return self._create_follow_plan(horizon, prediction_timestamps, initial_soc_kwh, 
-                                              capacity_kwh, net_without_battery_kwh)
+                                              capacity_kwh, net_without_battery_kwh,
+                                              import_prices, max_discharge_kw)
             
             # ---- Stage 2: classify zero-dispatch intervals and re-solve with follow energy ----
             max_follow_kw = get_env_float('BATTERY_FOLLOW_MAX_KW', 2.0)
@@ -469,7 +499,8 @@ class NemotronLinprogPlanner(BatteryPlanner):
             print(f"LP EXCEPTION: {e}")
             # Fallback to idle plan on solver error
             return self._create_follow_plan(horizon, prediction_timestamps, initial_soc_kwh, 
-                                          capacity_kwh, net_without_battery_kwh)
+                                          capacity_kwh, net_without_battery_kwh,
+                                          import_prices, max_discharge_kw)
         
         # Build plan entries from solution
         battery_plan = []
@@ -576,6 +607,10 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 estimated_hour_cost=float(hour_cost_with_battery),
                 estimated_hour_savings=float(hour_cost_no_battery - hour_cost_with_battery),
                 net_load_without_battery_kwh=float(net_without_battery_kwh[i]),
+                discharge_budget_kwh=_interval_discharge_budget(
+                    soc_kwh, min_soc_kwh, discharge_eff, max_discharge_kw,
+                    interval_hours, import_prices, i, entry_d_load,
+                ),
             )
             
             battery_plan.append(entry)
@@ -630,13 +665,18 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 estimated_hour_cost=0.0,
                 estimated_hour_savings=0.0,
                 net_load_without_battery_kwh=float(net_without_battery_kwh[i]),
+                discharge_budget_kwh=_interval_discharge_budget(
+                    soc_kwh, min_soc_kwh, discharge_eff, max_discharge_kw,
+                    interval_hours, import_prices, i, d_load_actual,
+                ),
             )
             battery_plan.append(entry)
         
         return battery_plan
     
     def _create_follow_plan(self, horizon, prediction_timestamps, initial_soc_kwh, 
-                            capacity_kwh, net_without_battery_kwh):
+                            capacity_kwh, net_without_battery_kwh, import_prices,
+                            max_discharge_kw):
         """Create a follow plan as fallback with load-following SoC correction."""
         battery_plan = []
         soc_kwh = initial_soc_kwh
@@ -702,6 +742,10 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 estimated_hour_cost=0.0,
                 estimated_hour_savings=0.0,
                 net_load_without_battery_kwh=net_kwh,
+                discharge_budget_kwh=_interval_discharge_budget(
+                    soc_kwh, min_soc_kwh, discharge_eff, max_discharge_kw,
+                    interval_hours, import_prices, i, d_load_actual,
+                ),
             )
             battery_plan.append(entry)
         
@@ -755,6 +799,10 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 estimated_hour_cost=0.0,
                 estimated_hour_savings=0.0,
                 net_load_without_battery_kwh=net_kwh,
+                discharge_budget_kwh=_interval_discharge_budget(
+                    soc_kwh, min_soc_kwh, discharge_eff, max_discharge_kw,
+                    interval_hours, import_prices, i, d_load_actual,
+                ),
             )
             battery_plan.append(entry)
         
