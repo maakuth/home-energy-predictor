@@ -94,6 +94,7 @@ def main():
             print(f'Solar sensor unavailable, using forecast: {solar_kw:.2f}kW')
 
     max_battery_kw = float(os.getenv('BATTERY_MAX_CHARGE_KW', '10.0'))
+    min_soc_pct = float(os.getenv('BATTERY_MIN_SOC_PCT', '10.0'))
 
     _MANUAL_ACTIONS = {
         'idle', 'follow', 'charge_solar', 'charge_grid', 'charge_mixed',
@@ -134,6 +135,7 @@ def main():
         grid_w=grid_w,
         battery_w=battery_w,
         battery_soc_pct=soc_pct,
+        min_soc_pct=min_soc_pct,
     )
 
     net_metering = os.getenv('BATTERY_NET_METERING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -157,6 +159,8 @@ def main():
                 gshp_kw=gshp_kw,
                 leaf_kw=leaf_kw,
                 phase_currents=[i_p1, i_p2, i_p3],
+                battery_soc_pct=soc_pct,
+                min_soc_pct=min_soc_pct,
             )
         else:
             adjusted_battery_kw, log_msg = compute_net_metering_setpoint(
@@ -168,6 +172,8 @@ def main():
                 cumulative_export_kwh=export_kwh,
                 elapsed_minutes=elapsed_minutes,
                 interval_minutes=interval_minutes,
+                battery_soc_pct=soc_pct,
+                min_soc_pct=min_soc_pct,
             )
         planned_action = 'net_metering'
     else:
@@ -180,6 +186,8 @@ def main():
             gshp_kw=gshp_kw,
             leaf_kw=leaf_kw,
             phase_currents=[i_p1, i_p2, i_p3],
+            battery_soc_pct=soc_pct,
+            min_soc_pct=min_soc_pct,
         )
 
     # Period balance reporting: always publish when meter data is available

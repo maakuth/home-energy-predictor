@@ -423,6 +423,60 @@ class TestLoadFollowing(unittest.TestCase):
         # Follow caps at BATTERY_FOLLOW_MAX_KW (default 2 kW). 15 kW exceeds cap → stays at 0.
         self.assertAlmostEqual(adjusted, 0.0)
 
+    def test_follow_blocks_discharge_when_soc_at_min(self):
+        """follow must not discharge when SoC is at the minimum floor."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='follow',
+            solar_kw=0.0,
+            grid_w=2000.0,
+            battery_w=0.0,
+            max_battery_kw=10.0,
+            battery_soc_pct=22.0,
+            min_soc_pct=20.0,
+        )
+        self.assertGreaterEqual(adjusted, 0.0)
+
+    def test_follow_allows_discharge_above_min(self):
+        """follow discharges normally when SoC is well above the floor."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='follow',
+            solar_kw=0.0,
+            grid_w=2000.0,
+            battery_w=0.0,
+            max_battery_kw=10.0,
+            battery_soc_pct=40.0,
+            min_soc_pct=20.0,
+        )
+        self.assertLess(adjusted, 0.0)
+
+    def test_discharge_load_blocked_when_soc_at_min(self):
+        """discharge_load is blocked when SoC is at the minimum floor."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=-5.0,
+            planned_action='discharge_load',
+            solar_kw=0.0,
+            grid_w=5000.0,
+            battery_w=0.0,
+            battery_soc_pct=22.0,
+            min_soc_pct=20.0,
+        )
+        self.assertGreaterEqual(adjusted, 0.0)
+
+    def test_discharge_load_allowed_above_min(self):
+        """discharge_load proceeds normally when SoC is well above the floor."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=-5.0,
+            planned_action='discharge_load',
+            solar_kw=0.0,
+            grid_w=5000.0,
+            battery_w=0.0,
+            battery_soc_pct=40.0,
+            min_soc_pct=20.0,
+        )
+        self.assertAlmostEqual(adjusted, -5.0)
+
 class TestPhaseCapping(unittest.TestCase):
     def test_no_phase_cap_needed(self):
         """Should not cap if currents are well within limits."""
@@ -864,6 +918,58 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
         self.assertAlmostEqual(adjusted, 2.0, places=2)
         self.assertIn('baseline', log)
 
+    def test_net_metering_blocks_discharge_when_soc_at_min(self):
+        """Net metering PI correction must not force discharge below min SoC."""
+        compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_action='discharge_load',
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_action='discharge_load',
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.5,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+            battery_soc_pct=22.0,
+            min_soc_pct=20.0,
+        )
+        self.assertGreaterEqual(adjusted, 0.0)
+
+    def test_net_metering_allows_discharge_above_min(self):
+        """Net metering PI correction proceeds when SoC is above the floor."""
+        compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_action='discharge_load',
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.0,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=0,
+            interval_minutes=15,
+        )
+        adjusted, log = compute_net_metering_setpoint(
+            planned_battery_kw=-1.0,
+            planned_action='discharge_load',
+            planned_grid_import_kwh=0.1,
+            planned_grid_export_kwh=0.0,
+            cumulative_import_kwh=0.5,
+            cumulative_export_kwh=0.0,
+            elapsed_minutes=5,
+            interval_minutes=15,
+            battery_soc_pct=40.0,
+            min_soc_pct=20.0,
+        )
+        self.assertAlmostEqual(adjusted, -3.4, places=1)
+
 
 class TestAdjustChargeSolarRealTime(unittest.TestCase):
     """Test adjust_charge_solar_for_real_time adjustments."""
@@ -956,6 +1062,20 @@ class TestAdjustChargeSolarRealTime(unittest.TestCase):
         )
         self.assertEqual(action, 'discharge_load')
         self.assertAlmostEqual(adjusted, -2.0)
+
+    def test_env_min_soc_fallback_used_when_not_passed(self):
+        """When min_soc_pct is omitted, BATTERY_MIN_SOC_PCT env is used."""
+        with patch.dict(os.environ, {'BATTERY_MIN_SOC_PCT': '20.0'}):
+            adjusted, action = adjust_charge_solar_for_real_time(
+                planned_battery_kw=5.0,
+                planned_action='charge_solar',
+                solar_kw=2.0,
+                grid_w=2000.0,
+                battery_w=0.0,
+                battery_soc_pct=22.0,
+            )
+        self.assertEqual(action, 'charge_solar')
+        self.assertAlmostEqual(adjusted, 5.0)
 
 
 if __name__ == '__main__':

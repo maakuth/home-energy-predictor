@@ -150,6 +150,8 @@ def compute_load_following_setpoint(
     leaf_kw: float = 0.0,
     max_battery_kw: float = 10.0,
     phase_currents: Optional[list[Optional[float]]] = None,
+    battery_soc_pct: Optional[float] = None,
+    min_soc_pct: Optional[float] = None,
 ) -> tuple[float, str]:
     """
     Adjust planned battery setpoint based on real-time sensor readings.
@@ -294,6 +296,22 @@ def compute_load_following_setpoint(
     # Clamp to physical limits
     adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, adjusted_battery_kw))
 
+    # SoC floor guard: never discharge when battery is at or near the
+    # configured minimum SoC (BATTERY_MIN_SOC_PCT).
+    if battery_soc_pct is not None and adjusted_battery_kw < 0:
+        if min_soc_pct is None:
+            min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
+        if battery_soc_pct <= min_soc_pct + 5.0:
+            adjusted_battery_kw = 0.0
+            guard_msg = (
+                f"soc guard: discharge blocked at SoC {battery_soc_pct:.1f}% "
+                f"(min {min_soc_pct:.0f}%)"
+            )
+            if log_message:
+                log_message = f"{log_message}; {guard_msg}"
+            else:
+                log_message = guard_msg
+
     return adjusted_battery_kw, log_message
 
 
@@ -333,6 +351,8 @@ def compute_net_metering_setpoint(
     interval_minutes: int = 15,
     max_battery_kw: float = 10.0,
     state_file: Optional[str] = None,
+    battery_soc_pct: Optional[float] = None,
+    min_soc_pct: Optional[float] = None,
 ) -> tuple[float, str]:
     """
     Adjust battery power to match the planned net energy for the current interval
@@ -439,6 +459,22 @@ def compute_net_metering_setpoint(
         else:
             log_msg += f"adjusted {planned_battery_kw:.2f}kW -> {clamped:.2f}kW"
     
+    # SoC floor guard: never discharge when battery is at or near the
+    # configured minimum SoC (BATTERY_MIN_SOC_PCT).
+    if battery_soc_pct is not None and clamped < 0:
+        if min_soc_pct is None:
+            min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
+        if battery_soc_pct <= min_soc_pct + 5.0:
+            clamped = max(clamped, 0.0)
+            guard_msg = (
+                f"soc guard: discharge blocked at SoC {battery_soc_pct:.1f}% "
+                f"(min {min_soc_pct:.0f}%)"
+            )
+            if log_msg:
+                log_msg = f"{log_msg}; {guard_msg}"
+            else:
+                log_msg = guard_msg
+    
     # Update state
     state['planned_battery_kw'] = planned_battery_kw
     _save_net_metering_state(state, state_file)
@@ -453,7 +489,7 @@ def adjust_charge_solar_for_real_time(  # type: ignore[return]
     grid_w: float,
     battery_w: float,
     battery_soc_pct: float | None = None,
-    min_soc_pct: float = 10.0,
+    min_soc_pct: float | None = None,
     max_battery_kw: float = 10.0,
 ):
     """Adjust charge_solar planned action based on real-time conditions.
@@ -470,6 +506,9 @@ def adjust_charge_solar_for_real_time(  # type: ignore[return]
     """
     if planned_action != 'charge_solar':
         return planned_battery_kw, planned_action
+
+    if min_soc_pct is None:
+        min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
 
     actual_load_kw = solar_kw + (grid_w / 1000.0) - (battery_w / 1000.0)
     actual_surplus_kw = solar_kw - actual_load_kw
