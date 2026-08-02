@@ -702,3 +702,131 @@ def apply_ramp_rate(
         actual_battery_kw - max_change_kw,
         min(actual_battery_kw + max_change_kw, target_setpoint_kw),
     )
+
+
+def apply_discharge_budget(
+    adjusted_battery_kw: float,
+    discharge_budget_kwh: Optional[float],
+    discharge_used_kwh: Optional[float],
+    interval_minutes: int = 15,
+    elapsed_minutes: Optional[float] = None,
+) -> tuple[float, str]:
+    """Cap the proposed battery setpoint so cumulative interval discharge does
+    not exceed the interval's discharge budget.
+
+    The budget (kWh) is set by the planner per interval and limits how much
+    energy the battery may spend load-following (discharge to load) during that
+    interval.  Cheap intervals get a small budget so energy is conserved for
+    higher-profit periods; expensive intervals get a large budget.
+
+    Sign convention: positive=charge, negative=discharge (same as elsewhere).
+    A ``discharge_budget_kwh`` of ``None`` means no cap (legacy behaviour).
+
+    Args:
+        adjusted_battery_kw: Proposed setpoint in kW (negative = discharge).
+        discharge_budget_kwh: Interval budget in kWh, or None for no cap.
+        discharge_used_kwh: Energy already discharged this interval (kWh).
+        interval_minutes: Length of each planning interval (default 15).
+        elapsed_minutes: Minutes elapsed in the current interval. If None,
+            computed from the current wall-clock time.
+
+    Returns:
+        tuple: (capped_battery_kw, log_message)
+    """
+    if discharge_budget_kwh is None or adjusted_battery_kw >= 0:
+        return adjusted_battery_kw, ""
+
+    used = discharge_used_kwh or 0.0
+    remaining = max(0.0, discharge_budget_kwh - used)
+    if remaining <= 1e-9:
+        return 0.0, (
+            f"budget exhausted ({used:.3f}/{discharge_budget_kwh:.3f} kWh)"
+        )
+
+    if elapsed_minutes is None:
+        now = datetime.now().astimezone()
+        elapsed_minutes = (now.minute % interval_minutes) + now.second / 60.0
+    remaining_hours = max(interval_minutes - elapsed_minutes, 2.0) / 60.0
+    allowed_kw = remaining / remaining_hours
+
+    capped_kw = max(adjusted_battery_kw, -allowed_kw)
+    if capped_kw != adjusted_battery_kw:
+        return capped_kw, (
+            f"budget cap {adjusted_battery_kw:.2f}kW -> {capped_kw:.2f}kW "
+            f"(remaining {remaining:.3f}kWh)"
+        )
+    return adjusted_battery_kw, ""
+
+
+def _discharge_budget_state_path(state_file: Optional[str] = None) -> str:
+    """Get the path for the discharge budget state file."""
+    if state_file is not None:
+        return state_file
+    return os.getenv('HEPO_DISCHARGE_BUDGET_STATE_FILE', 'state/discharge_budget_state.json')
+
+
+def _load_discharge_budget_state(state_file: Optional[str] = None) -> dict[str, Any]:
+    path = _discharge_budget_state_path(state_file)
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def _save_discharge_budget_state(state: dict[str, Any], state_file: Optional[str] = None) -> None:
+    path = _discharge_budget_state_path(state_file)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, 'w') as f:
+            json.dump(state, f)
+    except IOError:
+        pass
+
+
+def accumulate_interval_discharge(
+    battery_w: float,
+    interval_minutes: int = 15,
+    state_file: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> float:
+    """Accumulate energy actually discharged from the battery in the current
+    interval using the battery power sensor reading (W, positive = charging).
+
+    The cumulative discharge (kWh) is persisted so it survives across the
+    20-second run_often.py invocations within an interval and resets at each
+    interval boundary.
+
+    Args:
+        battery_w: Current battery power in Watts (positive = charging).
+        interval_minutes: Length of each planning interval (default 15).
+        state_file: Path to the state file (for testing).
+        now: Timestamp override for testing.
+
+    Returns:
+        float: Cumulative discharge energy (kWh) so far this interval.
+    """
+    if now is None:
+        now = datetime.now().astimezone()
+    interval_index = int(now.timestamp()) // (interval_minutes * 60)
+
+    state = _load_discharge_budget_state(state_file)
+    if state.get('interval_index') != interval_index:
+        state = {
+            'interval_index': interval_index,
+            'last_ts': now.timestamp(),
+            'discharge_kwh': 0.0,
+        }
+
+    discharge_kw = -battery_w / 1000.0
+    if discharge_kw > 0:
+        last_ts = state.get('last_ts', now.timestamp())
+        dt = now.timestamp() - last_ts
+        if 0 < dt <= interval_minutes * 60:
+            state['discharge_kwh'] = state.get('discharge_kwh', 0.0) + discharge_kw * dt / 3600.0
+
+    state['last_ts'] = now.timestamp()
+    _save_discharge_budget_state(state, state_file)
+    return float(state.get('discharge_kwh', 0.0))

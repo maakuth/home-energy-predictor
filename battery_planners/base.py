@@ -139,6 +139,7 @@ class BatteryPlanEntry:
     estimated_hour_cost: float  # EUR for this interval
     estimated_hour_savings: float  # EUR saved vs no-battery baseline
     net_load_without_battery_kwh: float  # Load before battery adjustments
+    discharge_budget_kwh: Optional[float] = None  # Max kWh battery may discharge to load this interval (None = unlimited)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -157,6 +158,7 @@ class BatteryPlanEntry:
             'estimated_hour_cost': float(self.estimated_hour_cost),
             'estimated_hour_savings': float(self.estimated_hour_savings),
             'net_load_without_battery_kwh': float(self.net_load_without_battery_kwh),
+            'discharge_budget_kwh': float(self.discharge_budget_kwh) if self.discharge_budget_kwh is not None else None,
         }
 
 

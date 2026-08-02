@@ -175,6 +175,37 @@ def _compute_reserved_kwh(sim_soc, start_idx, horizon, net_without_battery,
     return min(reserved, total_available_output_kwh)
 
 
+def _compute_discharge_budget(
+    soc_kwh, min_soc_kwh, discharge_eff,
+    max_discharge_kw, interval_hours,
+    current_price, future_prices, min_factor=0.10,
+):
+    """Compute the max discharge-to-load kWh budget for a single interval.
+
+    The budget is proportional to how attractive the current import price is
+    relative to the remaining horizon: cheap intervals get a small budget
+    (battery helps a little while load-following, but energy is conserved for
+    later), expensive intervals get a large budget.  This replaces the binary
+    "discharge everything / idle completely" decision with a gradual one.
+
+    The budget is always at least ``min_factor`` of the maximum interval
+    discharge, so the battery still contributes *some* load-following during
+    the cheapest periods (unlike the old all-or-nothing idle logic).
+    """
+    max_interval_kwh = max_discharge_kw * interval_hours
+    usable_kwh = max(0.0, (soc_kwh - min_soc_kwh) * discharge_eff)
+
+    if usable_kwh < 1e-9:
+        return 0.0
+
+    if len(future_prices) == 0:
+        price_percentile = 1.0
+    else:
+        price_percentile = float(np.mean(future_prices <= current_price))
+    factor = min_factor + (1.0 - min_factor) * price_percentile
+    return min(max_interval_kwh, usable_kwh) * factor
+
+
 def _find_near_term_discharge_need(
     start_idx, horizon, net_without_battery,
     import_prices, export_prices, allow_export,
@@ -262,6 +293,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         max_discharge_kw = get_env_float('BATTERY_MAX_DISCHARGE_KW', 10.0)
         charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
         discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
+        min_factor = get_env_float('BATTERY_FOLLOW_BUDGET_MIN_FACTOR', 0.10)
         
         # Grid connection limit (3-phase, 230V)
         main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
@@ -515,7 +547,19 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                 timestamp_str = ts.isoformat()
             else:
                 timestamp_str = str(ts)
-            
+
+            # Per-interval discharge budget: caps how much energy the battery
+            # may spend load-following during this interval, scaled by price
+            # attractiveness so cheap periods conserve energy for expensive ones.
+            budget = _compute_discharge_budget(
+                soc_kwh, min_soc_kwh, discharge_eff,
+                max_discharge_kw, interval_hours,
+                current_import, import_prices[i:],
+                min_factor=min_factor,
+            )
+            # Never undercut an explicit planned discharge-to-load.
+            budget = max(budget, discharge_to_load)
+
             entry = BatteryPlanEntry(
                 timestamp=timestamp_str,
                 battery_action=battery_action,
@@ -531,6 +575,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                 estimated_hour_cost=float(hour_cost_with_battery),
                 estimated_hour_savings=float(hour_cost_no_battery - hour_cost_with_battery),
                 net_load_without_battery_kwh=float(net_load),
+                discharge_budget_kwh=float(budget),
             )
             battery_plan.append(entry)
         

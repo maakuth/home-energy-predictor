@@ -14,6 +14,8 @@ from utils.battery_utils import (
     adjust_charge_solar_for_real_time,
     smooth_planned_setpoint,
     apply_ramp_rate,
+    apply_discharge_budget,
+    accumulate_interval_discharge,
 )
 
 load_dotenv(override=True)
@@ -238,6 +240,25 @@ def main():
         actual_battery_kw=battery_w / 1000.0,
         ramp_rate_kw_per_min=ramp_rate,
     )
+
+    # Per-interval discharge budget: cap load-following discharge so the battery
+    # doesn't drain faster than planned during cheap intervals (e.g. EV charging
+    # spikes), conserving energy for higher-profit periods.
+    plan_action = current.get('battery_action', 'idle') if current else 'idle'
+    discharge_budget_kwh = current.get('discharge_budget_kwh') if current else None
+    if (
+        not manual_override
+        and discharge_budget_kwh is not None
+        and plan_action in ('follow', 'discharge_load')
+    ):
+        discharge_used_kwh = accumulate_interval_discharge(battery_w)
+        adjusted_battery_kw, budget_msg = apply_discharge_budget(
+            adjusted_battery_kw=adjusted_battery_kw,
+            discharge_budget_kwh=discharge_budget_kwh,
+            discharge_used_kwh=discharge_used_kwh,
+        )
+        if budget_msg:
+            print(f'Discharge budget: {budget_msg}')
 
     battery_control_w = int(-adjusted_battery_kw * 1000)
     push_battery_control(
