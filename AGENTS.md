@@ -119,17 +119,17 @@ The python virtualenv is quite large, so that should be reused with a symlink.
 All this can be achieved in the typical opencode environment like this:
 
 ```bash
-cd /tmp
-git clone /workspace/
+cd /tmp/
+git clone /workspace tmp-workspace
 ln -s /workspace/venv
 ```
 
-After completing feature development, you can push the work back, but not in the checked out branch:
+After completing feature development, push the work back to a side branch and merge it in `/workspace`:
 ```bash
-cd /tmp/workspace
-git push origin master:tmp
+cd /tmp/tmp-workspace
+git push origin master:dev
 cd /workspace
-git merge tmp
+git merge dev
 ```
 
 ## Running tests
