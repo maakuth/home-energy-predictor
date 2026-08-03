@@ -87,6 +87,9 @@ def main():
     planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
     planned_action = current.get('battery_action', 'idle') if current else 'idle'
     planned_soc = current.get('soc_pct') if current else None
+    planned_budget_kwh = current.get('discharge_budget_kwh') if current else None
+    if planned_budget_kwh is not None:
+        print(f'Period budget: {planned_budget_kwh:.2f} kWh')
 
     solar_fallback_enabled = os.getenv('SOLAR_FALLBACK_TO_FORECAST', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
     if solar_raw is None and solar_fallback_enabled and current:
