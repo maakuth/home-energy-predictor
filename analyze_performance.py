@@ -45,7 +45,7 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
     battery_kw = df_actual.get('battery_actual_w', 0) / 1000.0
     df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0) - battery_kw
     df_actual['gshp_actual_kw'] = df_actual.get('gshp_actual_w', 0) / 1000.0
-    return df_actual[['actual_usage', 'solar_actual', 'gshp_actual_kw']]
+    return df_actual.reindex(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw']).fillna(0)
 
 def get_archived_predictions(
     version: Optional[str] = None,
