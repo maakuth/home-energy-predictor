@@ -691,8 +691,8 @@ def optimize() -> None:
     print(f"Fireplace: {'ON' if is_fireplace_currently_on else 'OFF'}")
     
     final_plan = []
-    print('Time        | Baseload | GSHP kW | Grid kW | Solar | SOC% | Budget | Battery Intent | Intent | Acc Sim')
-    print('------------|----------|---------|---------|-------|------|--------|----------------|--------|--------')
+    print('Time        | Baseload | GSHP kW | Grid kW | Price  | Solar | SOC% | Budget | Battery Intent | Intent | Acc Sim')
+    print('------------|----------|---------|---------|--------|-------|------|--------|----------------|--------|--------')
     for i, ts in enumerate(prediction_timestamps):
         # Ensure ts is local-aware for consistent display
         if ts.tzinfo is None:
@@ -721,7 +721,7 @@ def optimize() -> None:
         budget_str = f"{b['discharge_budget_kwh']:.2f}" if b.get('discharge_budget_kwh') is not None else "  -"
         print(
             f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_grid_kw:7.1f} | "
-            f"{p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {budget_str:6} | {b['battery_action']:16} | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
+            f"{p_import:7.3f} | {p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {budget_str:6} | {b['battery_action']:16} | {g['gshp_intent']:6} | {g['gshp_temp_sim']:5.1f}"
         )
         
         entry = {
