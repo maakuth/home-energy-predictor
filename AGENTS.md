@@ -121,7 +121,7 @@ All this can be achieved in the typical opencode environment like this:
 ```bash
 cd /tmp/
 git clone /workspace tmp-workspace
-ln -s /workspace/venv
+ln -s /workspace/venv tmp-workspace/venv
 ```
 
 After completing feature development, push the work back to a side branch and merge it in `/workspace`:
