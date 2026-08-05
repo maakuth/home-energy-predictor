@@ -72,7 +72,7 @@ The dispatch logic uses a **profit-only** strategy with **marginal opportunity c
 | `BATTERY_LP_DISCOUNT` | Per-interval discount factor (γ) applied to future costs in the LP planner. | `0.995` | γ < 1 prevents over-optimistic planning in receding-horizon mode. Set to 1.0 for no discount. |
 | `BATTERY_LP_PARALLEL` | Enable HiGHS parallel solver. | `0` | Usually slower for small LP problems (< 100 variables). Set to `1` to enable. |
 | `BATTERY_TERMINAL_VALUE_PERCENTILE` | Price percentile used to assign a terminal value to the final SoC in the LP planner. | `0.0` | 0 = no terminal value (planner only optimises within its horizon). A value of 50 uses the median price. |
-| `BATTERY_DEGRADATION_COST_EUR_PER_KWH` | Battery wear cost per kWh cycled in the LP planner. | `0.0` | Adds a linear cost to charging and discharging. 0 = disabled. |
+| `BATTERY_DEGRADATION_COST_EUR_PER_KWH` | Battery wear cost per kWh cycled in the LP planner. | `0.0` | Adds a linear cost to charging and discharging. 0 = disabled. When > 0, the load-following idle decision (`should_idle_interval`) also becomes price-aware: the battery idles (buys from the grid) at an interval whose import price is cheaper than the cost of refilling the battery later (cheapest future import price through round-trip efficiency + cycling cost). This stops the battery draining cheaply in the afternoon only to need a more expensive grid top-up in the evening. |
 
 ---
 

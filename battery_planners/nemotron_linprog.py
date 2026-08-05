@@ -376,6 +376,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
                     degradation_cost_per_kwh, interval_hours,
                     charge_eff, discharge_eff,
                     import_prices[i], export_prices[i],
+                    future_import_prices=import_prices[i+1:],
                 )
                 if is_idle:
                     continue
@@ -562,6 +563,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
                     degradation_cost_per_kwh, interval_hours,
                     charge_eff, discharge_eff,
                     import_prices[i], export_prices[i],
+                    future_import_prices=import_prices[i+1:],
                 ):
                     follow_kwh, is_discharge = estimate_follow_dispatch(
                         net_kw_i, interval_hours, max_follow_kw)

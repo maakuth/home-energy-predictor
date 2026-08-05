@@ -505,6 +505,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                 is_idle = should_idle_interval(
                     net_load, max_battery_kw, degradation_cost, interval_hours,
                     charge_eff, discharge_eff, current_import, current_export,
+                    future_import_prices=import_prices[i+1:],
                 )
                 battery_action = 'idle' if is_idle else 'follow'
             

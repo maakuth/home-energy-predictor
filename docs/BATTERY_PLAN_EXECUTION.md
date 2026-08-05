@@ -21,7 +21,8 @@ The planners decide per interval whether to emit `idle` or `follow` via `should_
 1. **Futile check**: if net load > max battery power, load-following can't zero the grid → `idle`
 2. **Negligible flow**: if net load < 0.2 kW, not worth cycling → `idle`
 3. **No degradation cost**: if `BATTERY_DEGRADATION_COST_EUR_PER_KWH` is 0 → `follow` (legacy default)
-4. **Cost-benefit**: cycling cost (degradation + efficiency loss) vs grid benefit → whichever is cheaper
+4. **Refill cost** (price-aware): discharging to load now at `import_price` forces a later recharge. If the cheapest future import price (through round-trip efficiency + cycling cost) is *more expensive* than buying from the grid now, load-following is a net loss → `idle`. This prevents draining the battery at cheap afternoon prices and then having to buy back energy at an expensive evening price.
+5. **Cost-benefit**: cycling cost (degradation + efficiency loss) vs grid benefit → whichever is cheaper
 
 ## Battery Actions
 

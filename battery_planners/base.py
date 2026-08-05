@@ -17,6 +17,7 @@ def should_idle_interval(
     discharge_eff: float,
     import_price: float,
     export_price: float,
+    future_import_prices: Optional[np.ndarray] = None,
 ) -> bool:
     """Decide if the battery should truly idle instead of load-following.
 
@@ -30,7 +31,17 @@ def should_idle_interval(
       1. If net load exceeds battery capacity → futile → idle
       2. If net load is negligible → not worth cycling → idle
       3. If no degradation cost configured → follow (legacy behaviour)
-      4. If cycling cost (degradation + efficiency loss) > grid benefit → idle
+      4. If discharging at ``import_price`` is cheaper than the cost of
+         refilling the battery later (cheapest future import price through
+         round-trip efficiency + cycling cost) → idle
+      5. If cycling cost (degradation + efficiency loss) > grid benefit → idle
+
+    ``future_import_prices`` is the remaining import-price forecast after the
+    current interval.  Passing it enables the price-aware check (rule 4):
+    load-following discharges the battery now, and if the energy has to be
+    bought back later at a price that makes the round trip a net loss, the
+    battery should instead idle and buy from the grid now.  When omitted the
+    check is skipped (legacy behaviour).
     """
     net_abs = abs(net_kw)
 
@@ -45,6 +56,21 @@ def should_idle_interval(
     # No degradation cost configured → follow (legacy behaviour)
     if degradation_cost_per_kwh <= 0:
         return False
+
+    # Price-aware refill check: discharging to load now at `import_price`
+    # forces a future recharge.  If that recharge costs more than buying from
+    # the grid right now, load-following is a net loss → idle.
+    if (
+        net_kw > 0
+        and future_import_prices is not None
+        and len(future_import_prices) > 0
+    ):
+        round_trip_eff = charge_eff * discharge_eff
+        if round_trip_eff > 0.01:
+            refill_price = float(np.min(future_import_prices))
+            refill_cost = refill_price / round_trip_eff + 2 * degradation_cost_per_kwh
+            if import_price < refill_cost:
+                return True
 
     # Cost-benefit: what does load-following cost vs save?
     energy_kwh = net_abs * interval_hours
