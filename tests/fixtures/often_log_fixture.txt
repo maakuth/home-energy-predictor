@@ -1,0 +1,16 @@
+Aug 06 14:00:07 murrikka run_often.py[1234]: Battery SoC: 37.3%
+Aug 06 14:00:07 murrikka run_often.py[1234]: Battery Power: -123W (follow)
+Aug 06 14:00:07 murrikka run_often.py[1234]: Grid Power: 150W
+Aug 06 14:00:07 murrikka run_often.py[1234]: Solar: 4.35kW
+Aug 06 14:00:07 murrikka run_often.py[1234]: GSHP: 0.0kW
+Aug 06 14:00:07 murrikka run_often.py[1234]: Leaf: 0.0kW
+Aug 06 14:00:27 murrikka run_often.py[1234]: Battery SoC: 37.1%
+Aug 06 14:00:27 murrikka run_often.py[1234]: Battery Power: -118W (follow)
+Aug 06 14:00:27 murrikka run_often.py[1234]: Grid Power: 148W
+Aug 06 14:00:27 murrikka run_often.py[1234]: Solar: 4.32kW
+Aug 06 14:15:07 murrikka run_often.py[1234]: Battery SoC: 36.5%
+Aug 06 14:15:07 murrikka run_often.py[1234]: Battery Power: -100W (follow)
+Aug 06 14:15:07 murrikka run_often.py[1234]: Grid Power: 160W
+Aug 06 14:15:07 murrikka run_often.py[1234]: Solar: 4.20kW
+Aug 06 14:15:07 murrikka run_often.py[1234]: GSHP: 0.0kW
+Aug 06 14:15:07 murrikka run_often.py[1234]: Leaf: 0.0kW

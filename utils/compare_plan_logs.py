@@ -167,17 +167,19 @@ def _parse_plan_table(lines: list[str], start_idx: int) -> Optional[list[dict]]:
         if not m:
             break
         try:
+            # Table layout (Price column added after grid):
+            # time | baseload | gshp | grid | price | solar | soc | budget | intent | gshp_intent | ...
             entry = {
                 'time': f"{m.group(1)}-{m.group(2)} {m.group(3)}",
                 'baseload': float(parts[1]) if parts[1] else None,
                 'gshp_kw': float(parts[2]) if parts[2] else None,
                 'grid_kw': float(parts[3]) if parts[3] else None,
-                'solar_kw': float(parts[4]) if parts[4] else None,
-                'soc': float(parts[5]) if parts[5] else None,
+                'solar_kw': float(parts[5]) if len(parts) > 5 and parts[5] else None,
+                'soc': float(parts[6]) if len(parts) > 6 and parts[6] else None,
             }
-            intent_parts = parts[6].split() if len(parts) > 6 else []
+            intent_parts = parts[8].split() if len(parts) > 8 else []
             entry['battery_intent'] = intent_parts[0] if intent_parts else ''
-            entry['gshp_intent'] = parts[7].strip() if len(parts) > 7 else ''
+            entry['gshp_intent'] = parts[9].strip() if len(parts) > 9 else ''
             entries.append(entry)
         except (ValueError, IndexError):
             continue

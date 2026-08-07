@@ -1022,6 +1022,7 @@ class TestAdjustChargeSolarRealTime(unittest.TestCase):
         """SoC close to minimum => don't risk over-discharge."""
         adjusted, action = adjust_charge_solar_for_real_time(
             **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=13.0,
+            min_soc_pct=20.0,
         )
         self.assertEqual(action, 'charge_solar')
         self.assertAlmostEqual(adjusted, 5.0)
@@ -1153,6 +1154,7 @@ if __name__ == '__main__':
         """SoC close to minimum => don't risk over-discharge."""
         adjusted, action = adjust_charge_solar_for_real_time(
             **self.kwargs, grid_w=2000.0, battery_w=0.0, battery_soc_pct=13.0,
+            min_soc_pct=20.0,
         )
         self.assertEqual(action, 'charge_solar')
         self.assertAlmostEqual(adjusted, 5.0)

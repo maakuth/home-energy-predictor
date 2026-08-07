@@ -1,5 +1,6 @@
 from __future__ import annotations
 import unittest
+from pathlib import Path
 from utils.compare_plan_logs import (
     OftenLogParser,
     FrequentLogParser,
@@ -145,43 +146,24 @@ class TestAttribution(unittest.TestCase):
 
 
 class TestTrending(unittest.TestCase):
-    """Tests for the trending mode (lightweight, uses real log files)."""
+    """Tests for the trending mode (uses hermetic fixture logs)."""
+
+    @staticmethod
+    def _fixture(name: str) -> str:
+        return str(Path(__file__).parent.parent / 'tests' / 'fixtures' / name)
 
     def test_trending_first_plan(self):
-        """Trending should process at least plan 0 without error."""
-        # Use only a small slice of logs for speed
-        import tempfile, os
+        """Trending should process plan 0 from the fixture logs without error."""
+        import io
+        from contextlib import redirect_stdout
 
-        # Create tiny log excerpts
-        often_lines = []
-        frequent_lines = []
-        with open('recentlog.txt') as f:
-            for i, line in enumerate(f):
-                if i >= 1000:
-                    break
-                often_lines.append(line)
-        with open('recentlog-frequent.txt') as f:
-            for i, line in enumerate(f):
-                if i >= 2000:
-                    break
-                frequent_lines.append(line)
+        often = OftenLogParser(self._fixture('often_log_fixture.txt'))
+        freq = FrequentLogParser(self._fixture('frequent_log_fixture.txt'))
+        self.assertTrue(freq.plans, "fixture should contain at least one plan")
 
-        # Skip test if files are too short
-        if len(often_lines) < 100 or len(frequent_lines) < 100:
-            self.skipTest("Log files too short for trending test")
-
-        tf_often = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
-        tf_freq = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
-        try:
-            tf_often.write(''.join(often_lines))
-            tf_often.close()
-            tf_freq.write(''.join(frequent_lines))
-            tf_freq.close()
-
-            often = OftenLogParser(tf_often.name)
-            freq = FrequentLogParser(tf_freq.name)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
             # Should not raise
             print_trending(often, freq, every_n=1, battery_capacity_kwh=50.0)
-        finally:
-            os.unlink(tf_often.name)
-            os.unlink(tf_freq.name)
+        out = buf.getvalue()
+        self.assertIn("PLAN TRENDING", out)

@@ -11,6 +11,14 @@ import tempfile
 import shutil
 import pytest
 
+# Tests must not depend on the operational .env file. Production modules call
+# load_dotenv(override=True) at import time (battery_utils.py, optimize_plan.py,
+# ...), which would otherwise populate os.environ with live settings. Patch
+# load_dotenv to a no-op before any test module imports production code, so all
+# env reads fall back to documented code defaults.
+import dotenv
+dotenv.load_dotenv = lambda *args, **kwargs: False
+
 
 @pytest.fixture(autouse=True)
 def isolated_test_env(monkeypatch, tmp_path):

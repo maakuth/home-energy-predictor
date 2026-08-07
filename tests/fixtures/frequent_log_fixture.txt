@@ -1,0 +1,10 @@
+Aug 06 14:00:00 murrikka run_frequent.sh[5678]: === Starting Frequent HEPO Update: Thu  6 Aug 14:00:00 EEST 2026 ===
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: Optimization Plan from 08-06 14:00 to 08-06 14:30:
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: Interval: 15 minutes
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: GSHP Initial State: 46.3°C, STOPPED
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: Fireplace: OFF
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: Time        | Baseload | GSHP kW | Grid kW | Price  | Solar | SOC% | Budget | Battery Intent | Intent | Acc Sim
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: ------------|----------|---------|---------|--------|-------|------|--------|----------------|--------|--------
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: 08-06 14:00 |      4.5 |     0.0 |     0.1 |   0.059 |  4.35 | 37.3 | 2.20   | follow           | STOP   |  46.3
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: 08-06 14:15 |      4.6 |     0.0 |     0.2 |   0.061 |  4.20 | 36.5 | 2.20   | follow           | STOP   |  45.9
+Aug 06 14:00:03 murrikka run_frequent.sh[5679]: 08-06 14:30 |      4.7 |     0.0 |     0.0 |   0.058 |  4.00 | 36.0 | 2.20   | idle             | STOP   |  45.6

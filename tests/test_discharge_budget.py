@@ -137,7 +137,9 @@ class AccumulateIntervalDischargeTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_accumulates_discharge_across_calls(self):
-        base = datetime.now(timezone.utc)
+        # Fixed base well inside a 15-min interval so the +40s accumulation never
+        # spans an interval boundary (avoids wall-clock dependent resets).
+        base = datetime(2026, 1, 1, 0, 2, 0, tzinfo=timezone.utc)
         d1 = base
         d2 = base + timedelta(seconds=20)
         d3 = base + timedelta(seconds=40)
@@ -148,14 +150,14 @@ class AccumulateIntervalDischargeTests(unittest.TestCase):
         self.assertAlmostEqual(used3, 2.0 * 40.0 / 3600.0, places=5)
 
     def test_ignores_charging(self):
-        base = datetime.now(timezone.utc)
+        base = datetime(2026, 1, 1, 0, 2, 0, tzinfo=timezone.utc)
         used = accumulate_interval_discharge(3000.0, now=base, state_file=self.state_file)
         used = accumulate_interval_discharge(3000.0, now=base + timedelta(seconds=20),
                                              state_file=self.state_file)
         self.assertEqual(used, 0.0)
 
     def test_resets_at_interval_boundary(self):
-        base = datetime.now(timezone.utc)
+        base = datetime(2026, 1, 1, 0, 2, 0, tzinfo=timezone.utc)
         # First interval: accumulate some discharge
         accumulate_interval_discharge(-2000.0, now=base, state_file=self.state_file)
         accumulate_interval_discharge(-2000.0, now=base + timedelta(seconds=20),
