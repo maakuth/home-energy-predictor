@@ -296,16 +296,18 @@ def compute_load_following_setpoint(
     # Clamp to physical limits
     adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, adjusted_battery_kw))
 
-    # SoC floor guard: never discharge when battery is at or near the
-    # configured minimum SoC (BATTERY_MIN_SOC_PCT).
+    # SoC floor guard: never discharge below the configured minimum SoC.
+    # Effective floor is max(BATTERY_MIN_SOC_PCT, BATTERY_RESERVE_SOC_PCT),
+    # matching the planners.
     if battery_soc_pct is not None and adjusted_battery_kw < 0:
         if min_soc_pct is None:
             min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
-        if battery_soc_pct <= min_soc_pct + 5.0:
+        floor_pct = max(min_soc_pct, get_env_float('BATTERY_RESERVE_SOC_PCT', min_soc_pct))
+        if battery_soc_pct <= floor_pct:
             adjusted_battery_kw = 0.0
             guard_msg = (
                 f"soc guard: discharge blocked at SoC {battery_soc_pct:.1f}% "
-                f"(min {min_soc_pct:.0f}%)"
+                f"(floor {floor_pct:.0f}%)"
             )
             if log_message:
                 log_message = f"{log_message}; {guard_msg}"
@@ -459,16 +461,18 @@ def compute_net_metering_setpoint(
         else:
             log_msg += f"adjusted {planned_battery_kw:.2f}kW -> {clamped:.2f}kW"
     
-    # SoC floor guard: never discharge when battery is at or near the
-    # configured minimum SoC (BATTERY_MIN_SOC_PCT).
+    # SoC floor guard: never discharge below the configured minimum SoC.
+    # Effective floor is max(BATTERY_MIN_SOC_PCT, BATTERY_RESERVE_SOC_PCT),
+    # matching the planners.
     if battery_soc_pct is not None and clamped < 0:
         if min_soc_pct is None:
             min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
-        if battery_soc_pct <= min_soc_pct + 5.0:
+        floor_pct = max(min_soc_pct, get_env_float('BATTERY_RESERVE_SOC_PCT', min_soc_pct))
+        if battery_soc_pct <= floor_pct:
             clamped = max(clamped, 0.0)
             guard_msg = (
                 f"soc guard: discharge blocked at SoC {battery_soc_pct:.1f}% "
-                f"(min {min_soc_pct:.0f}%)"
+                f"(floor {floor_pct:.0f}%)"
             )
             if log_msg:
                 log_msg = f"{log_msg}; {guard_msg}"
@@ -509,6 +513,7 @@ def adjust_charge_solar_for_real_time(  # type: ignore[return]
 
     if min_soc_pct is None:
         min_soc_pct = get_env_float('BATTERY_MIN_SOC_PCT', 10.0)
+    floor_pct = max(min_soc_pct, get_env_float('BATTERY_RESERVE_SOC_PCT', min_soc_pct))
 
     actual_load_kw = solar_kw + (grid_w / 1000.0) - (battery_w / 1000.0)
     actual_surplus_kw = solar_kw - actual_load_kw
@@ -518,7 +523,7 @@ def adjust_charge_solar_for_real_time(  # type: ignore[return]
     if actual_surplus_kw >= -surplus_deadband_kw - epsilon:
         return planned_battery_kw, planned_action
 
-    if battery_soc_pct is None or battery_soc_pct <= min_soc_pct + 5.0:
+    if battery_soc_pct is None or battery_soc_pct <= floor_pct:
         return planned_battery_kw, planned_action
 
     net_load_kw = -actual_surplus_kw

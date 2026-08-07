@@ -140,6 +140,12 @@ Run the full suite before commit though.
 
 $ venv/bin/python -m pytest -k 'not slow'
 
+The full suite takes ~43 minutes in the dev container (measured 2601s), dominated
+by the nemotron-linprog replay tests over the 4 monthly fixtures. Use a shell
+timeout of at least 3000000 ms when running it. If you need to background it,
+detach with `setsid nohup ... > /tmp/pytest_full.log 2>&1 < /dev/null &` — a plain
+`&` gets killed when the opencode bash call returns.
+
 ## Plan Inspection Utility
 
 Use `utils/inspect_plan.py` to read `optimization_plan.json`:

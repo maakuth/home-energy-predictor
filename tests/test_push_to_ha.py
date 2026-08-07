@@ -432,7 +432,7 @@ class TestLoadFollowing(unittest.TestCase):
             grid_w=2000.0,
             battery_w=0.0,
             max_battery_kw=10.0,
-            battery_soc_pct=22.0,
+            battery_soc_pct=20.0,
             min_soc_pct=20.0,
         )
         self.assertGreaterEqual(adjusted, 0.0)
@@ -451,6 +451,20 @@ class TestLoadFollowing(unittest.TestCase):
         )
         self.assertLess(adjusted, 0.0)
 
+    def test_follow_allows_discharge_just_above_min(self):
+        """follow may discharge as long as SoC stays above the exact floor."""
+        adjusted, msg = compute_load_following_setpoint(
+            planned_battery_kw=0.0,
+            planned_action='follow',
+            solar_kw=0.0,
+            grid_w=2000.0,
+            battery_w=0.0,
+            max_battery_kw=10.0,
+            battery_soc_pct=20.1,
+            min_soc_pct=20.0,
+        )
+        self.assertLess(adjusted, 0.0)
+
     def test_discharge_load_blocked_when_soc_at_min(self):
         """discharge_load is blocked when SoC is at the minimum floor."""
         adjusted, msg = compute_load_following_setpoint(
@@ -459,7 +473,7 @@ class TestLoadFollowing(unittest.TestCase):
             solar_kw=0.0,
             grid_w=5000.0,
             battery_w=0.0,
-            battery_soc_pct=22.0,
+            battery_soc_pct=20.0,
             min_soc_pct=20.0,
         )
         self.assertGreaterEqual(adjusted, 0.0)
@@ -939,7 +953,7 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
             cumulative_export_kwh=0.0,
             elapsed_minutes=5,
             interval_minutes=15,
-            battery_soc_pct=22.0,
+            battery_soc_pct=20.0,
             min_soc_pct=20.0,
         )
         self.assertGreaterEqual(adjusted, 0.0)
@@ -1047,32 +1061,56 @@ class TestAdjustChargeSolarRealTime(unittest.TestCase):
         self.assertAlmostEqual(adjusted, -0.5)
 
     def test_min_soc_threshold_blocks_discharge(self):
-        """Custom min_soc_pct blocks discharge when SoC within margin."""
+        """Custom min_soc_pct blocks discharge when SoC at the floor."""
         adjusted, action = adjust_charge_solar_for_real_time(
             **self.kwargs, grid_w=2000.0, battery_w=0.0,
-            battery_soc_pct=22.0, min_soc_pct=18.0,
+            battery_soc_pct=18.0, min_soc_pct=18.0,
         )
         self.assertEqual(action, 'charge_solar')
 
-    def test_min_soc_threshold_respected(self):
-        """Custom (lower) min_soc_pct lowers the discharge threshold."""
+    def test_min_soc_threshold_boundary(self):
+        """Discharge switch fires as soon as SoC is above the exact floor."""
         adjusted, action = adjust_charge_solar_for_real_time(
             **self.kwargs, grid_w=2000.0, battery_w=0.0,
-            battery_soc_pct=12.0, min_soc_pct=5.0,
+            battery_soc_pct=20.1, min_soc_pct=20.0,
         )
+        self.assertEqual(action, 'discharge_load')
+
+    def test_min_soc_threshold_respected(self):
+        """Custom (lower) min_soc_pct lowers the discharge threshold."""
+        with patch.dict(os.environ, {'BATTERY_RESERVE_SOC_PCT': '5.0'}):
+            adjusted, action = adjust_charge_solar_for_real_time(
+                **self.kwargs, grid_w=2000.0, battery_w=0.0,
+                battery_soc_pct=12.0, min_soc_pct=5.0,
+            )
         self.assertEqual(action, 'discharge_load')
         self.assertAlmostEqual(adjusted, -2.0)
 
+    def test_reserve_raises_effective_floor(self):
+        """BATTERY_RESERVE_SOC_PCT above min lifts the discharge floor."""
+        with patch.dict(os.environ, {
+            'BATTERY_MIN_SOC_PCT': '10.0',
+            'BATTERY_RESERVE_SOC_PCT': '20.0',
+        }):
+            adjusted, action = adjust_charge_solar_for_real_time(
+                **self.kwargs, grid_w=2000.0, battery_w=0.0,
+                battery_soc_pct=15.0,
+            )
+        self.assertEqual(action, 'charge_solar')
+
     def test_env_min_soc_fallback_used_when_not_passed(self):
         """When min_soc_pct is omitted, BATTERY_MIN_SOC_PCT env is used."""
-        with patch.dict(os.environ, {'BATTERY_MIN_SOC_PCT': '20.0'}):
+        with patch.dict(os.environ, {
+            'BATTERY_MIN_SOC_PCT': '20.0',
+            'BATTERY_RESERVE_SOC_PCT': '0.0',
+        }):
             adjusted, action = adjust_charge_solar_for_real_time(
                 planned_battery_kw=5.0,
                 planned_action='charge_solar',
                 solar_kw=2.0,
                 grid_w=2000.0,
                 battery_w=0.0,
-                battery_soc_pct=22.0,
+                battery_soc_pct=20.0,
             )
         self.assertEqual(action, 'charge_solar')
         self.assertAlmostEqual(adjusted, 5.0)
