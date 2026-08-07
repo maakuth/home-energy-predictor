@@ -1,6 +1,6 @@
 [tool.pyright]
 include = ["."]
-exclude = [".venv", "venv", ".git", "**/__pycache__"]
+exclude = [".venv", "venv", ".git", "**/__pycache__", "tests"]
 typeCheckingMode = "standard"
 
 # Stub quality: pandas/statsmodels stubs are incomplete
