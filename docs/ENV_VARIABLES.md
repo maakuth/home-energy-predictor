@@ -76,11 +76,20 @@ The dispatch logic uses a **profit-only** strategy with **marginal opportunity c
 
 ---
 
-## GSHP (Ground Source Heat Pump) Settings
+## Solar Settings
 
-Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.
+Consumed by `run_often.py`, `predict_future.py`, `extract_data.py`, `analyze_performance.py` and `dump_battery_data.py`.
 
 | Variable | Description | Example | Unit / Notes |
+|----------|-------------|---------|--------------|
+| `SOLAR_PRODUCTION_ENTITY` | HA entity ID for real-time solar production. | `sensor.solarh_63038_real_power_kw` | kW. Used wherever the code previously hardcoded `sensor.solarh_63038_real_power_kw`. |
+| `SOLAR_FALLBACK_TO_FORECAST` | Use Solcast forecast as substitute for `solar_actual` when the real-time solar sensor is unavailable/offline. | `true` | bool. Affects `run_often.py` (real-time control), `predict_future.py` (baseload lag features), and `process_data.py` (training data). |
+
+---
+
+## GSHP (Ground Source Heat Pump) Settings
+
+Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Description | Example | Unit / Notes |
 |----------|-------------|---------|--------------|
 | `GSHP_INITIAL_TEMP` | Starting accumulator / buffer temperature. | `50.0` | °C. Fallback when `sensor.mlp_varaajan_lampotila` is unavailable in HA. |
 | `GSHP_MIN_TEMP` | Hard minimum accumulator temperature. | `42.0` | °C. If the temperature drops to or below this, the heat pump **must** start regardless of price. |

@@ -23,7 +23,7 @@ ENTITIES: dict[str, str] = {
     'sensor.tasmota_energy_power_3': 'leaf_power',
     'sensor.sahkokauppa_nyt': 'total_power',
     'sensor.solcast_pv_forecast_forecast_tomorrow': 'solar_forecast',
-    'sensor.solarh_63038_real_power_kw': 'solar_actual',
+    os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'): 'solar_actual',
     'sensor.sauna_temperature_2': 'sauna_temp',
     'sensor.mlp_pumpun_lampotla': 'gshp_pump_temp',
     'sensor.be_stat_batt_power': 'battery_power',  # Home battery power (Watts, positive=charging)

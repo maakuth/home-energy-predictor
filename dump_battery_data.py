@@ -140,7 +140,7 @@ def get_ha_relevant_entities() -> list[str]:
         
         # Grid and Solar
         'sensor.sahkokauppa_nyt',                 # Grid meter (kW, positive=import)
-        'sensor.solarh_63038_real_power_kw',      # Solar actual power (kW)
+        os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'),      # Solar actual power (kW)
         'sensor.solcast_pv_forecast_forecast_tomorrow',  # Solar forecast
         
         # Heat Pumps and Loads
@@ -312,7 +312,7 @@ def fetch_market_prices_range(
     
     try:
         # Try to load from predictions file if it has price data
-preds = load_json_file('state/future_predictions.json')
+        preds = load_json_file('state/future_predictions.json')
         if preds and isinstance(preds, list) and len(preds) > 0:
             if 'import_price' in preds[0] or 'export_price' in preds[0]:
                 for pred in preds:
@@ -625,7 +625,7 @@ def fetch_ha_measurements(
         # Fetch measurements for key entities
         entities = [
             'sensor.sahkokauppa_nyt',                      # Grid power (kW)
-            'sensor.solarh_63038_real_power_kw',           # Solar actual (kW)
+            os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'),           # Solar actual (kW)
             'sensor.mlp_teho',                              # GSHP power (W)
             'sensor.tasmota_energy_power_3',                # Leaf power (W)
             'sensor.ulkona_temperature_2',                  # Outside temp (°C)
@@ -643,7 +643,7 @@ def fetch_ha_measurements(
         
         for entity_id, col_name in [
             ('sensor.sahkokauppa_nyt', 'total_power_kw'),
-            ('sensor.solarh_63038_real_power_kw', 'solar_actual_kw'),
+            (os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 'solar_actual_kw'),
             ('sensor.mlp_teho', 'gshp_power_w'),
             ('sensor.tasmota_energy_power_3', 'leaf_power_w'),
             ('sensor.ulkona_temperature_2', 'outside_temp_c'),

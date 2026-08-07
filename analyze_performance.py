@@ -20,7 +20,7 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
     print(f"Fetching actuals for last {days} days from PostgreSQL...")
     entities = {
         'sensor.sahkokauppa_nyt': 'total_power',
-        'sensor.solarh_63038_real_power_kw': 'solar_actual',
+        os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'): 'solar_actual',
         'sensor.mlp_teho': 'gshp_actual_w',
         'sensor.be_stat_batt_power': 'battery_actual_w'
     }

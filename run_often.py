@@ -34,7 +34,7 @@ def main():
     soc = get_ha_state('sensor.be_soc')
     battery_power = get_ha_state('sensor.be_stat_batt_power')
     grid_power = get_ha_state('sensor.sahkokauppa_20s')
-    solar = get_ha_state('sensor.solarh_63038_real_power_kw')
+    solar = get_ha_state(os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'))
     gshp = get_ha_state('sensor.mlp_teho')
     leaf = get_ha_state('sensor.tasmota_energy_power_3')
     p1 = get_ha_state('sensor.current_phase_1')

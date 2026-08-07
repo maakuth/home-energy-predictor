@@ -100,7 +100,7 @@ These are the most important for battery planning tests:
 
 1. **Battery SOC:** `sensor.be_soc` (%)
 2. **Grid Power:** `sensor.sahkokauppa_nyt` (kW)
-3. **Solar Power:** `sensor.solarh_63038_real_power_kw` (kW)
+3. **Solar Power:** `sensor.solarh_63038_real_power_kw` (kW) — configurable via `SOLAR_PRODUCTION_ENTITY` env var
 4. **Outside Temp:** `sensor.ulkona_temperature_2` (°C)
 5. **Market Prices:** `sensor.nordpool_total` (EUR/kWh)
 

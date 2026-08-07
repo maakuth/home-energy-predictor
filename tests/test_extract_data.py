@@ -39,6 +39,18 @@ class TestExtractDataHelpers(unittest.TestCase):
         self.assertIn('weather.home', entity_set)
         self.assertGreaterEqual(len(entity_set), 15)
 
+    def test_solar_entity_from_env_var(self):
+        """SOLAR_PRODUCTION_ENTITY env var overrides the solar_actual entity."""
+        import importlib
+        import extract_data
+        try:
+            with patch.dict(os.environ, {'SOLAR_PRODUCTION_ENTITY': 'sensor.solar_plant_real_power_kw_2'}):
+                importlib.reload(extract_data)
+                self.assertIn('sensor.solar_plant_real_power_kw_2', extract_data.ENTITIES)
+                self.assertNotIn('sensor.solarh_63038_real_power_kw', extract_data.ENTITIES)
+        finally:
+            importlib.reload(extract_data)
+
     @patch('extract_data.datetime')
     def test_extract_states(self, mock_dt):
         from extract_data import extract_states

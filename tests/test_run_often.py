@@ -328,6 +328,51 @@ class TestRunOften(unittest.TestCase):
 
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')
+    def test_solar_entity_read_from_env(self, mock_get_ha, mock_push):
+        """Solar production entity is read from SOLAR_PRODUCTION_ENTITY env var."""
+        state_dir = os.path.join(self.test_dir, 'state')
+        self._make_plan_file(state_dir)
+
+        called_entities: list[str] = []
+
+        def state_side_effect(eid: str):
+            called_entities.append(eid)
+            return {'state': '0.0'}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {
+            'SOLAR_PRODUCTION_ENTITY': 'sensor.solar_plant_real_power_kw_2',
+            'BATTERY_NET_METERING': '0',
+        }):
+            from run_often import main
+            main()
+
+        self.assertIn('sensor.solar_plant_real_power_kw_2', called_entities,
+                      "Solar entity should be read from SOLAR_PRODUCTION_ENTITY env var")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_solar_entity_default(self, mock_get_ha, mock_push):
+        """Without SOLAR_PRODUCTION_ENTITY, the legacy solar entity is used."""
+        state_dir = os.path.join(self.test_dir, 'state')
+        self._make_plan_file(state_dir)
+
+        called_entities: list[str] = []
+
+        def state_side_effect(eid: str):
+            called_entities.append(eid)
+            return {'state': '0.0'}
+        mock_get_ha.side_effect = state_side_effect
+
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '0'}):
+            from run_often import main
+            main()
+
+        self.assertIn('sensor.solarh_63038_real_power_kw', called_entities,
+                      "Default solar entity should be the legacy sensor")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
     def test_manual_override_auto(self, mock_get_ha, mock_push):
         """When input_select is 'auto', normal flow proceeds (net metering active)."""
         def state_side_effect(eid: str):

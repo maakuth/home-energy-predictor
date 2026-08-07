@@ -54,7 +54,7 @@ def compute_baseload_at_lag(
     try:
         sensors_def = [
             ('sensor.sahkokauppa_nyt', 'total', 1.0),
-            ('sensor.solarh_63038_real_power_kw', 'solar', 1.0),
+            (os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 'solar', 1.0),
             ('sensor.mlp_teho', 'gshp', 1 / 1000.0),
             ('sensor.tasmota_energy_power_3', 'leaf', 1 / 1000.0),
             ('sensor.be_stat_batt_power', 'battery', 1 / 1000.0),
@@ -297,7 +297,7 @@ def predict() -> None:
     print('Fetching historical data for anchors...')
     anchor_entities = [
         'sensor.sahkokauppa_nyt', 
-        'sensor.solarh_63038_real_power_kw', 
+        os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 
         'sensor.mlp_teho',
         'sensor.tasmota_energy_power_3',
         'sensor.be_stat_batt_power'
