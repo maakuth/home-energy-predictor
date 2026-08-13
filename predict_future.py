@@ -19,6 +19,15 @@ load_dotenv(override=True)
 PREDICTION_INTERVAL_MINUTES: int = int(os.getenv('PREDICTION_INTERVAL_MINUTES', '15'))
 
 
+def _safe_float(value: Any, fallback: float) -> float:
+    """Convert a value to float, falling back to ``fallback`` on NaN/invalid."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return f if np.isfinite(f) else fallback
+
+
 def compute_baseload_at_lag(
     anchor_data: dict[str, pd.DataFrame],
     hours_back: float,
@@ -148,9 +157,19 @@ def generate_inference_data(
         # Get nearest solar estimate
         try:
             idx = df_solar.index.get_indexer([current_ts], method='nearest')[0]  # type: ignore[arg-type]
-            solar_val = df_solar.iloc[idx]['pv_estimate']
+            nearest_solar = df_solar.iloc[idx]
+            solar_val = float(nearest_solar['pv_estimate'])
         except Exception:
+            nearest_solar = None
             solar_val = 0.0
+
+        # Worst/best case estimates (estimate10/estimate90) for monitoring.
+        # Fall back to the nominal (pv_estimate) value when not available.
+        solar_p10_val = solar_val
+        solar_p90_val = solar_val
+        if nearest_solar is not None:
+            solar_p10_val = _safe_float(nearest_solar.get('pv_estimate10'), solar_val)
+            solar_p90_val = _safe_float(nearest_solar.get('pv_estimate90'), solar_val)
             
         # Get nearest weather forecast estimate
         forecast_temp = temp_val
@@ -198,6 +217,8 @@ def generate_inference_data(
             'outside_temp': forecast_temp,
             'wind_speed': forecast_wind,
             'solar_forecast': solar_val,
+            'solar_forecast_p10': solar_p10_val,
+            'solar_forecast_p90': solar_p90_val,
             'accumulator_temp': acc_val,
             'gshp_pump_temp': p_temp_val,
             'is_gshp_pump_running': 1 if not np.isnan(p_temp_val) else 0,
@@ -498,6 +519,8 @@ def predict() -> None:
             'predicted_baseload': p_kw,     # house usage without GSHP (kW)
             'predicted_usage': p_kw,        # backward compatibility
             'solar_forecast': float(inference_data[i]['solar_forecast']),
+            'solar_forecast_p10': float(inference_data[i].get('solar_forecast_p10', inference_data[i]['solar_forecast'])),
+            'solar_forecast_p90': float(inference_data[i].get('solar_forecast_p90', inference_data[i]['solar_forecast'])),
             'outside_temp': float(inference_data[i]['outside_temp']),
             'ev_position': int(inference_data[i].get('ev_position', 1)),
             'is_sauna_active': int(inference_data[i].get('is_sauna_active', 0)),
@@ -523,6 +546,8 @@ def predict() -> None:
                 generated_at TEXT,
                 predicted_usage_kw REAL,
                 solar_forecast_kw REAL,
+                solar_forecast_p10_kw REAL,
+                solar_forecast_p90_kw REAL,
                 version TEXT,
                 battery_action TEXT,
                 battery_power_kw REAL,
@@ -547,6 +572,8 @@ def predict() -> None:
         
         new_cols = {
             'is_fallback_price': 'INTEGER DEFAULT 0',
+            'solar_forecast_p10_kw': 'REAL',
+            'solar_forecast_p90_kw': 'REAL',
             'version': "TEXT DEFAULT 'unknown'",
             'battery_action': 'TEXT',
             'battery_power_kw': 'REAL',
@@ -570,13 +597,13 @@ def predict() -> None:
 
         # Insert predictions.
         data_to_insert = [
-            (res['timestamp'], generated_at, res['predicted_usage'], res['solar_forecast'], res['is_fallback_price'], git_version)
+            (res['timestamp'], generated_at, res['predicted_usage'], res['solar_forecast'], res.get('solar_forecast_p10'), res.get('solar_forecast_p90'), res['is_fallback_price'], git_version)
             for res in results
         ]
         cur.executemany('''
             INSERT OR REPLACE INTO predictions 
-            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, is_fallback_price, version)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, solar_forecast_p10_kw, solar_forecast_p90_kw, is_fallback_price, version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
         
         conn.commit()

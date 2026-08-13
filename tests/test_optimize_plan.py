@@ -70,6 +70,8 @@ class OptimizeArchivingTests(unittest.TestCase):
         self.assertIn('version', columns)
         self.assertIn('battery_action', columns)
         self.assertIn('import_price', columns)
+        self.assertIn('solar_forecast_p10_kw', columns)
+        self.assertIn('solar_forecast_p90_kw', columns)
 
         cur.execute("""
             SELECT 
@@ -159,6 +161,54 @@ class OptimizeArchivingTests(unittest.TestCase):
         self.assertIsNotNone(row[0])
         self.assertAlmostEqual(row[0], 73.0, places=1,
             msg="Plan should start from live HA battery SOC (73%), not default 50%")
+
+
+class LoadPredictionsTests(unittest.TestCase):
+    def setUp(self):
+        self.predictions_file = os.getenv('TEST_PREDICTIONS_FILE', 'future_predictions.json')
+
+    def _write(self, entries):
+        with open(self.predictions_file, 'w') as f:
+            json.dump(entries, f)
+
+    def test_load_predictions_reads_p10_p90(self):
+        from optimize_plan import load_predictions
+        self._write([
+            {
+                "timestamp": "2026-04-05T13:15:00+03:00",
+                "predicted_baseload": 2.0,
+                "solar_forecast": 0.5,
+                "solar_forecast_p10": 0.2,
+                "solar_forecast_p90": 0.9,
+                "outside_temp": 5.0,
+                "is_sauna_active": 0,
+                "is_fallback_price": 0,
+            }
+        ])
+        xgb_data, predictions, timestamps, solar, lo, hi, p10, p90 = load_predictions(
+            file_path=self.predictions_file
+        )
+        self.assertAlmostEqual(float(p10[0]), 0.2, places=5)
+        self.assertAlmostEqual(float(p90[0]), 0.9, places=5)
+
+    def test_load_predictions_p10_p90_fallback_to_forecast(self):
+        from optimize_plan import load_predictions
+        # Old-format file without p10/p90 keys
+        self._write([
+            {
+                "timestamp": "2026-04-05T13:15:00+03:00",
+                "predicted_baseload": 2.0,
+                "solar_forecast": 0.5,
+                "outside_temp": 5.0,
+                "is_sauna_active": 0,
+                "is_fallback_price": 0,
+            }
+        ])
+        xgb_data, predictions, timestamps, solar, lo, hi, p10, p90 = load_predictions(
+            file_path=self.predictions_file
+        )
+        self.assertAlmostEqual(float(p10[0]), 0.5, places=5)
+        self.assertAlmostEqual(float(p90[0]), 0.5, places=5)
 
 
 @contextmanager

@@ -82,7 +82,7 @@ def get_env_bool(name: str, default: bool = False) -> bool:
 def load_predictions(
     file_path: Optional[str] = None,
     sarima_path: Optional[str] = None,
-) -> tuple[Any, Any, Any, Any, pd.Series, pd.Series]:
+) -> tuple[Any, Any, Any, Any, pd.Series, pd.Series, Any, Any]:
     # Support environment variable overrides for testing
     if file_path is None:
         file_path = os.getenv('TEST_PREDICTIONS_FILE', 'state/future_predictions.json')
@@ -130,7 +130,17 @@ def load_predictions(
     prediction_timestamps = df_xgb.index.to_pydatetime()
     prediction_solar = df_xgb['solar_forecast'].values.astype(float)
 
-    return xgb_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper
+    # Worst/best case solar series (estimate10/estimate90), if present in the
+    # predictions file. Fall back to the nominal forecast when unavailable so
+    # older future_predictions.json files keep working.
+    prediction_solar_p10 = prediction_solar
+    prediction_solar_p90 = prediction_solar
+    if 'solar_forecast_p10' in df_xgb.columns:
+        prediction_solar_p10 = df_xgb['solar_forecast_p10'].values.astype(float)
+    if 'solar_forecast_p90' in df_xgb.columns:
+        prediction_solar_p90 = df_xgb['solar_forecast_p90'].values.astype(float)
+
+    return xgb_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper, prediction_solar_p10, prediction_solar_p90
 
 
 def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, export_base: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
@@ -445,7 +455,7 @@ def plan_gshp_dispatch(
 def optimize() -> None:
     print('Loading predictions...')
     try:
-        predictions_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper = load_predictions()
+        predictions_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper, prediction_solar_p10, prediction_solar_p90 = load_predictions()
     except FileNotFoundError:
         print('Error: future_predictions.json not found. Run predict_future.py first.')
         return
@@ -471,6 +481,8 @@ def optimize() -> None:
     print(f"Spot price horizon: tomorrow_valid={tomorrow_valid}, max_lookahead_hours={max_lookahead_hours:.1f}h")
 
     solar_array = np.array(prediction_solar, dtype=float)
+    solar_array_p10 = np.array(prediction_solar_p10, dtype=float)
+    solar_array_p90 = np.array(prediction_solar_p90, dtype=float)
 
     # --- GSHP Optimization (Must run before battery) ---
     acc_temp_state = get_ha_state('sensor.mlp_varaajan_lampotila')
@@ -741,6 +753,8 @@ def optimize() -> None:
             'export_unit_price': float(p_export),
             'is_fallback_price': int(is_fallback_price[i]),
             'solar_forecast_kw': float(p_solar_kw),
+            'solar_forecast_p10_kw': float(solar_array_p10[i]),
+            'solar_forecast_p90_kw': float(solar_array_p90[i]),
             'solar_forecast_kwh': float(solar_kwh[i]),
             'ev_charge': bool(ev_plan[i]),
             'heat_boost': bool(heating_plan[i]),
@@ -772,6 +786,8 @@ def optimize() -> None:
                 generated_at TEXT,
                 predicted_usage_kw REAL,
                 solar_forecast_kw REAL,
+                solar_forecast_p10_kw REAL,
+                solar_forecast_p90_kw REAL,
                 version TEXT,
                 battery_action TEXT,
                 battery_power_kw REAL,
@@ -796,6 +812,8 @@ def optimize() -> None:
         
         new_cols = {
             'is_fallback_price': 'INTEGER DEFAULT 0',
+            'solar_forecast_p10_kw': 'REAL',
+            'solar_forecast_p90_kw': 'REAL',
             'version': "TEXT DEFAULT 'unknown'",
             'battery_action': 'TEXT',
             'battery_power_kw': 'REAL',
@@ -823,6 +841,8 @@ def optimize() -> None:
                 generated_at, 
                 item['predicted_usage_kw'], 
                 item['solar_forecast_kw'], 
+                item.get('solar_forecast_p10_kw'),
+                item.get('solar_forecast_p90_kw'),
                 item['is_fallback_price'],
                 git_version,
                 item.get('battery_action'),
@@ -845,12 +865,13 @@ def optimize() -> None:
             INSERT OR REPLACE INTO predictions 
             (
                 target_timestamp, generated_at, predicted_usage_kw, solar_forecast_kw, 
+                solar_forecast_p10_kw, solar_forecast_p90_kw,
                 is_fallback_price, version, battery_action, battery_power_kw, 
                 battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh,
                 charge_from_solar_kwh, charge_from_grid_kwh, discharge_to_load_kwh, discharge_to_export_kwh,
                 planned_gshp_kw, gshp_intent
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
 
         

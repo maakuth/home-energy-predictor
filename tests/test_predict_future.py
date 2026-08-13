@@ -52,6 +52,40 @@ class TestPredictFuture(unittest.TestCase):
         for row in inference_data:
             self.assertEqual(row['outside_temp'], 10.0)
 
+    def test_solar_p10_p90_in_inference_data(self):
+        """pv_estimate10/90 from solcast detailedHourly are surfaced per interval."""
+        solar_indices = [self.now + timedelta(minutes=15 * i) for i in range(4)]
+        df_solar = pd.DataFrame(
+            {
+                'pv_estimate': [1.0] * 4,
+                'pv_estimate10': [0.4] * 4,
+                'pv_estimate90': [1.7] * 4,
+            },
+            index=solar_indices,
+        )
+        start = self.now + timedelta(minutes=15)
+        end = self.now + timedelta(minutes=60)
+        inference_data, _ = generate_inference_data(
+            start, end, self.interval, df_solar, pd.DataFrame(),
+            self.current_states, self.sauna_states,
+        )
+        for row in inference_data:
+            self.assertEqual(row['solar_forecast'], 1.0)
+            self.assertEqual(row['solar_forecast_p10'], 0.4)
+            self.assertEqual(row['solar_forecast_p90'], 1.7)
+
+    def test_solar_p10_p90_fallback_when_missing(self):
+        """When solcast lacks estimate10/90, they fall back to pv_estimate."""
+        # self.df_solar only has pv_estimate
+        inference_data, _ = generate_inference_data(
+            self.start_time, self.end_time, self.interval,
+            self.df_solar, pd.DataFrame(), self.current_states, self.sauna_states,
+        )
+        for row in inference_data:
+            self.assertEqual(row['solar_forecast'], 1.0)
+            self.assertEqual(row['solar_forecast_p10'], 1.0)
+            self.assertEqual(row['solar_forecast_p90'], 1.0)
+
     def test_proximity_limit(self):
         # Current time is 'now'. 
         # Forecast is at 'now + 0h'.
