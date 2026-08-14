@@ -1,0 +1,49 @@
+# HEPO Next Hour plan widget (markdown card)
+# Paste into a Lovelace dashboard. Reads the next 4 quarters (15-min
+# intervals) from sensor.hepo_optimization_plan attributes and re-renders
+# automatically whenever push_to_ha.py updates the plan.
+type: markdown
+title: HEPO Next Hour
+content: |
+  {% set p = state_attr('sensor.hepo_optimization_plan', 'plan') | default([], true) %}
+  {% set q = p[:4] %}
+  {% if q %}
+  <table>
+    <tr>
+      <th style="text-align:left">⏱ Time</th>
+      <th style="text-align:left">🔋 Battery</th>
+      <th style="text-align:left">🌡 GSHP</th>
+      <th style="text-align:right">☀️ PV kW</th>
+      <th style="text-align:right">⚡ Grid kW</th>
+      <th style="text-align:right">💶 €/kWh</th>
+      <th style="text-align:right">💰 Cost/€</th>
+    </tr>
+    {% for e in q %}
+    <tr>
+      <td style="text-align:left">{{ e.timestamp | as_timestamp | timestamp_custom('%H:%M', true) }}</td>
+      <td style="text-align:left">{% if e.battery_power_kw > 0.05 %}+{{ '%.1f'|format(e.battery_power_kw) }}{% elif e.battery_power_kw < -0.05 %}-{{ '%.1f'|format(-e.battery_power_kw) }}{% else %}idle{% endif %}</td>
+      <td style="text-align:left">{% if e.gshp_intent == 'START' %}{{ '%.1f'|format(e.planned_gshp_kw) }} kW{% else %}STOP{% endif %}</td>
+      <td style="text-align:right">{{ '%.1f'|format(e.solar_forecast_kw) }}</td>
+      <td style="text-align:right">{% set imp = e.grid_import_kwh | float * 4 %}{% set exp = e.grid_export_kwh | float * 4 %}{% if imp > 0 and exp == 0 %}{{ '%.1f'|format(imp) }}{% elif exp > 0 %}-{{ '%.1f'|format(exp) }}{% else %}—{% endif %}</td>
+      <td style="text-align:right">{{ '%.3f'|format(e.spot_price) }}</td>
+      <td style="text-align:right">{{ '%.2f'|format(e.estimated_hour_cost) }}{% if e.estimated_hour_savings > 0 %} +{{ '%.2f'|format(e.estimated_hour_savings) }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div style="margin-top:6px; opacity:0.6; font-size:12px">
+    Plan updated: {{ state_attr('sensor.hepo_optimization_plan', 'last_updated') | as_timestamp | timestamp_custom('%H:%M:%S', true) }}
+  </div>
+  {% else %}
+  _No plan available yet._
+  {% endif %}
+card_mod:
+  style:
+    ha-markdown$:
+      table:
+        width: 100%
+        border-collapse: collapse
+        font-size: 14px
+      td, th:
+        padding: 4px 8px
+      tr:nth-child(even):
+        background-color: rgba(128,128,128,0.08)
