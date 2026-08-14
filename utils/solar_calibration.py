@@ -51,25 +51,27 @@ def load_archived_forecasts() -> pd.DataFrame:
     try:
         conn = get_db_connection()
         # Guard against older dbs that predate the p10/p90 columns.
-        cols = ["target_timestamp", "solar_forecast_kw"]
+        cols = ["target_timestamp", "generated_at", "solar_forecast_kw"]
         for candidate in ("solar_forecast_p10_kw", "solar_forecast_p90_kw"):
             found = [r[0] for r in conn.execute("PRAGMA table_info(predictions)")]
             if candidate in found:
                 cols.append(candidate)
         query = f"""
             SELECT {", ".join(cols)}
-            FROM (
-                SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
-                FROM predictions
-            )
-            WHERE rn = 1
+            FROM predictions
         """
         df = pd.read_sql_query(query, conn)
         conn.close()
         if df.empty:
             return df
+        # The same UTC instant is stored under different raw strings (mixed
+        # timezone offsets / separators), so ROW_NUMBER-on-string would leave
+        # duplicates once parsed. Dedup on the parsed instant instead, keeping
+        # the most recently generated forecast.
         df['target_timestamp'] = pd.to_datetime(df['target_timestamp'], utc=True)
-        return df.set_index('target_timestamp')
+        df = df.sort_values('generated_at')
+        df = df.drop_duplicates(subset='target_timestamp', keep='last')
+        return df.set_index('target_timestamp').sort_index()
     except Exception as e:
         print(f"Error reading archived predictions: {e}")
         return pd.DataFrame()
