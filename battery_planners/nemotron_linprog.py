@@ -62,6 +62,7 @@ def _interval_discharge_budget(
         max_discharge_kw, interval_hours,
         current_price, future_prices,
         min_factor=get_env_float('BATTERY_FOLLOW_BUDGET_MIN_FACTOR', 0.10),
+        spread_factor=get_env_float('BATTERY_FOLLOW_BUDGET_SPREAD_FACTOR', 2.5),
     )
     return max(budget, planned_discharge_kwh)
 

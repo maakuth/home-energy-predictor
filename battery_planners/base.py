@@ -92,14 +92,22 @@ def compute_discharge_budget(
     current_price: float,
     future_prices: np.ndarray,
     min_factor: float = 0.10,
+    spread_factor: float = 2.5,
 ) -> float:
     """Compute the max discharge-to-load kWh budget for a single interval.
 
-    The budget is proportional to how attractive the current import price is
-    relative to the remaining horizon: cheap intervals get a small budget
-    (battery helps a little while load-following, but energy is conserved for
-    later), expensive intervals get a large budget.  This replaces the binary
-    "discharge everything / idle completely" decision with a gradual one.
+    The budget is scaled by how much the current import price is *below* the
+    most expensive interval still ahead in the horizon (the "spread").  When a
+    genuinely more expensive period is coming, the budget is tight so the
+    battery conserves energy for it.  When the horizon is flat (e.g. summer
+    days with plenty of sun and little intraday price difference), the spread
+    is small and the budget stays generous, so the battery freely covers
+    night-time loads (e.g. EV charging) from solar-charged storage instead of
+    forcing a grid import.
+
+    This replaces the old percentile-based scaling, which treated mid-tier
+    night prices as "worth conserving for" even when nothing significantly
+    more expensive was coming, causing needless grid imports on flat days.
 
     The budget is always at least ``min_factor`` of the maximum interval
     discharge, so the battery still contributes *some* load-following during
@@ -113,7 +121,12 @@ def compute_discharge_budget(
         interval_hours: Interval length (hours).
         current_price: Current import price (EUR/kWh).
         future_prices: Import prices from the current interval onward.
-        min_factor: Minimum budget fraction of max interval discharge.
+        min_factor: Minimum budget fraction of max interval discharge
+            (applied when the price spread is large).
+        spread_factor: How aggressively the budget shrinks as the gap between
+            the current price and the future price peak grows.  Set to 0.0 to
+            disable the spread scaling entirely (budget always at full
+            max interval discharge, legacy behaviour).
 
     Returns:
         Max discharge-to-load kWh budget for this interval.
@@ -124,11 +137,18 @@ def compute_discharge_budget(
     if usable_kwh < 1e-9:
         return 0.0
 
-    if len(future_prices) == 0:
-        price_percentile = 1.0
+    if len(future_prices) == 0 or spread_factor <= 0.0:
+        factor = 1.0
     else:
-        price_percentile = float(np.mean(future_prices <= current_price))
-    factor = min_factor + (1.0 - min_factor) * price_percentile
+        peak_price = float(np.max(future_prices))
+        if peak_price <= 0.0:
+            factor = 1.0
+        else:
+            # spread in (0, 1]: 0 when current == peak (nothing better ahead),
+            # approaching 1 when current is far below the future peak.
+            spread = max(0.0, min(1.0, (peak_price - current_price) / peak_price))
+            factor = 1.0 - spread_factor * spread
+            factor = max(min_factor, min(1.0, factor))
     return min(max_interval_kwh, usable_kwh) * factor
 
 

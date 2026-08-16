@@ -80,6 +80,44 @@ class DischargeBudgetFormulaTests(unittest.TestCase):
             5.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices)
         self.assertEqual(budget, 0.0)
 
+    def test_flat_prices_keep_generous_budget(self):
+        # Summer-like flat day: prices barely move, so there is no expensive
+        # future interval worth conserving for.  The battery should stay free
+        # to cover night loads (e.g. EV) from stored solar instead of forcing
+        # a grid import.  A small price bump ahead must NOT collapse the budget.
+        prices = np.array([0.08, 0.08, 0.08, 0.09, 0.09])
+        budget = compute_discharge_budget(
+            30.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices, min_factor=0.10)
+        # Small spread -> factor ~0.72, well above the 0.10 floor.
+        self.assertGreaterEqual(budget, 0.6 * 10.0 * 0.25)
+        self.assertLessEqual(budget, 10.0 * 0.25)
+
+    def test_big_future_peak_tightens_cheap_interval_budget(self):
+        # Winter-like day: a genuinely expensive evening peak is coming, so a
+        # cheap night interval should conserve the battery for it.
+        prices = np.array([0.05, 0.06, 0.07, 0.08, 0.25])
+        cheap_night = compute_discharge_budget(
+            30.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices, min_factor=0.10)
+        peak = compute_discharge_budget(
+            30.0, 5.0, 0.95, 10.0, 0.25, prices[-1], prices, min_factor=0.10)
+        # Cheap night interval keeps only a small load-following budget.
+        self.assertLessEqual(cheap_night, 0.35 * 10.0 * 0.25)
+        # The peak interval gets the full budget (nothing better ahead).
+        self.assertGreaterEqual(peak, 0.95 * 10.0 * 0.25)
+
+    def test_spread_factor_zero_disables_scaling(self):
+        prices = np.array([0.05, 0.06, 0.07, 0.08, 0.25])
+        scaled = compute_discharge_budget(
+            30.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices, min_factor=0.10,
+            spread_factor=2.5)
+        unscaled = compute_discharge_budget(
+            30.0, 5.0, 0.95, 10.0, 0.25, prices[0], prices, min_factor=0.10,
+            spread_factor=0.0)
+        # With scaling disabled the budget stays at full max interval
+        # discharge (legacy behaviour), regardless of the price spread.
+        self.assertAlmostEqual(unscaled, 10.0 * 0.25, places=3)
+        self.assertLess(scaled, unscaled)
+
     def test_budget_capped_by_max_discharge_power(self):
         prices = np.array([0.03, 0.15, 0.20])
         budget = compute_discharge_budget(
@@ -232,7 +270,7 @@ class PlannerBudgetIntegrationTests(unittest.TestCase):
 class NemotronBudgetTests(unittest.TestCase):
     """discharge_budget_kwh must be populated by the nemotron-linprog planner."""
 
-    def _plan(self, prices, initial_soc_pct=80):
+    def _plan(self, prices, initial_soc_pct=80, predictions=None):
         prices = np.asarray(prices, dtype=float)
         env = {
             "BATTERY_CAPACITY_KWH": "40",
@@ -242,8 +280,10 @@ class NemotronBudgetTests(unittest.TestCase):
         }
         with patched_env(env):
             planner = BatteryPlannerFactory.create('nemotron-linprog')
+            if predictions is None:
+                predictions = np.full(len(prices), 2.0)
             return planner.plan(
-                np.full(len(prices), 2.0), np.zeros(len(prices)),
+                predictions, np.zeros(len(prices)),
                 prices, np.zeros(len(prices)),
                 [f'i{i}' for i in range(len(prices))])
 
@@ -262,10 +302,11 @@ class NemotronBudgetTests(unittest.TestCase):
             )
 
     def test_budget_adds_follow_headroom_when_planned_discharge_is_low(self):
-        # With a low initial SoC the LP cannot discharge much, so the
-        # price-scaled formula exceeds planned discharge and the budget must
-        # reflect that headroom rather than just mirroring the plan.
-        plan = self._plan([0.05, 0.05, 0.15, 0.15], initial_soc_pct=30)
+        # With a low initial SoC and a big future peak the LP is conservative
+        # in the cheap early intervals, so the price-scaled budget must still
+        # provide follow-headroom rather than just mirroring the plan.
+        plan = self._plan([0.03, 0.03, 0.30, 0.30], initial_soc_pct=30,
+                          predictions=np.full(4, 3.0))
         self.assertTrue(any(
             e.discharge_budget_kwh > e.discharge_to_load_kwh + 1e-9
             for e in plan))

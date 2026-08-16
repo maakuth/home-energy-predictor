@@ -263,6 +263,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
         charge_eff = get_env_float('BATTERY_CHARGE_EFFICIENCY', 0.95)
         discharge_eff = get_env_float('BATTERY_DISCHARGE_EFFICIENCY', 0.95)
         min_factor = get_env_float('BATTERY_FOLLOW_BUDGET_MIN_FACTOR', 0.10)
+        spread_factor = get_env_float('BATTERY_FOLLOW_BUDGET_SPREAD_FACTOR', 2.5)
         
         # Grid connection limit (3-phase, 230V)
         main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
@@ -526,6 +527,7 @@ class HeuristicBatteryPlanner(BatteryPlanner):
                 max_discharge_kw, interval_hours,
                 current_import, import_prices[i:],
                 min_factor=min_factor,
+                spread_factor=spread_factor,
             )
             # Never undercut an explicit planned discharge-to-load.
             budget = max(budget, discharge_to_load)
