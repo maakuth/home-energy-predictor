@@ -80,6 +80,12 @@ def main():
     if not plan:
         return
 
+    plan_mtime = None
+    try:
+        plan_mtime = os.path.getmtime('state/optimization_plan.json')
+    except OSError:
+        pass
+
     current = get_current_plan_entry(plan)
     if current is None:
         print('No current plan entry found')
@@ -131,6 +137,7 @@ def main():
         actual_battery_w=battery_w,
         plan=plan,
         max_battery_kw=max_battery_kw,
+        plan_mtime=plan_mtime,
     )
 
     planned_battery_kw, planned_action = adjust_charge_solar_for_real_time(

@@ -1415,6 +1415,57 @@ class TestSetpointSmoothing(unittest.TestCase):
         )
         self.assertAlmostEqual(result, 0.0)
 
+    def test_plan_mtime_change_resets_stale_smoothed(self):
+        """A regenerated plan discards the cached setpoint for the current interval."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([7.0, 0.0])
+        state = {
+            'interval_index': interval_now,
+            'power_sum_kw': 6.0,
+            'power_count': 1,
+            'prior_planned_kw': 7.0,
+            'smoothed_setpoint_kw': 7.0,
+            'plan_mtime': 1000.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=0.0, planned_action='idle',
+            actual_battery_w=7000, plan=plan,
+            plan_mtime=1000.5,
+        )
+        # cached 7.0 must be discarded; fresh plan's value (idle) applies
+        self.assertAlmostEqual(result, 0.0)
+
+    def test_plan_mtime_unchanged_keeps_cached(self):
+        """Same plan mtime keeps returning the cached smoothed setpoint."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        interval_now = int(now.timestamp()) // 900
+
+        plan = self._make_plan([7.0, 0.0])
+        state = {
+            'interval_index': interval_now,
+            'power_sum_kw': 6.0,
+            'power_count': 1,
+            'prior_planned_kw': 7.0,
+            'smoothed_setpoint_kw': 7.0,
+            'plan_mtime': 1000.0,
+        }
+        with open(self.test_state_file, 'w') as f:
+            json.dump(state, f)
+
+        result = smooth_planned_setpoint(
+            planned_battery_kw=0.0, planned_action='idle',
+            actual_battery_w=7000, plan=plan,
+            plan_mtime=1000.0,
+        )
+        self.assertAlmostEqual(result, 7.0)
+
 
 class TestRampRateLimiter(unittest.TestCase):
     """Tests for apply_ramp_rate battery power smoothing."""

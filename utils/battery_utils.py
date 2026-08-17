@@ -567,6 +567,7 @@ def smooth_planned_setpoint(
     state_file: str | None = None,
     interval_minutes: int = 15,
     max_battery_kw: float = 10.0,
+    plan_mtime: float | None = None,
 ) -> float:
     """
     Smooth battery setpoint across 15-min interval boundaries.
@@ -593,11 +594,22 @@ def smooth_planned_setpoint(
         state_file: Path to persistent state file
         interval_minutes: Length of each interval (default 15)
         max_battery_kw: Maximum battery power in kW for clamping (default 10)
+        plan_mtime: mtime of the optimization plan file. If the plan was
+            regenerated since the last call (mtime differs), the cached
+            smoothed setpoint is discarded and the fresh plan's value is
+            used, so a mid-interval plan change takes effect immediately
+            instead of being held for the rest of the interval.
 
     Returns:
         Smoothed battery setpoint in kW, clamped to [-max_battery_kw, max_battery_kw]
     """
     state = _load_setpoint_smooth_state(state_file)
+
+    if plan_mtime is not None and state.get('plan_mtime') is not None and plan_mtime != state.get('plan_mtime'):
+        state = {}
+
+    state['plan_mtime'] = plan_mtime if plan_mtime is not None else state.get('plan_mtime')
+
     now = datetime.now().astimezone()
     interval_index = int(now.timestamp()) // (interval_minutes * 60)
 

@@ -27,3 +27,4 @@ state/
 # Temporary log files
 recentlog.txt
 recentlog-*.txt
+venv
