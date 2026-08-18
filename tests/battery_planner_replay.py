@@ -17,6 +17,37 @@ import pickle
 
 from utils.battery_test_data import BatteryTestData
 from battery_planners import BatteryPlannerFactory, BatteryPlanner
+from battery_planners.base import BatteryPlanEntry
+
+
+def execute_plan_entry(
+    soc_kwh: float,
+    entry: BatteryPlanEntry,
+    min_soc_kwh: float,
+    max_soc_kwh: float,
+    charge_efficiency: float,
+    discharge_efficiency: float,
+    actual_load_kwh: float,
+    actual_solar_kwh: float,
+) -> Dict[str, float | bool]:
+    """Apply a planned interval to the replay state without hiding violations."""
+    charge_solar = entry.charge_from_solar_kwh
+    charge_grid = entry.charge_from_grid_kwh
+    discharge_load = entry.discharge_to_load_kwh
+    discharge_export = entry.discharge_to_export_kwh
+    raw_soc_kwh = (
+        soc_kwh + (charge_solar + charge_grid) * charge_efficiency
+        - (discharge_load + discharge_export) / discharge_efficiency
+    )
+    grid_import = max(0.0, actual_load_kwh - actual_solar_kwh - discharge_load) + charge_grid
+    grid_export = max(0.0, actual_solar_kwh - actual_load_kwh - charge_solar) + discharge_export
+    return {
+        'raw_soc_kwh': raw_soc_kwh,
+        'soc_kwh': float(np.clip(raw_soc_kwh, min_soc_kwh, max_soc_kwh)),
+        'soc_violation': raw_soc_kwh < min_soc_kwh - 1e-8 or raw_soc_kwh > max_soc_kwh + 1e-8,
+        'grid_import_kwh': grid_import,
+        'grid_export_kwh': grid_export,
+    }
 
 
 class BatteryReplaySimulator:
@@ -264,6 +295,10 @@ class BatteryReplaySimulator:
         current_time = self.measurements_df.index[0]
         end_time = self.measurements_df.index[-1]
         soc_kwh = (battery_capacity_kwh * battery_initial_soc_pct / 100.0)
+        min_soc_kwh = battery_capacity_kwh * battery_min_soc_pct / 100.0
+        max_soc_kwh = battery_capacity_kwh * battery_max_soc_pct / 100.0
+        charge_efficiency = float(os.getenv('BATTERY_CHARGE_EFFICIENCY', '0.95'))
+        discharge_efficiency = float(os.getenv('BATTERY_DISCHARGE_EFFICIENCY', '0.95'))
         
         # Metrics
         intervals_run = 0
@@ -322,27 +357,23 @@ class BatteryReplaySimulator:
                 interval_hours = 0.25
                 actual_load_kwh = actual_load_kw * interval_hours
                 
-                # Apply battery action and compute grid exchange
-                battery_charge_kwh = entry.charge_from_solar_kwh + entry.charge_from_grid_kwh
-                battery_discharge_kwh = entry.discharge_to_load_kwh + entry.discharge_to_export_kwh
-                
-                # Update SoC (simplified: assume efficiency)
-                soc_kwh = soc_kwh + battery_charge_kwh - battery_discharge_kwh
-                
-                # Clamp to valid range
-                soc_kwh = np.clip(
-                    soc_kwh,
-                    battery_capacity_kwh * battery_min_soc_pct / 100.0,
-                    battery_capacity_kwh * battery_max_soc_pct / 100.0
+                interval = execute_plan_entry(
+                    soc_kwh=soc_kwh,
+                    entry=entry,
+                    min_soc_kwh=min_soc_kwh,
+                    max_soc_kwh=max_soc_kwh,
+                    charge_efficiency=charge_efficiency,
+                    discharge_efficiency=discharge_efficiency,
+                    actual_load_kwh=actual_load_kwh,
+                    actual_solar_kwh=actual_solar * interval_hours,
                 )
-                
+                soc_kwh = float(interval['soc_kwh'])
                 current_soc_pct_after = (soc_kwh / battery_capacity_kwh) * 100.0
                 
-                # Check for violations
-                if current_soc_pct_after < battery_min_soc_pct or current_soc_pct_after > battery_max_soc_pct:
+                if interval['soc_violation']:
                     soc_violations.append({
                         'timestamp': current_time.isoformat(),
-                        'soc_pct': current_soc_pct_after,
+                        'soc_pct': float(interval['raw_soc_kwh'] / battery_capacity_kwh * 100.0),
                         'min': battery_min_soc_pct,
                         'max': battery_max_soc_pct,
                     })
@@ -351,13 +382,13 @@ class BatteryReplaySimulator:
                 import_price = import_prices[0] if len(import_prices) > 0 else 0.15
                 export_price = export_prices[0] if len(export_prices) > 0 else 0.05
                 
-                # Realized grid exchange (both in kWh)
-                # Battery charging from grid increases import, discharging reduces it
-                grid_import = max(0.0, actual_load_kwh + battery_charge_kwh - battery_discharge_kwh)
-                grid_export = max(0.0, battery_discharge_kwh - actual_load_kwh - battery_charge_kwh)
+                grid_import = float(interval['grid_import_kwh'])
+                grid_export = float(interval['grid_export_kwh'])
                 
                 interval_cost_battery = grid_import * import_price - grid_export * export_price
-                interval_cost_no_battery = actual_load_kwh * import_price
+                no_battery_import = max(0.0, actual_load_kwh - actual_solar * interval_hours)
+                no_battery_export = max(0.0, actual_solar * interval_hours - actual_load_kwh)
+                interval_cost_no_battery = no_battery_import * import_price - no_battery_export * export_price
                 
                 cost_with_battery += interval_cost_battery
                 cost_no_battery += interval_cost_no_battery

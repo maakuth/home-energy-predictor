@@ -18,8 +18,10 @@ import pandas as pd
 from datetime import datetime, timezone
 
 from battery_planners import BatteryPlannerFactory, BatteryPlannerContext
+from battery_planners.base import BatteryPlanEntry
 from tests.battery_planner_replay import (
     BatteryReplaySimulator,
+    execute_plan_entry,
     load_fixture,
     get_fixtures,
 )
@@ -343,6 +345,40 @@ class TestBatteryReplaySimulatorBasics(unittest.TestCase):
                     gen_dt = pd.to_datetime(generated_at, utc=True)
                     assert gen_dt <= planning_time, \
                         f"Generated at {generated_at} is after planning time {planning_time}"
+
+
+class TestReplayIntervalAccounting(unittest.TestCase):
+    def _entry(self, charge=0.0, discharge=0.0):
+        return BatteryPlanEntry(
+            timestamp='t0', battery_action='idle', battery_power_kw=0.0,
+            charge_from_solar_kwh=charge, charge_from_grid_kwh=0.0,
+            discharge_to_load_kwh=discharge, discharge_to_export_kwh=0.0,
+            soc_kwh=0.0, soc_pct=0.0, grid_import_kwh=0.0, grid_export_kwh=0.0,
+            estimated_hour_cost=0.0, estimated_hour_savings=0.0,
+            net_load_without_battery_kwh=0.0,
+        )
+
+    def test_soc_uses_battery_efficiencies(self):
+        result = execute_plan_entry(
+            soc_kwh=10.0, entry=self._entry(charge=2.0),
+            min_soc_kwh=5.0, max_soc_kwh=20.0,
+            charge_efficiency=0.9, discharge_efficiency=0.8,
+            actual_load_kwh=0.0, actual_solar_kwh=2.0,
+        )
+
+        self.assertAlmostEqual(result['soc_kwh'], 11.8)
+
+    def test_violation_is_recorded_before_soc_is_clamped(self):
+        result = execute_plan_entry(
+            soc_kwh=10.0, entry=self._entry(discharge=2.0),
+            min_soc_kwh=9.0, max_soc_kwh=20.0,
+            charge_efficiency=0.9, discharge_efficiency=0.8,
+            actual_load_kwh=2.0, actual_solar_kwh=0.0,
+        )
+
+        self.assertTrue(result['soc_violation'])
+        self.assertAlmostEqual(result['raw_soc_kwh'], 7.5)
+        self.assertAlmostEqual(result['soc_kwh'], 9.0)
 
 
 if __name__ == '__main__':
