@@ -248,6 +248,32 @@ class TestRunOften(unittest.TestCase):
         self.assertGreater(battery_w, 500,
                            "Should discharge at least 0.5 kW to follow load")
 
+    @patch('run_often.apply_discharge_budget', return_value=(-1.0, ''))
+    @patch('run_often.accumulate_interval_discharge', return_value=0.0)
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_discharge_budget_uses_configured_interval(
+        self, mock_get_ha, mock_push, mock_accumulate, mock_apply,
+    ):
+        """Budget accounting must use the same interval as the planner."""
+        state_dir = os.path.join(self.test_dir, 'state')
+        self._make_plan_file(state_dir, extra_fields={
+            'battery_power_kw': -1.0,
+            'battery_action': 'discharge_load',
+            'discharge_budget_kwh': 1.0,
+        })
+        mock_get_ha.side_effect = lambda eid: {'state': '50.0'}
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '0',
+            'PLAN_INTERVAL_MINUTES': '60',
+        }):
+            from run_often import main
+            main()
+
+        mock_accumulate.assert_called_once_with(50.0, interval_minutes=60)
+        self.assertEqual(mock_apply.call_args.kwargs['interval_minutes'], 60)
+
 
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')

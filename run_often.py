@@ -30,6 +30,13 @@ def _get_float(state):
     return None
 
 
+def _get_interval_minutes() -> int:
+    try:
+        return max(int(os.getenv('PLAN_INTERVAL_MINUTES', '15')), 1)
+    except ValueError:
+        return 15
+
+
 def main():
     soc = get_ha_state('sensor.be_soc')
     battery_power = get_ha_state('sensor.be_stat_batt_power')
@@ -155,8 +162,8 @@ def main():
     # Battery control: net metering PI only when applicable and not manually overridden
     if net_metering and import_kwh is not None and export_kwh is not None and not manual_override:
         now = datetime.now()
-        elapsed_minutes = now.minute % 15 + now.second / 60.0
-        interval_minutes = 15
+        interval_minutes = _get_interval_minutes()
+        elapsed_minutes = now.minute % interval_minutes + now.second / 60.0
 
         planned_grid_import_kwh = current.get('grid_import_kwh', 0.0) if current else 0.0
         planned_grid_export_kwh = current.get('grid_export_kwh', 0.0) if current else 0.0
@@ -261,11 +268,15 @@ def main():
         and discharge_budget_kwh is not None
         and plan_action in ('follow', 'discharge_load')
     ):
-        discharge_used_kwh = accumulate_interval_discharge(battery_w)
+        interval_minutes = _get_interval_minutes()
+        discharge_used_kwh = accumulate_interval_discharge(
+            battery_w, interval_minutes=interval_minutes,
+        )
         adjusted_battery_kw, budget_msg = apply_discharge_budget(
             adjusted_battery_kw=adjusted_battery_kw,
             discharge_budget_kwh=discharge_budget_kwh,
             discharge_used_kwh=discharge_used_kwh,
+            interval_minutes=interval_minutes,
         )
         if budget_msg:
             print(f'Discharge budget: {budget_msg}')

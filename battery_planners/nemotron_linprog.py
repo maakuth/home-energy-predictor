@@ -7,7 +7,7 @@ from typing import Any, List, Optional
 import numpy as np
 from scipy.optimize import linprog
 
-from .base import BatteryPlanEntry, BatteryPlanner, BatteryPlannerContext, compute_discharge_budget
+from .base import BatteryPlanEntry, BatteryPlanner, BatteryPlannerContext
 from utils.type_defs import BatteryAction
 
 
@@ -25,29 +25,6 @@ def get_env_int(name: str, default: int) -> int:
         return int(raw) if raw is not None else int(default)
     except ValueError:
         return int(default)
-
-
-def _interval_discharge_budget(
-    soc_kwh: float,
-    min_soc_kwh: float,
-    discharge_eff: float,
-    max_discharge_kw: float,
-    interval_hours: float,
-    import_prices: np.ndarray,
-    i: int,
-    planned_discharge_kwh: float,
-) -> float:
-    """Return runtime discharge headroom without undercutting the LP plan."""
-    idx = min(i, len(import_prices) - 1)
-    current_price = float(import_prices[idx]) if len(import_prices) else 0.0
-    future_prices = import_prices[i:]
-    budget = compute_discharge_budget(
-        soc_kwh, min_soc_kwh, discharge_eff, max_discharge_kw, interval_hours,
-        current_price, future_prices,
-        min_factor=get_env_float('BATTERY_FOLLOW_BUDGET_MIN_FACTOR', 0.10),
-        spread_factor=get_env_float('BATTERY_FOLLOW_BUDGET_SPREAD_FACTOR', 2.5),
-    )
-    return max(budget, planned_discharge_kwh)
 
 
 class NemotronLinprogPlanner(BatteryPlanner):
@@ -247,6 +224,30 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 allow_export,
             )
 
+        # The real-time controller may need limited flexibility for forecast
+        # error. Maximize current battery-to-house flow without making the LP
+        # objective materially worse. The plan is rebuilt each interval, so
+        # later entries need no speculative headroom.
+        headroom_objective = np.zeros(n_vars)
+        headroom_objective[index(0, battery_house)] = -1
+        headroom_tolerance = max(
+            0.0, get_env_float('BATTERY_LP_HEADROOM_COST_TOLERANCE_EUR', 0.001),
+        )
+        headroom_result = linprog(
+            headroom_objective,
+            A_ub=np.vstack([np.asarray(upper_rows), objective]),
+            b_ub=np.append(np.asarray(upper_values), result.fun + headroom_tolerance),
+            A_eq=np.asarray(equal_rows),
+            b_eq=np.asarray(equal_values),
+            bounds=bounds,
+            method='highs',
+            options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
+        )
+        lp_headroom_kwh = (
+            max(0.0, headroom_result.x[index(0, battery_house)])
+            if headroom_result.success else 0.0
+        )
+
         plan: list[BatteryPlanEntry] = []
         x = result.x
         starting_soc = initial_soc_kwh
@@ -291,9 +292,8 @@ class NemotronLinprogPlanner(BatteryPlanner):
                     - (grid_import * import_prices[i] - grid_export * export_prices[i])
                 ),
                 net_load_without_battery_kwh=float(load[i] - solar[i]),
-                discharge_budget_kwh=_interval_discharge_budget(
-                    starting_soc, min_soc_kwh, discharge_eff, max_discharge_kw,
-                    interval_hours, import_prices[:horizon], i, discharge_load,
+                discharge_budget_kwh=float(
+                    max(discharge_load, lp_headroom_kwh) if i == 0 else discharge_load
                 ),
             ))
             starting_soc = ending_soc
@@ -342,9 +342,6 @@ class NemotronLinprogPlanner(BatteryPlanner):
                 grid_import_kwh=float(grid_import), grid_export_kwh=float(grid_export),
                 estimated_hour_cost=float(grid_import * import_prices[i] - grid_export * export_prices[i]),
                 estimated_hour_savings=0.0, net_load_without_battery_kwh=float(load[i] - solar[i]),
-                discharge_budget_kwh=_interval_discharge_budget(
-                    soc_kwh, min_soc_kwh, discharge_eff, max_discharge_kw,
-                    interval_hours, import_prices, i, 0.0,
-                ),
+                discharge_budget_kwh=0.0,
             ))
         return plan

@@ -17,7 +17,6 @@ import numpy as np
 
 from optimize_plan import plan_battery_dispatch
 from battery_planners.base import compute_discharge_budget
-from battery_planners.nemotron_linprog import _interval_discharge_budget
 from battery_planners import BatteryPlannerFactory
 from utils.battery_utils import (
     apply_discharge_budget,
@@ -301,29 +300,21 @@ class NemotronBudgetTests(unittest.TestCase):
                 entry.discharge_to_load_kwh - 1e-9,
             )
 
-    def test_budget_adds_follow_headroom_when_planned_discharge_is_low(self):
-        # With a low initial SoC and a big future peak the LP is conservative
-        # in the cheap early intervals, so the price-scaled budget must still
-        # provide follow-headroom rather than just mirroring the plan.
+    def test_future_intervals_allow_only_their_planned_discharge(self):
+        # The optimizer runs before every interval, so only the current entry
+        # needs flexible execution headroom. Future entries retain their LP
+        # dispatch until they become the next current interval.
         plan = self._plan([0.03, 0.03, 0.30, 0.30], initial_soc_pct=30,
                           predictions=np.full(4, 3.0))
-        self.assertTrue(any(
-            e.discharge_budget_kwh > e.discharge_to_load_kwh + 1e-9
-            for e in plan))
-
-    def test_helper_scale_by_price(self):
-        import_prices = np.array([0.05, 0.05, 0.15, 0.15], dtype=float)
-        cheap = _interval_discharge_budget(
-            30.0, 4.0, 0.95, 10.0, 1.0, import_prices, 0, 0.0)
-        expensive = _interval_discharge_budget(
-            30.0, 4.0, 0.95, 10.0, 1.0, import_prices, 2, 0.0)
-        self.assertGreater(expensive, cheap)
-
-    def test_helper_never_undercuts_planned(self):
-        import_prices = np.array([0.05, 0.15], dtype=float)
-        budget = _interval_discharge_budget(
-            30.0, 4.0, 0.95, 10.0, 1.0, import_prices, 0, 9.5)
-        self.assertGreaterEqual(budget, 9.5 - 1e-9)
+        for entry in plan[1:]:
+            budget = entry.discharge_budget_kwh
+            if budget is None:
+                self.fail('future interval must have a planned discharge budget')
+            self.assertAlmostEqual(
+                budget,
+                entry.discharge_to_load_kwh,
+                places=9,
+            )
 
 
 if __name__ == '__main__':

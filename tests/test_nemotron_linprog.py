@@ -99,6 +99,19 @@ class NemotronLinprogFlowTests(unittest.TestCase):
                 places=7,
             )
 
+    def test_lp_budget_preserves_energy_reserved_for_a_future_peak(self):
+        plan = self._plan(
+            [3.0, 3.0, 3.0], [0.0, 0.0, 0.0], [0.03, 0.30, 0.30],
+            BATTERY_INITIAL_SOC_PCT='30',
+            BATTERY_LP_HEADROOM_COST_TOLERANCE_EUR='0',
+        )
+
+        self.assertAlmostEqual(plan[0].discharge_to_load_kwh, 0.0)
+        budget = plan[0].discharge_budget_kwh
+        if budget is None:
+            self.fail('current interval must have an LP-derived discharge budget')
+        self.assertAlmostEqual(budget, 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()
