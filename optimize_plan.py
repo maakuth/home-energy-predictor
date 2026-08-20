@@ -19,10 +19,10 @@ load_dotenv(override=True)
 
 # Backward compatibility wrapper for tests
 def plan_battery_dispatch(
-    predictions: list[float],
-    solar_array: list[float],
-    import_prices: list[float],
-    export_prices: list[float],
+    predictions: np.ndarray | list[float],
+    solar_array: np.ndarray | list[float],
+    import_prices: np.ndarray | list[float],
+    export_prices: np.ndarray | list[float],
     committed_load_kwh: Optional[list[float] | np.ndarray] = None,
     allow_export: Optional[bool] = None,
     max_lookahead_hours: float = 8.0,
@@ -156,7 +156,7 @@ def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, e
         export_unit_prices = np.maximum(0.0, np.array(export_base, dtype=float))
     else:
         if is_inclusive:
-            export_unit_prices = estimate_export_prices(market_prices)
+            export_unit_prices = np.asarray(estimate_export_prices(market_prices), dtype=float)
         else:
             export_unit_prices = np.maximum(0.0, market_prices)
 

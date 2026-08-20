@@ -295,6 +295,7 @@ class NemotronBudgetTests(unittest.TestCase):
     def test_budget_never_undercuts_planned_discharge(self):
         plan = self._plan([0.20, 0.20])
         for entry in plan:
+            assert entry.discharge_budget_kwh is not None
             self.assertGreaterEqual(
                 entry.discharge_budget_kwh,
                 entry.discharge_to_load_kwh - 1e-9,

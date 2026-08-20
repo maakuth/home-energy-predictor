@@ -348,7 +348,7 @@ def build_comparison(
         actual_batt_kw = (actual['batt_power_w'] / 1000.0) if actual and actual['batt_power_w'] is not None else 0.0
         actual_leaf_kw = actual['leaf_kw'] if actual and actual['leaf_kw'] is not None else 0.0
         actual_baseload = None
-        if actual_grid_kw is not None and actual['solar_kw'] is not None and actual['gshp_kw'] is not None:
+        if actual is not None and actual_grid_kw is not None and actual['solar_kw'] is not None and actual['gshp_kw'] is not None:
             actual_baseload = max(0.0, actual_grid_kw + actual['solar_kw'] - actual['gshp_kw'] - actual_batt_kw - actual_leaf_kw)
 
         results.append({
