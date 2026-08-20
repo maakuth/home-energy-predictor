@@ -571,6 +571,146 @@ class TestRunOften(unittest.TestCase):
         self.assertEqual(args[1]['battery_action'], 'net_metering',
                          "Normal net metering flow when override is 'unavailable'")
 
+    def _make_net_metering_plan(self, battery_kw: float = 10.0, action: str = 'charge_grid'):
+        """Create a plan entry for the current interval with a net-energy target."""
+        now = datetime.now(timezone.utc)
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        plan = [{
+            'timestamp': slot.isoformat(),
+            'battery_power_kw': battery_kw,
+            'battery_action': action,
+            'soc_pct': 54.0,
+            'grid_import_kwh': 3.760,
+            'grid_export_kwh': 0.0,
+        }]
+        with open(os.path.join(self.test_dir, 'state', 'optimization_plan.json'), 'w') as f:
+            json.dump(plan, f)
+
+    def _phase_side_effect(self, phases, battery_w='9480.0', soc='54.0'):
+        """Return a get_ha_state side effect with the given phase currents (Amps)."""
+        def side_effect(eid: str):
+            vals = {
+                'sensor.be_soc': soc,
+                'sensor.be_stat_batt_power': battery_w,
+                'sensor.sahkokauppa_20s': '18.7',
+                'sensor.solarh_63038_real_power_kw': '0.0',
+                'sensor.mlp_teho': '0.0',
+                'sensor.tasmota_energy_power_3': '0.0',
+                'sensor.current_phase_1': str(phases[0]) if phases[0] is not None else None,
+                'sensor.current_phase_2': str(phases[1]) if phases[1] is not None else None,
+                'sensor.current_phase_3': str(phases[2]) if phases[2] is not None else None,
+                'sensor.cumulative_active_import': '95895.0',
+                'sensor.cumulative_active_export': '17047.0',
+            }
+            return {'state': vals.get(eid, '0.0')}
+        return side_effect
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_fuse_cap_limits_net_metering_charge(self, mock_get_ha, mock_push):
+        """Net metering must not charge at full power when a phase exceeds the fuse.
+
+        Regression test for the 05:20 incident: L2/L3 were ~32A against the 25A
+        fuse limit while the inverter was instructed to charge at 10kW. The fuse
+        cap must limit the charge to the safe headroom instead.
+        """
+        self._make_net_metering_plan(battery_kw=10.0, action='charge_grid')
+        # Phases from the incident log (L1 15.9A, L2 32.4A, L3 32.1A) with the
+        # battery already charging at 9480W.
+        mock_get_ha.side_effect = self._phase_side_effect([15.9, 32.4, 32.1], battery_w='9480.0')
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '0',
+            'MAIN_FUSE_SIZE_A': '25',
+        }):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        battery_control_w = args[1]['battery_power_w']
+        # Safe max charge = 9480 + (25 - 32.4) * 3 * 230 = 4374W
+        self.assertEqual(battery_control_w, -4374,
+                         "Charge must be capped to the fuse-limited headroom, not 10kW")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_fuse_cap_forces_discharge_on_phase_overload(self, mock_get_ha, mock_push):
+        """When non-battery load alone exceeds the fuse, discharge is forced.
+
+        Even though the plan wants to charge at 10kW, a phase at 30A (over the
+        25A fuse) leaves no room to charge: the safe setpoint becomes negative
+        and the battery must discharge to protect the fuse.
+        """
+        self._make_net_metering_plan(battery_kw=10.0, action='charge_grid')
+        mock_get_ha.side_effect = self._phase_side_effect([30.0, 10.0, 10.0], battery_w='0.0')
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '0',
+            'MAIN_FUSE_SIZE_A': '25',
+        }):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        battery_control_w = args[1]['battery_power_w']
+        # Safe max = 0 + (25 - 30) * 3 * 230 = -3450W -> forced discharge.
+        self.assertEqual(battery_control_w, 3450,
+                         "Battery must discharge to protect the fuse even though the plan charges")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_fuse_cap_applies_after_ramp_limiter(self, mock_get_ha, mock_push):
+        """The fuse cap must win over the ramp limiter.
+
+        Even with a ramp rate enabled, the commanded setpoint must not end up
+        above the fuse-limited headroom after ramping toward the planned charge.
+        """
+        self._make_net_metering_plan(battery_kw=10.0, action='charge_grid')
+        mock_get_ha.side_effect = self._phase_side_effect([15.9, 32.4, 32.1], battery_w='9480.0')
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '3.0',
+            'MAIN_FUSE_SIZE_A': '25',
+        }):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        battery_control_w = args[1]['battery_power_w']
+        # Ramp allows moving toward 10kW, but the fuse cap must clamp to 4374W.
+        self.assertEqual(battery_control_w, -4374,
+                         "Fuse cap must be applied after the ramp limiter")
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_fuse_cap_respects_soc_floor(self, mock_get_ha, mock_push):
+        """The fuse cap must not discharge below the configured SoC floor."""
+        self._make_net_metering_plan(battery_kw=10.0, action='charge_grid')
+        # Phase overloaded but battery is at the 10% floor.
+        mock_get_ha.side_effect = self._phase_side_effect([30.0, 10.0, 10.0], battery_w='0.0', soc='10.0')
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '0',
+            'MAIN_FUSE_SIZE_A': '25',
+            'BATTERY_MIN_SOC_PCT': '10.0',
+        }):
+            from run_often import main
+            main()
+
+        mock_push.assert_called_once()
+        args = mock_push.call_args
+        battery_control_w = args[1]['battery_power_w']
+        # SoC at floor blocks the forced discharge -> idle.
+        self.assertEqual(battery_control_w, 0,
+                         "Fuse cap must not discharge below the SoC floor")
+
 
 if __name__ == '__main__':
     unittest.main()

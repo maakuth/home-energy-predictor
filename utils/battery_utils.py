@@ -140,6 +140,106 @@ def get_env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def compute_phase_cap_kw(
+    battery_w: float,
+    phase_currents: Optional[list[Optional[float]]],
+    max_battery_kw: float = 10.0,
+) -> tuple[Optional[float], Optional[float]]:
+    """Compute the safe battery setpoint range [min_kw, max_kw] from phase currents.
+
+    For a 3-phase inverter we assume the battery power is distributed equally,
+    so a change of ``P`` kW moves every phase current by ``P*1000/3/230`` A.
+    The current on each phase must stay within the main fuse rating, both when
+    importing (charging more / discharging less) and exporting (discharging
+    more).
+
+    Args:
+        battery_w (float): Current actual battery power in Watts
+            (positive = charging, negative = discharging). The phase currents
+            already include the battery contribution, so the headroom is
+            anchored to the current battery power.
+        phase_currents (list of float, optional): Current flow (Amps) per phase
+            at the utility meter (positive = import, negative = export).
+        max_battery_kw (float): Maximum battery power in kW.
+
+    Returns:
+        tuple: (min_kw, max_kw) the battery setpoint must be clamped to, or
+            (None, None) when no phase data is available to base a cap on.
+    """
+    if not phase_currents or not any(c is not None for c in phase_currents):
+        return None, None
+
+    main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
+
+    phase_caps_w = []
+    for Ip in phase_currents:
+        if Ip is None:
+            continue
+        # Max power increase (charging more) before hitting import fuse limit
+        # Ip + (P_extra / 3) / 230 <= fuse  =>  P_max = P_current + (fuse - Ip)*3*230
+        p_max_p = battery_w + (main_fuse_a - Ip) * 3 * 230.0
+        # Max power decrease (discharging more) before hitting export fuse limit
+        # Ip + (P_extra / 3) / 230 >= -fuse  =>  P_min = P_current + (-fuse - Ip)*3*230
+        p_min_p = battery_w + (-main_fuse_a - Ip) * 3 * 230.0
+        phase_caps_w.append((p_min_p, p_max_p))
+
+    if not phase_caps_w:
+        return None, None
+
+    combined_min_w = max(c[0] for c in phase_caps_w)
+    combined_max_w = min(c[1] for c in phase_caps_w)
+
+    combined_min_kw = combined_min_w / 1000.0
+    combined_max_kw = combined_max_w / 1000.0
+
+    # Respect the physical inverter power limits on both sides.
+    combined_min_kw = max(-max_battery_kw, combined_min_kw)
+    combined_max_kw = min(max_battery_kw, combined_max_kw)
+
+    return combined_min_kw, combined_max_kw
+
+
+def apply_phase_current_cap(
+    battery_kw: float,
+    battery_w: float,
+    phase_currents: Optional[list[Optional[float]]],
+    max_battery_kw: float = 10.0,
+) -> tuple[float, str]:
+    """Clamp a battery setpoint so no phase exceeds the main fuse limit.
+
+    This is a real-time safety net: it reduces charge when a phase is near the
+    import fuse limit and, in the extreme, forces discharge when the non-battery
+    load alone already exceeds the fuse. It must be applied last in the control
+    chain so nothing (net metering corrections, ramp limiting, discharge budgets)
+    can push the setpoint back over the fuse.
+
+    Args:
+        battery_kw (float): Desired battery setpoint in kW (positive = charging,
+            negative = discharging).
+        battery_w (float): Current actual battery power in Watts.
+        phase_currents (list of float, optional): Current flow (Amps) per phase.
+        max_battery_kw (float): Maximum battery power in kW.
+
+    Returns:
+        tuple: (capped_battery_kw, log_message). log_message is empty when no
+            cap was applied.
+    """
+    min_kw, max_kw = compute_phase_cap_kw(battery_w, phase_currents, max_battery_kw)
+    if min_kw is None or max_kw is None:
+        return battery_kw, ""
+
+    old_setpoint = battery_kw
+    capped = max(min_kw, min(max_kw, battery_kw))
+
+    if abs(capped - old_setpoint) <= 0.01:
+        return battery_kw, ""
+
+    return capped, (
+        f"Phase cap applied: {old_setpoint:.2f}kW -> {capped:.2f}kW "
+        f"(phase cap: {min_kw:.2f}..{max_kw:.2f}kW)"
+    )
+
+
 def compute_load_following_setpoint(
     planned_battery_kw: float,
     planned_action: str,
@@ -246,52 +346,16 @@ def compute_load_following_setpoint(
             log_message = (f'follow -> {direction} {abs(adjusted_battery_kw):.2f}kW '
                            f'(grid {grid_w:.0f}W)')
 
-    # Phase current capping
+    # Phase current capping (main fuse safety)
     if phase_currents and any(c is not None for c in phase_currents):
-        # Check all phases for fuse limit (25A default)
-        main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
-        
-        # Power limits in Watts
-        # For a 3-phase inverter, we assume power is distributed equally.
-        # So each phase gets 1/3 of the total battery power.
-        # Current change on one phase = (ΔP_total / 3) / 230V
-        # => ΔP_total = ΔI_phase * 3 * 230V
-        
-        phase_caps_w = []
-        for i, Ip in enumerate(phase_currents):
-            if Ip is None: continue
-            
-            # Max power increase (charging more) before hitting import fuse limit
-            # Ip + (P_extra / 3) / 230 <= fuse
-            # P_extra <= (fuse - Ip) * 3 * 230
-            # P_max = P_current + P_extra
-            p_max_p = battery_w + (main_fuse_a - Ip) * 3 * 230.0
-            
-            # Max power decrease (discharging more) before hitting export fuse limit
-            # Ip + (P_extra / 3) / 230 >= -fuse
-            # P_extra >= (-fuse - Ip) * 3 * 230
-            # P_min = P_current + P_extra
-            p_min_p = battery_w + (-main_fuse_a - Ip) * 3 * 230.0
-            
-            phase_caps_w.append((p_min_p, p_max_p))
-            
-        if phase_caps_w:
-            combined_min_w = max([c[0] for c in phase_caps_w])
-            combined_max_w = min([c[1] for c in phase_caps_w])
-            
-            # Convert to kW for comparison with adjusted_battery_kw
-            combined_min_kw = combined_min_w / 1000.0
-            combined_max_kw = combined_max_w / 1000.0
-            
-            old_setpoint = adjusted_battery_kw
-            adjusted_battery_kw = max(combined_min_kw, min(combined_max_kw, adjusted_battery_kw))
-            
-            if abs(adjusted_battery_kw - old_setpoint) > 0.01:
-                cap_msg = f" (phase cap: {combined_min_kw:.2f}..{combined_max_kw:.2f}kW)"
-                if log_message:
-                    log_message += cap_msg
-                else:
-                    log_message = f"Phase cap applied: {old_setpoint:.2f}kW -> {adjusted_battery_kw:.2f}kW{cap_msg}"
+        old_setpoint = adjusted_battery_kw
+        adjusted_battery_kw, phase_msg = apply_phase_current_cap(
+            adjusted_battery_kw, battery_w, phase_currents, max_battery_kw)
+        if phase_msg:
+            if log_message:
+                log_message += f"; {phase_msg}"
+            else:
+                log_message = phase_msg
 
     # Clamp to physical limits
     adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, adjusted_battery_kw))

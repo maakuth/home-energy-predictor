@@ -16,6 +16,7 @@ from utils.battery_utils import (
     apply_ramp_rate,
     apply_discharge_budget,
     accumulate_interval_discharge,
+    apply_phase_current_cap,
 )
 
 load_dotenv(override=True)
@@ -113,6 +114,7 @@ def main():
 
     max_battery_kw = float(os.getenv('BATTERY_MAX_CHARGE_KW', '10.0'))
     min_soc_pct = float(os.getenv('BATTERY_MIN_SOC_PCT', '10.0'))
+    floor_pct = max(min_soc_pct, float(os.getenv('BATTERY_RESERVE_SOC_PCT', str(min_soc_pct))))
 
     _MANUAL_ACTIONS = {
         'idle', 'follow', 'charge_solar', 'charge_grid', 'charge_mixed',
@@ -280,6 +282,24 @@ def main():
         )
         if budget_msg:
             print(f'Discharge budget: {budget_msg}')
+
+    # Fuse safety: final clamp so no phase exceeds the main fuse rating.
+    # Applied after the ramp limiter and discharge budget so nothing (net metering
+    # corrections, ramping, budgets) can push the setpoint back over the fuse.
+    # Reduces charge when a phase is near the import limit and forces discharge
+    # when the non-battery load alone already exceeds the fuse.
+    adjusted_battery_kw, fuse_msg = apply_phase_current_cap(
+        adjusted_battery_kw, battery_w, [i_p1, i_p2, i_p3], max_battery_kw)
+
+    # SoC floor guard: never discharge below the configured minimum, even if the
+    # fuse cap would otherwise force a discharge.
+    if soc_pct is not None and adjusted_battery_kw < 0 and soc_pct <= floor_pct:
+        adjusted_battery_kw = 0.0
+        guard_msg = f"soc guard: discharge blocked at SoC {soc_pct:.1f}% (floor {floor_pct:.0f}%)"
+        fuse_msg = f"{fuse_msg}; {guard_msg}" if fuse_msg else guard_msg
+
+    if fuse_msg:
+        print(f'Fuse cap: {fuse_msg}')
 
     battery_control_w = int(-adjusted_battery_kw * 1000)
     push_battery_control(
