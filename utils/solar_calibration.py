@@ -51,9 +51,11 @@ def load_archived_forecasts() -> pd.DataFrame:
     try:
         conn = get_db_connection()
         # Guard against older dbs that predate the p10/p90 columns.
+        # PRAGMA table_info rows are (cid, name, type, notnull, dflt, pk);
+        # the column *name* is at index 1.
         cols = ["target_timestamp", "generated_at", "solar_forecast_kw"]
+        found = [r[1] for r in conn.execute("PRAGMA table_info(predictions)")]
         for candidate in ("solar_forecast_p10_kw", "solar_forecast_p90_kw"):
-            found = [r[0] for r in conn.execute("PRAGMA table_info(predictions)")]
             if candidate in found:
                 cols.append(candidate)
         query = f"""
@@ -107,12 +109,34 @@ def analyze(df: pd.DataFrame) -> dict[str, float]:
     # Percentile calibration: how often does actual fall at/below each bound.
     out['actual_le_p50_frac'] = float((valid['solar_actual_kw'] <= valid['solar_forecast_kw']).sum() / n)
 
+    # p10/p90 were archived only after Phase 1 shipped (2026-08-12); rows from
+    # before that have NaN bounds and must not dilute the fractions.
     if 'solar_forecast_p10_kw' in valid.columns:
-        out['actual_le_p10_frac'] = float((valid['solar_actual_kw'] <= valid['solar_forecast_p10_kw']).sum() / n)
+        p10 = valid.dropna(subset=['solar_forecast_p10_kw'])
+        if not p10.empty:
+            out['n_p10_intervals'] = float(len(p10))
+            out['actual_le_p10_frac'] = float((p10['solar_actual_kw'] <= p10['solar_forecast_p10_kw']).sum() / len(p10))
     if 'solar_forecast_p90_kw' in valid.columns:
-        out['actual_ge_p90_frac'] = float((valid['solar_actual_kw'] >= valid['solar_forecast_p90_kw']).sum() / n)
+        p90 = valid.dropna(subset=['solar_forecast_p90_kw'])
+        if not p90.empty:
+            out['n_p90_intervals'] = float(len(p90))
+            out['actual_ge_p90_frac'] = float((p90['solar_actual_kw'] >= p90['solar_forecast_p90_kw']).sum() / len(p90))
 
     return out
+
+
+def daily_shortfall_kwh(df: pd.DataFrame) -> pd.Series:
+    """Energy the p50 forecast promised but actuals did not deliver, per day.
+
+    Integrates the positive part of (forecast - actual) over the 15-minute
+    intervals (0.25 h each). This sizes an Aug-12-style miss in kWh, which is
+    the quantity the Phase-2 cheap-window hedge decision needs.
+    """
+    valid = df[df['solar_forecast_kw'].notna() & (df['solar_forecast_kw'] > 0)]
+    if valid.empty:
+        return pd.Series(dtype=float)
+    short = (valid['solar_forecast_kw'] - valid['solar_actual_kw']).clip(lower=0) * 0.25
+    return short.groupby(short.index.date).sum()
 
 
 def _print_results(metrics: dict[str, float], per_day: pd.DataFrame) -> None:
@@ -126,9 +150,9 @@ def _print_results(metrics: dict[str, float], per_day: pd.DataFrame) -> None:
           f"({'over-optimistic' if metrics['mean_error_kw'] < 0 else 'over-pessimistic' if metrics['mean_error_kw'] > 0 else 'unbiased'})")
     print(f"actual <= forecast (p50) : {metrics['actual_le_p50_frac']*100:.1f}%  (ideal ~50%)")
     if 'actual_le_p10_frac' in metrics:
-        print(f"actual <= worst-case p10  : {metrics['actual_le_p10_frac']*100:.1f}%  (ideal ~10%)")
+        print(f"actual <= worst-case p10  : {metrics['actual_le_p10_frac']*100:.1f}%  (ideal ~10%, n={metrics['n_p10_intervals']:.0f})")
     if 'actual_ge_p90_frac' in metrics:
-        print(f"actual >= best-case p90   : {metrics['actual_ge_p90_frac']*100:.1f}%  (ideal ~10%)")
+        print(f"actual >= best-case p90   : {metrics['actual_ge_p90_frac']*100:.1f}%  (ideal ~10%, n={metrics['n_p90_intervals']:.0f})")
 
     if not per_day.empty:
         print("\n=== Worst mis-forecast days (actual below p50) ===")
@@ -138,6 +162,12 @@ def _print_results(metrics: dict[str, float], per_day: pd.DataFrame) -> None:
         daily = daily.sort_values(ascending=False).head(5)
         for day, frac in daily.items():
             print(f"  {day}: actual < forecast on {frac*100:.0f}% of intervals")
+
+        shortfall = daily_shortfall_kwh(per_day).sort_values(ascending=False).head(5)
+        if not shortfall.empty:
+            print("\n=== Largest solar shortfalls vs p50 (energy not delivered) ===")
+            for day, kwh in shortfall.items():
+                print(f"  {day}: {kwh:.2f} kWh short of forecast")
 
 
 def main() -> None:

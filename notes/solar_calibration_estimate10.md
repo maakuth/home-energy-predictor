@@ -2,6 +2,54 @@
 
 Status: Phase 1 DONE (monitoring). Phase 2 (hedge) is planned but NOT implemented.
 
+## 2026-08-24 calibration snapshot (14 days, 931 intervals)
+
+From `solar.txt` (run on murrikka):
+
+- `actual <= p50`: **49.4%** — the central forecast is essentially perfectly
+  calibrated at the median; no systematic over-forecasting at p50.
+- Mean bias **-0.280 kW** (over-optimistic), median |error| 0.593 kW → errors
+  are asymmetric: usually fine, occasionally a large over-forecast on cloudy
+  days (worst: 2026-08-24 with 68% of intervals below forecast; the original
+  2026-08-12 incident day at 42%).
+- The p10/p90 lines were **missing** from the first output despite 12 days of
+  archived p10/p90 data (since 2026-08-12): a bug in
+  `utils/solar_calibration.py` read `r[0]` (integer cid) instead of `r[1]`
+  (column name) from `PRAGMA table_info`, so the percentile columns were
+  silently never selected. Fixed 2026-08-24; the same change also computes
+  p10/p90 fractions only over non-NaN rows (pre-Aug-12 rows no longer dilute
+  them) and adds a per-day energy-shortfall report (kWh promised by p50 but
+  not delivered — the quantity the Phase-2 decision actually needs).
+
+## 2026-08-24 regenerated numbers (after the fix, n_p10=779)
+
+- `actual <= p10`: **20.8%** (ideal ~10%) — the worst-case bound is violated
+  ~2x too often. **The note's hedge criterion ("well above 10%, say 20-30%")
+  is MET.** The Aug-12-style cheap-window miss is a recurring risk, not a
+  one-off.
+- `actual >= p90`: **24.6%** (ideal ~10%) — the best-case bound is also
+  violated ~2.5x too often. The p10–p90 band is far too narrow overall:
+  actuals fall outside it ~45% of the time instead of ~20%. Solcast
+  underestimates its own uncertainty at this site — and these are the
+  *shortest-horizon* (keep-last) forecasts, so the multi-hour-ahead numbers
+  the planner acts on are likely worse.
+- Daily shortfalls vs p50: worst day 16.77 kWh (2026-08-12, the incident
+  day), with 5 days ≥ 9.6 kWh in two weeks — shortfalls of the same order as
+  (or larger than) usable battery capacity, i.e. all-day underdelivery events.
+
+**Conclusion:** calibration says a hedge is warranted *on risk grounds*.
+Whether it is worth its recurring cost (a wrong hedge burns
+price−export ≈ 0.057 €/kWh per displaced kWh, and with p50 well-calibrated
+solar still beats the central forecast ~half the time) is an economics
+question → proceed to the offline fixture backtest (Phase 2 evaluation below)
+before enabling anything.
+
+Caveat to keep in mind when reading the numbers: the calibration dedups
+archived forecasts with keep-`last` per target interval, i.e. it evaluates the
+*shortest-horizon* forecast. The planner acts on multi-hour-ahead forecasts
+(e.g. the 04:00 cheap-window decision), whose errors are larger — so these
+stats flatter the forecast relative to what the LP actually experiences.
+
 ## Motivation
 
 Observed on 2026-08-12: the LP battery planner (nemotron-linprog) did not charge
