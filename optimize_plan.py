@@ -646,6 +646,9 @@ def optimize() -> None:
     # Battery Dispatch uses Baseload + GSHP
     predictions_kwh = (predictions + planned_gshp_kw) * get_plan_interval_hours()
     solar_kwh = solar_array * get_plan_interval_hours()
+    # Worst-case solar (p10) in matching kWh units for the battery LP's
+    # optional hedge blend (BATTERY_SOLAR_HEDGE_ALPHA; default 1.0 = unused).
+    solar_p10_kwh = solar_array_p10 * get_plan_interval_hours()
     
     # Committed loads (EV + Leaf) consume grid capacity but are not powered from house battery
     committed_load_kwh = (planned_ev_kw + planned_leaf_kw) * get_plan_interval_hours()
@@ -681,6 +684,7 @@ def optimize() -> None:
         'current_acc_temp': current_acc_temp,
         'is_fireplace_currently_on': is_fireplace_currently_on,
         'model_version': get_model_version(),
+        'solar_p10_kwh': np.array(solar_p10_kwh, dtype=float),
     }
 
     # Use battery optimization if available, otherwise fall back to no-battery plan

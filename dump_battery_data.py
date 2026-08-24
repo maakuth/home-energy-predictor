@@ -350,10 +350,13 @@ def fetch_market_prices_range(
                 start_str = start_time.isoformat()
                 end_str = end_time.isoformat()
                 
+                # The predictions table stores one row per forecast generation;
+                # collapse to one price row per target interval.
                 query = f"""
-                    SELECT {timestamp_col}, import_price, export_price
+                    SELECT {timestamp_col}, MAX(import_price), MAX(export_price)
                     FROM predictions
                     WHERE {timestamp_col} >= ? AND {timestamp_col} <= ?
+                    GROUP BY {timestamp_col}
                     ORDER BY {timestamp_col}
                 """
                 cur.execute(query, (start_str, end_str))
@@ -537,7 +540,8 @@ def fetch_sqlite_predictions(
         # Build query: select target_timestamp, generated_at, and forecast/plan data
         available_cols = [timestamp_col, 'generated_at']
         for col in ['predicted_usage_kw', 'solar_forecast_kw', 'is_fallback_price',
-                    'import_price', 'export_price', 
+                    'import_price', 'export_price',
+                    'solar_forecast_p10_kw', 'solar_forecast_p90_kw',
                     'battery_action', 'battery_power_kw', 'battery_soc_pct',
                     'grid_import_kwh', 'grid_export_kwh',
                     'charge_from_solar_kwh', 'charge_from_grid_kwh',

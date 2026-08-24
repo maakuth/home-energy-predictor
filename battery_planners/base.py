@@ -199,6 +199,12 @@ class BatteryPlannerContext(TypedDict, total=False):
         discharge.
     model_version : str
         Semantic version string (e.g. ``"1.2.0"``) from the ``VERSION`` file.
+    solar_p10_kwh : np.ndarray
+        Worst-case (10th percentile) solar generation forecast in kWh per
+        interval, matching ``solar_kwh`` units and length. Risk-aware
+        planners can blend this with the central forecast (see
+        ``BATTERY_SOLAR_HEDGE_ALPHA``); planners that do not use it must
+        ignore it.
     """
     outside_temps: NotRequired[np.ndarray]
     is_sauna_active: NotRequired[np.ndarray]
@@ -211,6 +217,7 @@ class BatteryPlannerContext(TypedDict, total=False):
     current_acc_temp: NotRequired[float]
     is_fireplace_currently_on: NotRequired[bool]
     model_version: NotRequired[str]
+    solar_p10_kwh: NotRequired[np.ndarray]
 
 
 @dataclass

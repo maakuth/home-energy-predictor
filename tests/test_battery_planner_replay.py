@@ -192,7 +192,7 @@ class TestBatteryPlannerReplayParametrized:
         if not isinstance(planning_time, (datetime, pd.Timestamp)):
             pytest.skip("Invalid planning time")
         
-        predictions, solar, import_prices, export_prices, timestamps = \
+        predictions, solar, import_prices, export_prices, timestamps, _solar_p10 = \
             simulator.get_planner_horizon(planning_time, 96)
         
         if len(predictions) == 0:
@@ -301,6 +301,160 @@ class TestBatteryPlannerReplayParametrized:
         assert result['success'], f"Replay with context failed: {result.get('error', 'Unknown error')}"
         assert result['soc_violations'] == 0, \
             f"SoC constraint violations with context: {result.get('soc_violation_details', [])}"
+
+
+class TestSolarP10Passthrough(unittest.TestCase):
+    """The replay harness must surface archived solar_forecast_p10_kw to planners.
+
+    Production feeds p10 via BatteryPlannerContext['solar_p10_kwh'] (kWh per
+    interval); the replay harness must do the same when the fixture's
+    predictions archive carries the column, and omit it otherwise.
+    """
+
+    def _make_simulator(self, with_p10: bool) -> BatteryReplaySimulator:
+        from utils.battery_test_data import BatteryTestData
+
+        t0 = pd.Timestamp('2026-07-15 00:00', tz='UTC')
+        n = 4
+        measurements = [
+            {
+                'timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
+                'total_power_kw': 0.5,
+                'solar_actual_kw': 1.0,
+            }
+            for i in range(n)
+        ]
+        archive = []
+        for i in range(n):
+            row = {
+                'target_timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
+                'generated_at': (t0 - pd.Timedelta(hours=1)).isoformat(),
+                'predicted_usage_kw': 0.5,
+                'solar_forecast_kw': 2.0,
+                'import_price': 0.10,
+                'export_price': 0.02,
+            }
+            if with_p10:
+                row['solar_forecast_p10_kw'] = 0.8
+            archive.append(row)
+        raw = {'history': {'measurements': measurements, 'predictions_archive': archive}}
+        return BatteryReplaySimulator(BatteryTestData(raw))
+
+    class _SpyPlanner:
+        def __init__(self):
+            self.seen_context = None
+            self.seen_solar = None
+
+        def plan(self, predictions_kwh, solar_kwh, import_prices, export_prices,
+                 prediction_timestamps, committed_load_kwh=None, allow_export=True,
+                 initial_soc_pct=None, context=None):
+            self.seen_context = dict(context) if context else {}
+            self.seen_solar = np.asarray(solar_kwh, dtype=float).copy()
+            return [
+                BatteryPlanEntry(
+                    timestamp=str(ts), battery_action='idle', battery_power_kw=0.0,
+                    charge_from_solar_kwh=0.0, charge_from_grid_kwh=0.0,
+                    discharge_to_load_kwh=0.0, discharge_to_export_kwh=0.0,
+                    soc_kwh=5.0, soc_pct=50.0, grid_import_kwh=0.0,
+                    grid_export_kwh=0.0, estimated_hour_cost=0.0,
+                    estimated_hour_savings=0.0, net_load_without_battery_kwh=0.0,
+                )
+                for ts in prediction_timestamps
+            ]
+
+    def _run(self, simulator, context=None):
+        spy = self._SpyPlanner()
+        result = simulator.simulate_battery_control(
+            planner=spy, planner_type='spy',
+            battery_capacity_kwh=10.0, battery_min_soc_pct=10.0,
+            battery_max_soc_pct=90.0, battery_initial_soc_pct=50.0,
+            max_planks=4, context=context,
+        )
+        assert result['success'], f"replay failed: {result.get('error')}"
+        return spy
+
+    def test_p10_reaches_planner_context_in_kwh(self):
+        spy = self._run(self._make_simulator(with_p10=True))
+        assert 'solar_p10_kwh' in spy.seen_context, \
+            f"context keys: {sorted(spy.seen_context)}"
+        # 0.8 kW * 0.25 h = 0.2 kWh per interval
+        np.testing.assert_allclose(
+            spy.seen_context['solar_p10_kwh'], [0.2, 0.2, 0.2, 0.2], atol=1e-9)
+        # p50 series unchanged: 2.0 kW * 0.25 h = 0.5 kWh
+        np.testing.assert_allclose(spy.seen_solar, [0.5, 0.5, 0.5, 0.5], atol=1e-9)
+
+    def test_p10_omitted_when_archive_lacks_column(self):
+        spy = self._run(self._make_simulator(with_p10=False))
+        assert 'solar_p10_kwh' not in spy.seen_context
+
+    def test_caller_context_p10_wins_over_fixture(self):
+        override = np.full(4, 9.9)
+        spy = self._run(self._make_simulator(with_p10=True),
+                        context={'solar_p10_kwh': override})
+        np.testing.assert_allclose(spy.seen_context['solar_p10_kwh'], override)
+
+
+class TestPriceWindowRobustness(unittest.TestCase):
+    """get_planner_horizon must return equal-length arrays regardless of how
+    much price data the fixture carries (the aug fixture was the first with a
+    real market_prices table — wider than the prediction window and with
+    duplicated timestamps from the dump's per-generation price join)."""
+
+    def _make_simulator(self, n_pred_intervals: int, price_rows: list[dict]):
+        from utils.battery_test_data import BatteryTestData
+
+        t0 = pd.Timestamp('2026-07-15 10:00', tz='UTC')
+        measurements = [
+            {
+                'timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
+                'total_power_kw': 0.5,
+                'solar_actual_kw': 1.0,
+            }
+            for i in range(n_pred_intervals)
+        ]
+        archive = [
+            {
+                'target_timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
+                'generated_at': (t0 - pd.Timedelta(hours=1)).isoformat(),
+                'predicted_usage_kw': 0.5,
+                'solar_forecast_kw': 2.0,
+                'import_price': 0.10,
+                'export_price': 0.02,
+            }
+            for i in range(n_pred_intervals)
+        ]
+        raw = {
+            'history': {'measurements': measurements, 'predictions_archive': archive},
+            'market_prices': price_rows,
+        }
+        return BatteryReplaySimulator(BatteryTestData(raw)), t0
+
+    def _price_rows(self, day: str, n: int, duplicate: int = 1) -> list[dict]:
+        base = pd.Timestamp(f'2026-07-{day} 00:00', tz='UTC')
+        rows = []
+        for i in range(n):
+            row = {
+                'timestamp': (base + pd.Timedelta(minutes=15 * i)).isoformat(),
+                'import_price': 0.10,
+                'export_price': 0.02,
+            }
+            rows.extend([dict(row) for _ in range(duplicate)])
+        return rows
+
+    def test_arrays_equal_length_when_price_window_wider_than_predictions(self):
+        # 4 prediction intervals at 10:00, but prices through end of day (56).
+        sim, t0 = self._make_simulator(4, self._price_rows('15', 96))
+        horizon = sim.get_planner_horizon(t0, 96)
+        lengths = {len(a) for a in horizon[:5]}
+        assert lengths == {96}, f"horizon array lengths differ: {lengths}"
+
+    def test_duplicate_price_timestamps_are_deduplicated(self):
+        sim, t0 = self._make_simulator(4, self._price_rows('15', 96, duplicate=3))
+        assert sim.prices_df.index.is_unique
+        horizon = sim.get_planner_horizon(t0, 96)
+        import_prices = horizon[2]
+        assert len(import_prices) == 96
+        np.testing.assert_allclose(import_prices[:4], 0.10)
 
 
 class TestBatteryReplaySimulatorBasics(unittest.TestCase):

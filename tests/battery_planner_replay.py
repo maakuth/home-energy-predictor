@@ -113,6 +113,9 @@ class BatteryReplaySimulator:
                     self.prices_df['timestamp'], utc=True
                 )
                 self.prices_df = self.prices_df.set_index('timestamp').sort_index()
+                # Dumps from the predictions archive repeat each price row once
+                # per forecast generation; keep one row per interval.
+                self.prices_df = self.prices_df[~self.prices_df.index.duplicated(keep='first')]
     
     def get_visible_predictions(self, planning_time) -> pd.DataFrame:
         """Get predictions visible at planning_time.
@@ -190,43 +193,64 @@ class BatteryReplaySimulator:
         self, planning_time, planner_output_length: int
     ):
         """Build planner input horizon (predictions and prices visible at planning_time).
-        
+
         Returns:
-            (predictions_kwh, solar_forecast_kwh, import_prices, export_prices, timestamps)
+            (predictions_kwh, solar_forecast_kwh, import_prices, export_prices,
+             timestamps, solar_p10_kwh)
+            solar_p10_kwh is None when the archive predates p10 archiving.
         """
         visible_preds = self.get_visible_predictions(planning_time)
-        
+
         if visible_preds.empty:
-            return np.array([]), np.array([]), np.array([]), np.array([]), []
-        
+            return np.array([]), np.array([]), np.array([]), np.array([]), [], None
+
         # Convert kW → kWh (APIs expect kWh per interval)
         interval_hours = 0.25
         pred_series = visible_preds.get('predicted_usage_kw', pd.Series())
         predictions_kwh = np.asarray(pred_series, dtype=float)[:planner_output_length] * interval_hours
-        
+
         solar_series = visible_preds.get('solar_forecast_kw', pd.Series())
         solar_kwh = np.asarray(solar_series, dtype=float)[:planner_output_length] * interval_hours
-        
+
+        # Worst-case solar (p10), if the archive carries it (Phase 1, 2026-08+)
+        solar_p10_kwh = None
+        if 'solar_forecast_p10_kw' in visible_preds.columns:
+            p10_series = visible_preds['solar_forecast_p10_kw']
+            if p10_series.notna().any():
+                solar_p10_kwh = np.asarray(p10_series, dtype=float)[:planner_output_length] * interval_hours
+
         # Get prices from visible window
         visible_prices = self.get_visible_prices(planning_time)
         import_prices = visible_prices[:planner_output_length] if len(visible_prices) > 0 else np.array([])
-        
+
         export_series = visible_preds.get('export_price', pd.Series())
         export_prices = np.asarray(export_series)[:planner_output_length]
-        
+
         # Build timestamp array
         timestamps = visible_preds.index.tolist()[:planner_output_length]
-        
-        # Pad if necessary (planner expects full length)
-        if len(predictions_kwh) < planner_output_length:
-            pad_len = planner_output_length - len(predictions_kwh)
-            predictions_kwh = np.pad(predictions_kwh, (0, pad_len), mode='edge')
-            solar_kwh = np.pad(solar_kwh, (0, pad_len), mode='edge')
-            import_prices = np.pad(import_prices, (0, pad_len), mode='edge') if len(import_prices) > 0 else np.ones(planner_output_length) * 0.15
-            export_prices = np.pad(export_prices, (0, pad_len), mode='edge')
-            timestamps.extend([timestamps[-1] + timedelta(minutes=15*i) for i in range(1, pad_len+1)])
-        
-        return predictions_kwh, solar_kwh, import_prices, export_prices, timestamps
+
+        # Normalize every array to exactly planner_output_length: the planner
+        # requires equal lengths, and the price window can be either shorter
+        # or longer than the visible prediction window.
+        if len(import_prices) == 0:
+            import_prices = np.ones(planner_output_length) * 0.15
+
+        def _fit(arr, target: int):
+            if len(arr) >= target:
+                return arr[:target]
+            return np.pad(arr, (0, target - len(arr)), mode='edge')
+
+        predictions_kwh = _fit(predictions_kwh, planner_output_length)
+        solar_kwh = _fit(solar_kwh, planner_output_length)
+        if solar_p10_kwh is not None:
+            solar_p10_kwh = _fit(solar_p10_kwh, planner_output_length)
+        import_prices = _fit(np.asarray(import_prices, dtype=float), planner_output_length)
+        export_prices = _fit(np.asarray(export_prices, dtype=float), planner_output_length)
+        while len(timestamps) < planner_output_length:
+            timestamps.append(timestamps[-1] + timedelta(minutes=15))
+        timestamps = timestamps[:planner_output_length]
+
+        return predictions_kwh, solar_kwh, import_prices, export_prices, timestamps, solar_p10_kwh
     
     def get_measurements_at(self, timestamp) -> Dict[str, float]:
         """Get actual measurements at timestamp (15-min interval)."""
@@ -313,13 +337,13 @@ class BatteryReplaySimulator:
             current_soc_pct = (soc_kwh / battery_capacity_kwh) * 100.0
             
             # Get planner horizon
-            predictions, solar, import_prices, export_prices, timestamps = self.get_planner_horizon(
+            predictions, solar, import_prices, export_prices, timestamps, solar_p10 = self.get_planner_horizon(
                 current_time, max_planks
             )
-            
+
             if len(predictions) == 0:
                 break
-            
+
             try:
                 # Run planner
                 ts_strings = []
@@ -328,7 +352,14 @@ class BatteryReplaySimulator:
                         ts_strings.append(ts.isoformat())
                     else:
                         ts_strings.append(str(ts))
-                
+
+                # Surface the archived p10 solar series the same way production
+                # does (BatteryPlannerContext['solar_p10_kwh']). A caller-provided
+                # context value wins over the fixture's archive.
+                call_context = dict(context) if context else {}
+                if solar_p10 is not None:
+                    call_context.setdefault('solar_p10_kwh', solar_p10)
+
                 plan = planner.plan(
                     predictions_kwh=predictions,
                     solar_kwh=solar,
@@ -337,7 +368,7 @@ class BatteryReplaySimulator:
                     prediction_timestamps=ts_strings,
                     allow_export=True,
                     initial_soc_pct=current_soc_pct,
-                    context=context,
+                    context=call_context,
                 )
                 
                 if plan is None or len(plan) == 0:
@@ -398,6 +429,12 @@ class BatteryReplaySimulator:
                     'action': entry.battery_action,
                     'soc_pct': current_soc_pct_after,
                     'cost_eur': interval_cost_battery,
+                    'charge_grid_kwh': float(entry.charge_from_grid_kwh),
+                    'charge_solar_kwh': float(entry.charge_from_solar_kwh),
+                    'discharge_load_kwh': float(entry.discharge_to_load_kwh),
+                    'discharge_export_kwh': float(entry.discharge_to_export_kwh),
+                    'grid_import_kwh': grid_import,
+                    'grid_export_kwh': grid_export,
                 })
                 
             except Exception as e:
@@ -426,6 +463,7 @@ class BatteryReplaySimulator:
             'savings_pct': (savings / cost_no_battery * 100.0) if cost_no_battery > 0 else 0.0,
             'final_soc_pct': (soc_kwh / battery_capacity_kwh) * 100.0,
             'battery_actions_sample': battery_actions[:5],
+            'battery_actions': battery_actions,
         }
 
 

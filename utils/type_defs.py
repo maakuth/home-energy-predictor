@@ -85,6 +85,8 @@ class SqlitePredictionRecord(TypedDict, total=False):
     generated_at: str
     predicted_usage_kw: float
     solar_forecast_kw: float
+    solar_forecast_p10_kw: float
+    solar_forecast_p90_kw: float
     is_fallback_price: int
     import_price: float
     export_price: float

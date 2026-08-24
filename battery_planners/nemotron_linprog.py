@@ -36,6 +36,35 @@ class NemotronLinprogPlanner(BatteryPlanner):
     ``BatteryPlanEntry`` field traceable to an LP decision variable.
     """
 
+    @staticmethod
+    def _hedge_solar(
+        solar: np.ndarray,
+        context: Optional[BatteryPlannerContext],
+    ) -> np.ndarray:
+        """Blend the central solar forecast toward the worst-case p10 bound.
+
+        ``BATTERY_SOLAR_HEDGE_ALPHA`` (default 1.0) controls the blend:
+        1.0 trusts the p50 forecast (legacy behaviour), 0.0 plans entirely on
+        the p10 worst case. Applies only to this LP's solar input — XGBoost
+        features and GSHP planning keep the central forecast.
+
+        Motivation: calibration data (notes/solar_calibration_estimate10.md)
+        shows actual solar falls below Solcast's p10 ~21% of the time (ideal
+        ~10%), so blindly trusting p50 makes cheap-window grid charging look
+        unnecessary more often than it should.
+        """
+        alpha = np.clip(get_env_float('BATTERY_SOLAR_HEDGE_ALPHA', 1.0), 0.0, 1.0)
+        if alpha >= 1.0 or not context:
+            return solar
+        p10 = context.get('solar_p10_kwh')
+        if p10 is None:
+            return solar
+        p10 = np.asarray(p10, dtype=float)
+        if p10.shape != solar.shape or not np.all(np.isfinite(p10)):
+            print('⚠️ solar_p10_kwh in planner context is malformed; skipping solar hedge')
+            return solar
+        return np.maximum(alpha * solar + (1.0 - alpha) * p10, 0.0)
+
     def plan(
         self,
         predictions_kwh: np.ndarray,
@@ -101,6 +130,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
 
         load = np.maximum(load, 0.0)
         solar = np.maximum(solar, 0.0)
+        solar = self._hedge_solar(solar, context)
         committed = np.maximum(committed, 0.0)
         import_price_floor = get_env_float('IMPORT_PRICE_FLOOR_EUR_PER_KWH', 0.0)
         if import_price_floor > 0:

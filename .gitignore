@@ -16,6 +16,8 @@ ENV/
 
 # But allow JSON fixtures for the Java battery planner tests
 !java-battery-planner/fixtures/*.json
+# ... and the empirical solar p10 ratio model used by bench_solar_hedge.py
+!tests/fixtures/solar_p10_ratio_model.json
 
 hepo.db
 sarima_model_params.pkl

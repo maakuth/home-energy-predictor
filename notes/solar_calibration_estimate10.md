@@ -123,11 +123,102 @@ Caveats:
 - Hedge cost = (price − export price) per displaced kWh + extra cycling. In summer
   with reliable solar this recurs most days; the calibration data decides whether it's
   worth it.
-- Backtest is possible offline before enabling: the raw fixtures in
-  `java-battery-planner/fixtures/{jan,jul,may,oct}.json` already contain
-  `pv_estimate10`/`pv_estimate90` plus measured solar. Use the replay harness
-  (`tests/battery_planner_replay.py`).
 - Enabling a hedge changes inference/planning logic → MINOR version bump per AGENTS.md.
+
+## Phase 2 backtest — round 1 (2026-08-24): fixtures can't answer the question
+
+Implemented the blend behind `BATTERY_SOLAR_HEDGE_ALPHA` (default 1.0 = off;
+LP-only: `solar_hedged = alpha*p50 + (1-alpha)*p10` inside nemotron-linprog;
+XGBoost/GSHP keep p50; p10 flows via `BatteryPlannerContext['solar_p10_kwh']`,
+also wired through the replay harness). Then ran full-length seasonal replays
+(jan/jul/may/oct) with synthetic p10 sampled from the empirical day-ahead
+p10/p50 distribution (45k real pairs from the production archive, Aug 2026).
+
+**Key finding: the seasonal fixtures cannot evaluate the hedge.** Their
+archived "forecasts" equal the measured actuals *exactly* on every solar
+interval (actual < p50 on 0.0% of daytime intervals in all four) — they are
+perfect-foresight fixtures. The Aug-12 failure mode (trusting an optimistic
+forecast) therefore never occurs in replay, and any forecast hedge can only
+add cost. The note's earlier claim that the fixtures contain
+`pv_estimate10`/`pv_estimate90` was also wrong — they carry p50 only.
+
+Measured anyway (pure **cost side** of the hedge, i.e. the insurance premium
+when forecasts are never wrong): alpha=0.85 costs **+1.0 EUR/week**,
+alpha=0.70 **+1.85 EUR/week**, uniform across seasons; worst-day cost also
+slightly *rises* (the blunt every-day blend buys unneeded morning energy even
+on days that later underdeliver). Zero SoC violations; cycling slightly down.
+
+The **benefit side** (avoided expensive purchases on real underdelivery days,
+when p10 was informatively low) is not measurable with perfect-foresight
+fixtures. A rho-parameterized synthetic-correlation mode exists in
+`bench_solar_hedge.py`, but with zero realized shortfall in the fixtures it
+degenerates to noise.
+
+**Decisive next step:** a *real* fixture for the incident window —
+`dump_battery_data.py` now exports `solar_forecast_p10_kw/p90_kw`, so on
+murrikka:
+
+    venv/bin/python3 dump_battery_data.py --start "2026-08-12" --end "2026-08-23" \
+        --output tests/fixtures/aug.pkl --verbose
+
+then `venv/bin/python3 bench_solar_hedge.py --alphas 1.0,0.85,0.7 --fixtures aug
+--no-inject` (the replay harness picks up real p10 from the archive
+automatically; `--no-inject` keeps the fixture's real p10 instead of the
+synthetic model). This replays the actual Aug 12 incident with real
+forecasts, real p10 and real prices.
+
+Extra stat worth knowing (production archive, Aug 2026): the **day-ahead**
+(20-28h lag) p10/p50 ratio has median **0.31** [p5 0.10, p95 0.69] — much
+wider than the keep-last view (median 0.53) that `solar_calibration.py`
+evaluates. The uncertainty the planner faces at decision time is roughly
+"worst case ≈ ⅓ of central", and the day-ahead distribution is what
+`bench_solar_hedge.py`'s ratio model
+(`tests/fixtures/solar_p10_ratio_model.json`) captures.
+
+## Phase 2 backtest — round 2 (2026-08-24): real August window
+
+Dumped a real fixture for the incident window (`tests/fixtures/aug.pkl`) and
+merged real p10/p90 into it from the production archive. **Two lessons:**
+
+1. **HA recorder retention (~10 days) bites**: dumped on Aug 24 with
+   `--start 2026-08-12`, but measurements only go back to Aug 13 11:15 — the
+   Aug-12 incident day itself was already purged. Future incident fixtures
+   must be dumped *within ~10 days* of the event.
+2. The dump's price query returned one row per forecast generation (~279x
+   duplication, 298k rows) — fixed with GROUP BY in `dump_battery_data.py`;
+   the replay harness now also dedupes price timestamps and normalizes
+   horizon array lengths (the first fixture with a non-empty market_prices
+   table exposed that padding bug).
+
+**Result** (real forecasts, real p10, real prices, Aug 13-22 window, paired
+runs, 0 SoC violations in all arms):
+
+| alpha | total cost | delta vs off | grid-charged |
+|-------|-----------|--------------|--------------|
+| 1.0 (off) | -99.06 EUR | — | 1401.6 kWh |
+| 0.85 | -98.96 EUR | **+0.11 EUR / 10 days** | 1401.7 kWh |
+| 0.70 | -98.84 EUR | **+0.22 EUR / 10 days** | 1401.3 kWh |
+
+With *real, informative* p10 the hedge is still net-negative, but ~10x less
+so than with noise p10 (+1.0 EUR/week at alpha=0.85) — p10's informativeness
+recovers most of the insurance premium, just not all of it. In this window
+the stakes are tiny: August import prices are ~0.05-0.09 EUR/kWh with small
+spreads, and export revenue dominates (system earns ~8 EUR/day net). The
+hedge barely changes dispatch at all (grid charge moves <1 kWh over 10
+days).
+
+**Verdict: keep `BATTERY_SOLAR_HEDGE_ALPHA=1.0` (off).** The blunt always-on
+blend does not pay for itself in summer conditions. Open questions for a
+revisit when autumn/winter price spreads arrive (and p10/p90 archiving has
+covered genuinely bad solar weeks):
+- *conditional insurance* (hedge only when worst-case solar < required fill
+  AND price below threshold) would pay the premium only on threatening days
+  instead of every day — the more promising design, but it needs real
+  bad-weather data to evaluate;
+- whether winter spreads (0.10+ EUR/kWh) flip the sign of the hedge benefit.
+
+The infrastructure (context key, LP blend, harness passthrough, bench
+tooling) stays in place, default-off, for that revisit.
 
 ## Files touched (Phase 1)
 
