@@ -122,6 +122,7 @@ All this can be achieved in the typical opencode environment like this:
 cd /tmp/
 git clone /workspace tmp-workspace
 ln -s /workspace/venv tmp-workspace/venv
+ln -s /workspace/.pruner tmp-workspace/.pruner
 ```
 
 After completing feature development, push the work back to a side branch and merge it in `/workspace`:
@@ -131,6 +132,9 @@ git push origin master:dev
 cd /workspace
 git merge dev
 ```
+
+DO NOT transfer changes manually between working copies, use git both for returning changes to the main workspace and to refresh the tmp-workspace.
+You can use multiple tmp workspaces if parallel tasks need them.
 
 ## Running tests
 $ venv/bin/python3 -m pytest
