@@ -242,10 +242,13 @@ class BatteryPlanEntry:
     estimated_hour_savings: float  # EUR saved vs no-battery baseline
     net_load_without_battery_kwh: float  # Load before battery adjustments
     discharge_budget_kwh: Optional[float] = None  # Max kWh battery may discharge to load this interval (None = unlimited)
+    planned_gshp_kw: Optional[float] = None  # Co-optimized GSHP electric power (kW)
+    gshp_temp_sim: Optional[float] = None  # Simulated accumulator temperature (°C)
+    planned_leaf_kw: Optional[float] = None  # Co-optimized Leaf charging power (kW)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        d = {
             'timestamp': self.timestamp,
             'battery_action': self.battery_action,
             'battery_power_kw': float(self.battery_power_kw),
@@ -262,6 +265,13 @@ class BatteryPlanEntry:
             'net_load_without_battery_kwh': float(self.net_load_without_battery_kwh),
             'discharge_budget_kwh': float(self.discharge_budget_kwh) if self.discharge_budget_kwh is not None else None,
         }
+        if self.planned_gshp_kw is not None:
+            d['planned_gshp_kw'] = float(self.planned_gshp_kw)
+        if self.gshp_temp_sim is not None:
+            d['gshp_temp_sim'] = float(self.gshp_temp_sim)
+        if self.planned_leaf_kw is not None:
+            d['planned_leaf_kw'] = float(self.planned_leaf_kw)
+        return d
 
 
 class BatteryPlanner(ABC):

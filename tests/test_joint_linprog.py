@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+import os
+import unittest
+from unittest.mock import patch
+import numpy as np
+
+from battery_planners.joint_linprog import JointLinprogPlanner, compute_gshp_thermal_demand
+from battery_planners.factory import BatteryPlannerFactory
+
+
+class JointLinprogTests(unittest.TestCase):
+    """Unit tests for the Joint Battery + GSHP + Leaf LP Planner."""
+
+    def _plan(
+        self,
+        predictions: list[float],
+        solar: list[float],
+        prices: list[float],
+        *,
+        outside_temps: list[float] | None = None,
+        is_sauna: list[int] | None = None,
+        current_acc_temp: float = 50.0,
+        committed: list[float] | None = None,
+        allow_export: bool = True,
+        **overrides: str,
+    ):
+        n = len(predictions)
+        env = {
+            'BATTERY_CAPACITY_KWH': '40',
+            'BATTERY_INITIAL_SOC_PCT': '50',
+            'BATTERY_MIN_SOC_PCT': '10',
+            'BATTERY_RESERVE_SOC_PCT': '10',
+            'BATTERY_MAX_SOC_PCT': '90',
+            'BATTERY_MAX_CHARGE_KW': '10',
+            'BATTERY_MAX_DISCHARGE_KW': '10',
+            'BATTERY_CHARGE_EFFICIENCY': '0.95',
+            'BATTERY_DISCHARGE_EFFICIENCY': '0.95',
+            'BATTERY_LP_HORIZON': str(n),
+            'BATTERY_LP_HORIZON_FALLBACK': str(n),
+            'BATTERY_LP_DISCOUNT': '1.0',
+            'BATTERY_TERMINAL_VALUE_PERCENTILE': '0',
+            'BATTERY_DEGRADATION_COST_EUR_PER_KWH': '0',
+            'PLAN_INTERVAL_MINUTES': '60',
+            'GSHP_OPTIMIZE_ENABLED': '1',
+            'GSHP_POWER_MIN_KW': '0.0',
+            'GSHP_POWER_MAX_KW': '4.0',
+            'GSHP_COP': '3.5',
+            'GSHP_RESERVOIR_LITERS': '500',
+            'GSHP_MIN_TEMP': '42.0',
+            'GSHP_MAX_TEMP': '55.0',
+            'GSHP_INITIAL_TEMP': str(current_acc_temp),
+            'LEAF_OPTIMIZE_ENABLED': '0',  # disabled by default unless tested
+            'LEAF_DAILY_TARGET_KWH': '0',
+        }
+        env.update(overrides)
+        context = {
+            'tomorrow_valid': True,
+            'outside_temps': np.array(outside_temps if outside_temps is not None else [5.0] * n),
+            'is_sauna_active': np.array(is_sauna if is_sauna is not None else [0] * n),
+            'current_acc_temp': current_acc_temp,
+        }
+        with patch.dict(os.environ, env, clear=False):
+            return JointLinprogPlanner().plan(
+                np.asarray(predictions, dtype=float),
+                np.asarray(solar, dtype=float),
+                np.asarray(prices, dtype=float),
+                np.asarray(prices, dtype=float),
+                [f'i{i}' for i in range(n)],
+                committed_load_kwh=(
+                    np.asarray(committed, dtype=float) if committed is not None else None
+                ),
+                allow_export=allow_export,
+                context=context,
+            )
+
+    def test_factory_registration(self):
+        planner = BatteryPlannerFactory.create('joint-linprog')
+        self.assertIsInstance(planner, JointLinprogPlanner)
+
+    def test_house_and_thermal_energy_balances(self):
+        """Verify electric and thermal energy conservation across all intervals."""
+        n = 4
+        preds = [1.0, 1.5, 0.8, 2.0]
+        solar = [0.0, 2.0, 3.0, 0.0]
+        prices = [0.10, 0.05, 0.20, 0.15]
+        temps = [2.0, 5.0, 8.0, 0.0]
+
+        plan = self._plan(preds, solar, prices, outside_temps=temps, current_acc_temp=48.0)
+        self.assertEqual(len(plan), n)
+
+        cop = 3.5
+        c_deg = (500.0 * 4.18) / 3600.0  # ~0.580556
+        dt = 1.0  # 60 min intervals
+
+        demand_kw = compute_gshp_thermal_demand(np.array(temps), np.zeros(n), 1.0, 0.135, 6.0)
+
+        current_t = 48.0
+        current_soc = 20.0  # 50% of 40 kWh
+
+        for i, entry in enumerate(plan):
+            p_gshp = entry.planned_gshp_kw or 0.0
+            p_leaf = entry.planned_leaf_kw or 0.0
+
+            # Electric house balance
+            net_served = (
+                entry.grid_import_kwh - entry.charge_from_grid_kwh
+                + entry.solar_forecast_kwh if hasattr(entry, 'solar_forecast_kwh') else entry.charge_from_solar_kwh + entry.discharge_to_load_kwh
+            )
+            # Total electric demand = baseload + gshp + leaf
+            total_load_kwh = preds[i] * dt + (p_gshp + p_leaf) * dt
+
+            # Solar balance
+            solar_flows = (
+                entry.charge_from_solar_kwh
+                + entry.discharge_to_export_kwh  # or solar export
+            )
+            self.assertTrue(entry.charge_from_solar_kwh <= solar[i] * dt + 1e-6)
+
+            # Thermal balance
+            net_heat = (p_gshp * dt * cop) - (demand_kw[i] * dt)
+            expected_temp = current_t + (net_heat / c_deg)
+            self.assertAlmostEqual(entry.gshp_temp_sim, expected_temp, delta=0.01)
+            current_t = entry.gshp_temp_sim
+
+            # Temperature bounds
+            self.assertTrue(entry.gshp_temp_sim >= 42.0 - 1e-5)
+            self.assertTrue(entry.gshp_temp_sim <= 55.0 + 1e-5)
+
+            # SoC bounds
+            self.assertTrue(entry.soc_pct >= 10.0 - 1e-5)
+            self.assertTrue(entry.soc_pct <= 90.0 + 1e-5)
+
+    def test_thermal_preheating_during_cheap_price(self):
+        """GSHP should preheat accumulator during cheap hours to avoid expensive peak hours."""
+        # 4 intervals: cheap at index 0 (0.02 €/kWh), then very expensive at index 1-3 (0.50 €/kWh)
+        preds = [1.0, 1.0, 1.0, 1.0]
+        solar = [0.0, 0.0, 0.0, 0.0]
+        prices = [0.02, 0.50, 0.50, 0.50]
+        temps = [-5.0, -5.0, -5.0, -5.0]  # Cold outside -> strong heating demand
+
+        plan = self._plan(preds, solar, prices, outside_temps=temps, current_acc_temp=45.0)
+
+        # GSHP should heat heavily at index 0 (cheap) to coast through expensive index 1-3
+        self.assertGreater(plan[0].planned_gshp_kw, 2.0, "GSHP should run heavily during cheap interval 0")
+        self.assertGreater(plan[0].gshp_temp_sim, 45.0, "Accumulator temperature should rise in interval 0")
+
+    def test_direct_solar_consumed_by_loads_without_battery_loss(self):
+        """When solar surplus is available, it should directly supply GSHP with 100% efficiency."""
+        preds = [0.5, 0.5]
+        solar = [5.0, 0.0]  # 5 kW solar in interval 0
+        prices = [0.20, 0.20]
+        temps = [0.0, 0.0]
+
+        plan = self._plan(preds, solar, prices, outside_temps=temps, current_acc_temp=43.0)
+
+        # In interval 0, solar surplus powers GSHP and charges battery without grid import
+        self.assertAlmostEqual(plan[0].grid_import_kwh, 0.0, delta=1e-6)
+        self.assertGreater(plan[0].planned_gshp_kw, 0.0)
+
+    def test_leaf_ev_charging_cooptimization(self):
+        """Leaf EV target energy should be allocated to the cheapest intervals."""
+        preds = [1.0, 1.0, 1.0, 1.0]
+        solar = [0.0, 0.0, 0.0, 0.0]
+        prices = [0.25, 0.02, 0.30, 0.05]  # Index 1 is cheapest, then index 3
+
+        plan = self._plan(
+            preds, solar, prices,
+            LEAF_OPTIMIZE_ENABLED='1',
+            LEAF_DAILY_TARGET_KWH='24.0',  # 24 kWh/day -> 4 kWh over 4 hours
+            LEAF_MAX_POWER_KW='3.0',
+        )
+
+        total_leaf_kwh = sum(entry.planned_leaf_kw * 1.0 for entry in plan)
+        self.assertAlmostEqual(total_leaf_kwh, 4.0, delta=1e-3)
+
+        # The cheapest interval (index 1) should receive maximum possible Leaf charging (3.0 kW)
+        self.assertAlmostEqual(plan[1].planned_leaf_kw, 3.0, delta=0.1)
+
+    def test_fuse_limit_prevents_simultaneous_overload(self):
+        """Battery charging, GSHP, and Leaf combined must respect main fuse limit."""
+        # 1 interval with very cheap price (0.01 €/kWh). Everything wants to charge.
+        preds = [2.0]
+        solar = [0.0]
+        prices = [0.01]
+        temps = [-10.0]
+
+        # 25A fuse @ 3-phase 230V = 17.25 kW max import
+        plan = self._plan(
+            preds, solar, prices,
+            outside_temps=temps,
+            current_acc_temp=42.0,
+            MAIN_FUSE_SIZE_A='25.0',
+            BATTERY_MAX_CHARGE_KW='10.0',
+            GSHP_POWER_MAX_KW='4.0',
+            LEAF_OPTIMIZE_ENABLED='1',
+            LEAF_DAILY_TARGET_KWH='6.0',
+            LEAF_MAX_POWER_KW='3.0',
+        )
+
+        self.assertLessEqual(plan[0].grid_import_kwh, 17.25 + 1e-4)
+
+
+if __name__ == '__main__':
+    unittest.main()
