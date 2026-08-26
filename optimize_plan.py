@@ -147,7 +147,32 @@ def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, e
     grid_fees = get_grid_fees()
     market_prices = np.array(market_prices, dtype=float)
 
-    if is_inclusive:
+    pegging_share = np.clip(get_env_float('PEGGING_SHARE', 0.0), 0.0, 1.0)
+    if pegging_share > 0.0:
+        peg_point = get_env_float('PRICE_PEG_POINT_EUR_PER_KWH', 0.0)
+
+        # The inclusive sensor contains both energy and fees. When the raw
+        # export price is available, its delta from the import price gives
+        # the actual fee and avoids relying on the configured estimate.
+        export_base_array = None if export_base is None else np.asarray(export_base, dtype=float)
+        has_fee_delta = (
+            is_inclusive
+            and export_base_array is not None
+            and export_base_array.shape == market_prices.shape
+        )
+        if has_fee_delta:
+            energy_prices = export_base_array
+            fees = market_prices - export_base_array
+        else:
+            fees = grid_fees
+            energy_prices = market_prices - fees if is_inclusive else market_prices
+
+        import_unit_prices = (
+            pegging_share * peg_point
+            + (1.0 - pegging_share) * energy_prices
+            + fees
+        )
+    elif is_inclusive:
         import_unit_prices = market_prices
     else:
         import_unit_prices = market_prices + grid_fees

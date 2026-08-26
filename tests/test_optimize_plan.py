@@ -259,6 +259,44 @@ class OptimizePlanTests(unittest.TestCase):
             # Export should be market minus GRID_FEES when inclusive
             self.assertAlmostEqual(export_prices[0], 0.04)
 
+    def test_build_tariff_prices_pegs_inclusive_import_using_sensor_fee_delta(self):
+        with patched_env(
+            {
+                "GRID_FEES_EUR_PER_KWH": "0.99",  # Must not override sensor delta
+                "PRICE_PEG_POINT_EUR_PER_KWH": "0.08",
+                "PEGGING_SHARE": "0.5",
+            }
+        ):
+            # Inclusive import sensor = raw energy price + 0.06 fee.
+            inclusive_import = np.array([0.08, 0.36])
+            raw_energy_export = np.array([0.02, 0.30])
+            import_prices, export_prices = build_tariff_prices(
+                inclusive_import,
+                is_inclusive=True,
+                export_base=raw_energy_export,
+            )
+
+        # Blend fee-exclusive energy prices toward the peg, then restore the
+        # per-interval fee. Export pricing remains the raw energy price.
+        np.testing.assert_allclose(import_prices, [0.11, 0.25])
+        np.testing.assert_allclose(export_prices, raw_energy_export)
+
+    def test_build_tariff_prices_with_full_peg_flattens_import_prices(self):
+        with patched_env(
+            {
+                "PRICE_PEG_POINT_EUR_PER_KWH": "0.08",
+                "PEGGING_SHARE": "1.0",
+            }
+        ):
+            import_prices, export_prices = build_tariff_prices(
+                np.array([0.08, 0.36]),
+                is_inclusive=True,
+                export_base=np.array([0.02, 0.30]),
+            )
+
+        np.testing.assert_allclose(import_prices, [0.14, 0.14])
+        np.testing.assert_allclose(export_prices, [0.02, 0.30])
+
     def test_align_interval_prices_ffill_hourly_to_15min(self):
         # Hourly data
         raw_today = [
