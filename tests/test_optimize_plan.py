@@ -276,12 +276,12 @@ class OptimizePlanTests(unittest.TestCase):
                 export_base=raw_energy_export,
             )
 
-        # Blend fee-exclusive energy prices toward the peg, then restore the
-        # per-interval fee. Export pricing remains the raw energy price.
-        np.testing.assert_allclose(import_prices, [0.11, 0.25])
+        # Keep the interval spot signal and shift its mean toward the peg.
+        # The horizon mean is 0.16, so the 50% peg shift is -0.04.
+        np.testing.assert_allclose(import_prices, [0.04, 0.32])
         np.testing.assert_allclose(export_prices, raw_energy_export)
 
-    def test_build_tariff_prices_with_full_peg_flattens_import_prices(self):
+    def test_build_tariff_prices_with_full_peg_keeps_kulutusvaikutus_signal(self):
         with patched_env(
             {
                 "PRICE_PEG_POINT_EUR_PER_KWH": "0.08",
@@ -294,7 +294,10 @@ class OptimizePlanTests(unittest.TestCase):
                 export_base=np.array([0.02, 0.30]),
             )
 
-        np.testing.assert_allclose(import_prices, [0.14, 0.14])
+        # Full pegging fixes the mean at peg + fee, but timing still follows
+        # the spot deviation from the horizon arithmetic mean.
+        np.testing.assert_allclose(import_prices, [0.00, 0.28])
+        self.assertAlmostEqual(float(np.mean(import_prices)), 0.14)
         np.testing.assert_allclose(export_prices, [0.02, 0.30])
 
     def test_align_interval_prices_ffill_hourly_to_15min(self):

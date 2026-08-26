@@ -167,11 +167,13 @@ def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, e
             fees = grid_fees
             energy_prices = market_prices - fees if is_inclusive else market_prices
 
-        import_unit_prices = (
-            pegging_share * peg_point
-            + (1.0 - pegging_share) * energy_prices
-            + fees
-        )
+        # The consumption impact is the consumption-weighted spot average
+        # minus the arithmetic spot average. For marginal interval pricing,
+        # this reduces to the interval spot price plus a peg/reference shift.
+        # Use the available planning horizon as the reference-average proxy.
+        energy_prices = np.asarray(energy_prices, dtype=float)
+        spot_reference = float(np.mean(energy_prices))
+        import_unit_prices = energy_prices + pegging_share * (peg_point - spot_reference) + fees
     elif is_inclusive:
         import_unit_prices = market_prices
     else:
