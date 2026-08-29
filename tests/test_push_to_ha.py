@@ -9,6 +9,7 @@ from utils.battery_utils import (
     is_battery_available, compute_load_following_setpoint,
     get_current_plan_entry, compute_net_metering_setpoint,
     adjust_charge_solar_for_real_time,
+    adjust_idle_for_cheap_export,
     smooth_planned_setpoint,
     apply_ramp_rate,
 )
@@ -983,6 +984,43 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
             min_soc_pct=20.0,
         )
         self.assertAlmostEqual(adjusted, -3.4, places=1)
+
+
+class TestAdjustIdleForCheapExport(unittest.TestCase):
+    def test_cheap_export_charges_only_enough_to_absorb_grid_export(self):
+        adjusted, action = adjust_idle_for_cheap_export(
+            planned_battery_kw=0.0,
+            planned_action='idle',
+            export_price=0.003,
+            grid_w=-4000.0,
+            battery_w=0.0,
+            battery_soc_pct=17.5,
+            max_soc_pct=90.0,
+            max_export_price=0.02,
+        )
+        self.assertEqual(action, 'charge_solar')
+        self.assertAlmostEqual(adjusted, 4.0)
+
+    def test_expensive_export_keeps_idle(self):
+        adjusted, action = adjust_idle_for_cheap_export(
+            0.0, 'idle', 0.08, -4000.0, 0.0, 17.5, 90.0,
+            max_export_price=0.02,
+        )
+        self.assertEqual((adjusted, action), (0.0, 'idle'))
+
+    def test_full_battery_keeps_idle(self):
+        adjusted, action = adjust_idle_for_cheap_export(
+            0.0, 'idle', 0.003, -4000.0, 0.0, 90.0, 90.0,
+            max_export_price=0.02,
+        )
+        self.assertEqual((adjusted, action), (0.0, 'idle'))
+
+    def test_grid_import_never_triggers_discharge(self):
+        adjusted, action = adjust_idle_for_cheap_export(
+            0.0, 'idle', 0.003, 4000.0, 0.0, 17.5, 90.0,
+            max_export_price=0.02,
+        )
+        self.assertEqual((adjusted, action), (0.0, 'idle'))
 
 
 class TestAdjustChargeSolarRealTime(unittest.TestCase):

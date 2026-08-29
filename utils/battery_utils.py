@@ -595,6 +595,43 @@ def adjust_charge_solar_for_real_time(  # type: ignore[return]
     return -discharge_kw, 'discharge_load'
 
 
+def adjust_idle_for_cheap_export(
+    planned_battery_kw: float,
+    planned_action: str,
+    export_price: float | None,
+    grid_w: float,
+    battery_w: float,
+    battery_soc_pct: float | None,
+    max_soc_pct: float,
+    *,
+    max_export_price: float | None = None,
+    max_battery_kw: float = 10.0,
+) -> tuple[float, str]:
+    """Absorb cheap, unforecast solar export during an automatic idle interval."""
+    if max_export_price is None:
+        max_export_price = get_env_float(
+            'BATTERY_IDLE_SOLAR_CHARGE_MAX_EXPORT_PRICE', 0.02,
+        )
+
+    if (
+        planned_action != 'idle'
+        or export_price is None
+        or export_price > max_export_price
+        or battery_soc_pct is None
+        or battery_soc_pct >= max_soc_pct
+        or grid_w >= -200.0
+    ):
+        return planned_battery_kw, planned_action
+
+    # Positive battery power means charging. Add current export to the
+    # measured battery power so the resulting grid setpoint approaches zero.
+    target_kw = battery_w / 1000.0 - grid_w / 1000.0
+    target_kw = min(max_battery_kw, max(0.0, target_kw))
+    if target_kw <= 0.0:
+        return planned_battery_kw, planned_action
+    return target_kw, 'charge_solar'
+
+
 def _setpoint_smooth_state_path(state_file: str | None = None) -> str:
     """Get the path for the setpoint smoothing state file."""
     if state_file is not None:

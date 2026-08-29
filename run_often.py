@@ -12,6 +12,7 @@ from utils.battery_utils import (
     compute_net_metering_setpoint,
     get_current_plan_entry,
     adjust_charge_solar_for_real_time,
+    adjust_idle_for_cheap_export,
     smooth_planned_setpoint,
     apply_ramp_rate,
     apply_discharge_budget,
@@ -158,6 +159,18 @@ def main():
         battery_soc_pct=soc_pct,
         min_soc_pct=min_soc_pct,
     )
+
+    if not manual_override:
+        planned_battery_kw, planned_action = adjust_idle_for_cheap_export(
+            planned_battery_kw=planned_battery_kw,
+            planned_action=planned_action,
+            export_price=current.get('export_unit_price') if current else None,
+            grid_w=grid_w,
+            battery_w=battery_w,
+            battery_soc_pct=soc_pct,
+            max_soc_pct=float(os.getenv('BATTERY_MAX_SOC_PCT', '90.0')),
+            max_battery_kw=max_battery_kw,
+        )
 
     net_metering = os.getenv('BATTERY_NET_METERING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 

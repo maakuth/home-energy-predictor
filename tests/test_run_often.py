@@ -81,6 +81,42 @@ class TestRunOften(unittest.TestCase):
 
         mock_push.assert_called_once()
 
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_idle_absorbs_cheap_unexpected_solar_export(self, mock_get_ha, mock_push):
+        state_dir = os.path.join(self.test_dir, 'state')
+        self._make_plan_file(state_dir, extra_fields={
+            'battery_power_kw': 0.0,
+            'battery_action': 'idle',
+            'export_unit_price': 0.003,
+            'grid_import_kwh': 0.0,
+        })
+
+        def state_side_effect(entity_id: str):
+            values = {
+                'sensor.be_soc': '17.5',
+                'sensor.be_stat_batt_power': '0.0',
+                'sensor.sahkokauppa_20s': '-4.0',
+                'sensor.solar_plant_real_power_kw_2': '5.0',
+                'sensor.cumulative_active_import': '100.0',
+                'sensor.cumulative_active_export': '50.0',
+                'input_select.hepo_battery_action': 'auto',
+            }
+            return {'state': values.get(entity_id, '0.0')}
+
+        mock_get_ha.side_effect = state_side_effect
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '0',
+            'BATTERY_IDLE_SOLAR_CHARGE_MAX_EXPORT_PRICE': '0.02',
+        }):
+            from run_often import main
+            main()
+
+        args = mock_push.call_args.kwargs
+        self.assertEqual(args['battery_action'], 'net_metering')
+        self.assertEqual(args['battery_power_w'], -4000)
+
     @patch('run_often.push_ha_state')
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')
