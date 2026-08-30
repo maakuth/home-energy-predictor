@@ -42,6 +42,18 @@ def process_data() -> None:
     # 15-point median filter is ~15 mins if 1-min data.
     rolled = df[numeric_cols].rolling(window=15, center=True).median()
     df[numeric_cols] = rolled.fillna(df[numeric_cols])
+
+    # sensor.mlp_teho measures both heat sources. Preserve that total for
+    # baseload accounting and expose the GSHP-only component separately.
+    if 'gshp_power' in df.columns:
+        df['heating_power'] = df['gshp_power']
+        if 'resistive_heater_power' in df.columns:
+            df['heating_power'] = df[
+                ['heating_power', 'resistive_heater_power']
+            ].max(axis=1)
+            df['gshp_power'] = (
+                df['heating_power'] - df['resistive_heater_power']
+            ).clip(lower=0)
     
     # --- RESOLUTION AGNOSTIC STEP ---
     # Detect frequency to set correct lag shifts
@@ -69,10 +81,14 @@ def process_data() -> None:
 
     # Baseload: House consumption excluding the GSHP and other known high-power loads
     if 'total_home_power' in df.columns:
-        gshp_kw = (df['gshp_power'] / 1000.0) if 'gshp_power' in df.columns else 0.0
-        resistive_kw = (df['resistive_heater_power'] / 1000.0) if 'resistive_heater_power' in df.columns else 0.0
+        if 'heating_power' in df.columns:
+            heating_kw = df['heating_power'] / 1000.0
+        else:
+            gshp_kw = (df['gshp_power'] / 1000.0) if 'gshp_power' in df.columns else 0.0
+            resistive_kw = (df['resistive_heater_power'] / 1000.0) if 'resistive_heater_power' in df.columns else 0.0
+            heating_kw = gshp_kw + resistive_kw
         leaf_kw = (df['leaf_power'] / 1000.0) if 'leaf_power' in df.columns else 0.0
-        df['baseload_power'] = df['total_home_power'] - gshp_kw - resistive_kw - leaf_kw
+        df['baseload_power'] = df['total_home_power'] - heating_kw - leaf_kw
         df['baseload_power'] = df['baseload_power'].clip(lower=0)
     else:
         df['baseload_power'] = 0.0
@@ -130,7 +146,7 @@ def process_data() -> None:
     print('Applying fireplace logic...')
     if 'accumulator_temp' in df.columns:
         df['acc_roc'] = df['accumulator_temp'].diff().fillna(0)
-        hp_cols = ['gshp_power', 'aahp_living_power', 'aahp_cabin_power']
+        hp_cols = ['gshp_power', 'resistive_heater_power', 'aahp_living_power', 'aahp_cabin_power']
         available_hp = [c for c in hp_cols if c in df.columns]
         df['total_hp_power'] = df[available_hp].sum(axis=1) / 1000.0
         

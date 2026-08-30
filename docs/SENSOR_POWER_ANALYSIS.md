@@ -14,7 +14,7 @@ The home energy predictor currently **does not account for battery power** in it
 |---|---|---|---|---|
 | `sensor.sahkokauppa_nyt` | `total_power` | Power Flow | kW | **Grid meter** - positive = import, negative = export |
 | `sensor.solarh_63038_real_power_kw` | `solar_actual` | Power | kW | **Solar production** from PV inverter |
-| `sensor.mlp_teho` | `gshp_power` | Power | W | Ground Source Heat Pump consumption |
+| `sensor.mlp_teho` | `gshp_power` | Power | W | Combined GSHP and resistive-heater consumption; processing derives GSHP-only power |
 | `sensor.saikaan_olohuone_current_power` | `aahp_living_power` | Power | W | Air-to-Air Heat Pump (living area) |
 | `sensor.mokkimokin_ilp_power` | `aahp_cabin_power` | Power | W | Air-to-Air Heat Pump (cabin) |
 | `sensor.tasmota_energy_power_3` | `leaf_power` | Power | W | Nissan Leaf EV charging power |
@@ -426,4 +426,3 @@ When a physical battery is installed, this equation becomes invalid. The battery
 4. **Validated** in performance analysis
 
 Currently, **the battery is only simulated in the optimizer, not measured in history**. This creates a data integrity issue that must be resolved before the physical battery can be reliably controlled.
-

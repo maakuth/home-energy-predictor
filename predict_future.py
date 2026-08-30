@@ -111,10 +111,13 @@ def compute_baseload_at_lag(
             except Exception:
                 pass
 
-        gshp = row.get('gshp', 0.0)
-        gshp = float(gshp) if pd.notna(gshp) else 0.0
+        # sensor.mlp_teho is the shared meter for GSHP and resistive heating,
+        # so its reading already includes the switched 6 kW element.
+        heating = row.get('gshp', 0.0)
+        heating = float(heating) if pd.notna(heating) else 0.0
         resistive = row.get('resistive', 0.0)
         resistive = float(resistive) if pd.notna(resistive) else 0.0
+        heating = max(heating, resistive)
         leaf = row.get('leaf', 0.0)
         leaf = float(leaf) if pd.notna(leaf) else 0.0
         battery = row.get('battery', 0.0)
@@ -123,7 +126,7 @@ def compute_baseload_at_lag(
         if 'battery' not in combined.columns:
             print(f"⚠️ Battery sensor data unavailable for baseload lag at {hours_back}h — baseload may include battery charging")
 
-        return max(0.0, total + solar - gshp - resistive - leaf - battery)
+        return max(0.0, total + solar - heating - leaf - battery)
     except Exception as e:
         print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
         return 1.0

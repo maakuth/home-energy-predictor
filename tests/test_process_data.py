@@ -47,7 +47,7 @@ class TestProcessData(unittest.TestCase):
             ev_vals[i:i+len(vals)] = vals
         df['ev_soc'] = ev_vals
         df['ev_position'] = 'home'
-        df.iloc[20:40, df.columns.get_loc('ev_position')] = 'not_home'
+        df.loc[df.index[20:40], 'ev_position'] = 'not_home'
         df['total_power'] = 2.0 + 0.5 * np.sin(np.arange(n) * 2 * np.pi / 12)
         df['battery_power'] = np.where(np.arange(n) % 4 < 2, 2000.0, -1000.0)
         df['accumulator_temp'] = 45.0 + 2.0 * np.sin(np.arange(n) * 2 * np.pi / 96)
@@ -88,6 +88,7 @@ class TestProcessData(unittest.TestCase):
         raw_path = os.path.join(self.test_dir, 'state', 'raw_data.csv')
         raw = pd.read_csv(raw_path, index_col=0)
         raw['resistive_heater_power'] = 6000.0
+        raw['gshp_power'] = raw['gshp_power'] + 6000.0
         raw['total_power'] = raw['total_power'] + 6.0
         raw.to_csv(raw_path)
 
@@ -104,6 +105,27 @@ class TestProcessData(unittest.TestCase):
             - 6.0
         ).clip(lower=0)
         self.assertLess((result['baseload_power'] - expected).abs().max(), 1e-6)
+
+    def test_shared_heating_meter_is_split_without_double_counting(self):
+        raw_path = os.path.join(self.test_dir, 'state', 'raw_data.csv')
+        raw = pd.read_csv(raw_path, index_col=0)
+        raw['solar_actual'] = 0.0
+        raw['solar_forecast'] = 0.0
+        raw['battery_power'] = 0.0
+        raw['leaf_power'] = 0.0
+        raw['total_power'] = 12.0
+        raw['gshp_power'] = 10000.0
+        raw['resistive_heater_power'] = 6000.0
+        raw.to_csv(raw_path)
+
+        from process_data import process_data
+        process_data()
+        result = pd.read_csv(
+            os.path.join(self.test_dir, 'state', 'processed_data.csv'), index_col=0,
+        )
+
+        self.assertAlmostEqual(result['gshp_power'].median(), 4000.0)
+        self.assertAlmostEqual(result['baseload_power'].median(), 2.0)
 
     def test_cyclic_encoding_bounds(self):
         from process_data import process_data

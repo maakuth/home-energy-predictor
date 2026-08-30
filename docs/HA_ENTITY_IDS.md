@@ -20,7 +20,7 @@ This document lists the actual entity IDs used by the home-energy-predictor syst
 ### Heat Systems (GSHP)
 | Entity ID | Description | Unit | Used By |
 |-----------|-------------|------|---------|
-| `sensor.mlp_teho` | GSHP power consumption | W | Load calculations, optimization |
+| `sensor.mlp_teho` | Combined GSHP and resistive-heater power | W | Load calculations, optimization |
 | `sensor.mlp_varaajan_lampotila` | GSHP accumulator temp | °C | Temperature monitoring, heat load |
 | `sensor.mlp_pumpun_lampotla` | GSHP pump outlet temp | °C | Heat system diagnostics |
 | `switch.mlp_vastus_output_0` | Top-mounted 6 kW resistive reservoir heater | on/off | Prediction, baseload separation, direct control |

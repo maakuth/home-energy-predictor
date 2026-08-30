@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import unittest
+from typing import cast
 from unittest.mock import patch
 import numpy as np
 
+from battery_planners.base import BatteryPlannerContext
 from battery_planners.joint_linprog import JointLinprogPlanner, compute_gshp_thermal_demand
 from battery_planners.factory import BatteryPlannerFactory
 
@@ -71,7 +73,7 @@ class JointLinprogTests(unittest.TestCase):
                     np.asarray(committed, dtype=float) if committed is not None else None
                 ),
                 allow_export=allow_export,
-                context=context,
+                context=cast(BatteryPlannerContext, context),
             )
 
     def test_factory_registration(self):
@@ -101,6 +103,8 @@ class JointLinprogTests(unittest.TestCase):
         for i, entry in enumerate(plan):
             p_gshp = entry.planned_gshp_kw or 0.0
             p_leaf = entry.planned_leaf_kw or 0.0
+            sim_temp = entry.gshp_temp_sim
+            assert sim_temp is not None
 
             # Electric house balance
             net_served = (
@@ -120,12 +124,12 @@ class JointLinprogTests(unittest.TestCase):
             # Thermal balance
             net_heat = (p_gshp * dt * cop) - (demand_kw[i] * dt)
             expected_temp = current_t + (net_heat / c_deg)
-            self.assertAlmostEqual(entry.gshp_temp_sim, expected_temp, delta=0.01)
-            current_t = entry.gshp_temp_sim
+            self.assertAlmostEqual(sim_temp, expected_temp, delta=0.01)
+            current_t = sim_temp
 
             # Temperature bounds
-            self.assertTrue(entry.gshp_temp_sim >= 42.0 - 1e-5)
-            self.assertTrue(entry.gshp_temp_sim <= 55.0 + 1e-5)
+            self.assertTrue(sim_temp >= 42.0 - 1e-5)
+            self.assertTrue(sim_temp <= 55.0 + 1e-5)
 
             # SoC bounds
             self.assertTrue(entry.soc_pct >= 10.0 - 1e-5)
@@ -142,8 +146,8 @@ class JointLinprogTests(unittest.TestCase):
         plan = self._plan(preds, solar, prices, outside_temps=temps, current_acc_temp=45.0)
 
         # GSHP should heat heavily at index 0 (cheap) to coast through expensive index 1-3
-        self.assertGreater(plan[0].planned_gshp_kw, 2.0, "GSHP should run heavily during cheap interval 0")
-        self.assertGreater(plan[0].gshp_temp_sim, 45.0, "Accumulator temperature should rise in interval 0")
+        self.assertGreater(plan[0].planned_gshp_kw or 0.0, 2.0, "GSHP should run heavily during cheap interval 0")
+        self.assertGreater(plan[0].gshp_temp_sim or 0.0, 45.0, "Accumulator temperature should rise in interval 0")
 
     def test_direct_solar_consumed_by_loads_without_battery_loss(self):
         """When solar surplus is available, it should directly supply GSHP with 100% efficiency."""
@@ -156,7 +160,7 @@ class JointLinprogTests(unittest.TestCase):
 
         # In interval 0, solar surplus powers GSHP and charges battery without grid import
         self.assertAlmostEqual(plan[0].grid_import_kwh, 0.0, delta=1e-6)
-        self.assertGreater(plan[0].planned_gshp_kw, 0.0)
+        self.assertGreater(plan[0].planned_gshp_kw or 0.0, 0.0)
 
     def test_resistive_source_replaces_disabled_gshp(self):
         plan = self._plan(
@@ -174,7 +178,29 @@ class JointLinprogTests(unittest.TestCase):
         self.assertEqual(plan[0].gshp_intent, 'STOP')
         self.assertEqual(plan[0].resistive_heater_intent, 'ON')
         self.assertEqual(plan[0].planned_gshp_kw, 0.0)
-        self.assertGreater(plan[0].planned_resistive_kw, 0.0)
+        self.assertGreater(plan[0].planned_resistive_kw or 0.0, 0.0)
+
+    def test_gshp_and_resistive_sources_can_run_together(self):
+        plan = self._plan(
+            [1.0], [0.0], [0.10],
+            outside_temps=[0.0], current_acc_temp=42.0,
+            GSHP_OPTIMIZE_ENABLED='1',
+            RESISTIVE_HEATER_OPTIMIZE_ENABLED='1',
+            GSHP_POWER_MIN_KW='0.0',
+            GSHP_POWER_MAX_KW='4.0',
+            GSHP_COP='3.5',
+            RESISTIVE_HEATER_POWER_KW='6.0',
+            RESISTIVE_HEATER_EFFECTIVE_LITERS='150',
+            RESISTIVE_HEATER_MAX_TEMP='60.0',
+            GSHP_BASELINE_DEMAND_KW='34.0',
+            GSHP_HEAT_LOSS_K='0.0',
+            BATTERY_MAX_CHARGE_KW='0.0',
+            BATTERY_MAX_DISCHARGE_KW='0.0',
+        )
+
+        self.assertAlmostEqual(plan[0].planned_gshp_kw or 0.0, 4.0, places=4)
+        self.assertAlmostEqual(plan[0].planned_resistive_kw or 0.0, 6.0, places=4)
+        self.assertAlmostEqual(plan[0].grid_import_kwh, 11.0, places=4)
 
     def test_leaf_ev_charging_cooptimization(self):
         """Leaf EV target energy should be allocated to the cheapest intervals."""
@@ -189,11 +215,11 @@ class JointLinprogTests(unittest.TestCase):
             LEAF_MAX_POWER_KW='3.0',
         )
 
-        total_leaf_kwh = sum(entry.planned_leaf_kw * 1.0 for entry in plan)
+        total_leaf_kwh = sum((entry.planned_leaf_kw or 0.0) * 1.0 for entry in plan)
         self.assertAlmostEqual(total_leaf_kwh, 4.0, delta=1e-3)
 
         # The cheapest interval (index 1) should receive maximum possible Leaf charging (3.0 kW)
-        self.assertAlmostEqual(plan[1].planned_leaf_kw, 3.0, delta=0.1)
+        self.assertAlmostEqual(plan[1].planned_leaf_kw or 0.0, 3.0, delta=0.1)
 
     def test_fuse_limit_prevents_simultaneous_overload(self):
         """Battery charging, GSHP, and Leaf combined must respect main fuse limit."""
