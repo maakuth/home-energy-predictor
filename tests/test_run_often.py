@@ -59,7 +59,11 @@ class TestRunOften(unittest.TestCase):
         slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
 
         control_resistive_heater(
-            {'timestamp': slot.isoformat(), 'resistive_heater_intent': 'ON'},
+            {
+                'timestamp': slot.isoformat(),
+                'resistive_heater_intent': 'ON',
+                'planned_resistive_kw': 6.0,
+            },
             accumulator_temp=50.0,
         )
 
@@ -97,6 +101,29 @@ class TestRunOften(unittest.TestCase):
         self.assertEqual(mock_service.call_args.args[1], 'turn_off')
 
     @patch('run_often.call_ha_service')
+    def test_resistive_heater_duty_cycles_to_planned_energy(self, mock_service):
+        from run_often import control_resistive_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        plan = {
+            'timestamp': slot.isoformat(),
+            'resistive_heater_intent': 'ON',
+            'planned_resistive_kw': 3.0,
+        }
+
+        control_resistive_heater(plan, accumulator_temp=50.0, now=slot)
+        control_resistive_heater(
+            plan,
+            accumulator_temp=50.0,
+            now=slot + timedelta(minutes=8),
+        )
+
+        self.assertEqual(
+            [item.args[1] for item in mock_service.call_args_list],
+            ['turn_on', 'turn_off'],
+        )
+
+    @patch('run_often.call_ha_service')
     def test_resistive_heater_stays_off_after_reaching_interval_cutoff(self, mock_service):
         from run_often import control_resistive_heater
         now = datetime.now().astimezone()
@@ -104,6 +131,7 @@ class TestRunOften(unittest.TestCase):
         plan = {
             'timestamp': slot.isoformat(),
             'resistive_heater_intent': 'ON',
+            'planned_resistive_kw': 6.0,
             'gshp_temp_simulated': 52.0,
         }
 

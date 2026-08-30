@@ -42,13 +42,17 @@ def _get_interval_minutes() -> int:
 def control_resistive_heater(
     current_plan: dict | None,
     accumulator_temp: float | None,
+    now: datetime | None = None,
 ) -> None:
-    """Apply the current resistive-heater intent, failing closed without temperature."""
+    """Deliver the planned resistive energy while failing closed on unsafe state."""
     entity_id = os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')
     max_temp = float(os.getenv('RESISTIVE_HEATER_MAX_TEMP', '60.0'))
+    heater_kw = max(0.0, float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')))
     planned_cutoff = max_temp
     plan_is_current = False
     slot_id = None
+    elapsed_seconds = 0.0
+    now = now or datetime.now().astimezone()
     if current_plan is not None:
         try:
             planned_cutoff = min(max_temp, float(current_plan.get('gshp_temp_simulated', max_temp)))
@@ -56,7 +60,6 @@ def control_resistive_heater(
             planned_cutoff = max_temp
         try:
             timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
-            now = datetime.now().astimezone()
             interval_minutes = _get_interval_minutes()
             current_slot = now.replace(
                 minute=(now.minute // interval_minutes) * interval_minutes,
@@ -65,6 +68,7 @@ def control_resistive_heater(
             )
             plan_is_current = timestamp.replace(second=0, microsecond=0) == current_slot
             slot_id = current_slot.isoformat()
+            elapsed_seconds = max(0.0, (now - current_slot).total_seconds())
         except (KeyError, TypeError, ValueError):
             plan_is_current = False
     state_file = os.getenv(
@@ -96,6 +100,17 @@ def control_resistive_heater(
         except OSError as exc:
             print(f'Could not persist resistive heater cutoff: {exc}')
 
+    planned_kw = 0.0
+    if current_plan is not None:
+        try:
+            planned_kw = max(0.0, min(heater_kw, float(current_plan.get('planned_resistive_kw', 0.0))))
+        except (TypeError, ValueError):
+            pass
+    planned_runtime_seconds = (
+        _get_interval_minutes() * 60.0 * planned_kw / heater_kw
+        if heater_kw > 0 else 0.0
+    )
+
     should_heat = (
         current_plan is not None
         and plan_is_current
@@ -103,6 +118,7 @@ def control_resistive_heater(
         and current_plan.get('resistive_heater_intent') == 'ON'
         and accumulator_temp is not None
         and accumulator_temp < planned_cutoff
+        and elapsed_seconds < planned_runtime_seconds
     )
     call_ha_service(
         'switch', 'turn_on' if should_heat else 'turn_off',
