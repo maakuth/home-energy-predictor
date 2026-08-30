@@ -243,8 +243,12 @@ class BatteryPlanEntry:
     net_load_without_battery_kwh: float  # Load before battery adjustments
     discharge_budget_kwh: Optional[float] = None  # Max kWh battery may discharge to load this interval (None = unlimited)
     planned_gshp_kw: Optional[float] = None  # Co-optimized GSHP electric power (kW)
+    gshp_intent: Optional[str] = None
+    planned_resistive_kw: Optional[float] = None
+    resistive_heater_intent: Optional[str] = None
     gshp_temp_sim: Optional[float] = None  # Simulated accumulator temperature (°C)
     planned_leaf_kw: Optional[float] = None  # Co-optimized Leaf charging power (kW)
+    leaf_intent: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -267,10 +271,18 @@ class BatteryPlanEntry:
         }
         if self.planned_gshp_kw is not None:
             d['planned_gshp_kw'] = float(self.planned_gshp_kw)
+        if self.gshp_intent is not None:
+            d['gshp_intent'] = self.gshp_intent
+        if self.planned_resistive_kw is not None:
+            d['planned_resistive_kw'] = float(self.planned_resistive_kw)
+        if self.resistive_heater_intent is not None:
+            d['resistive_heater_intent'] = self.resistive_heater_intent
         if self.gshp_temp_sim is not None:
             d['gshp_temp_sim'] = float(self.gshp_temp_sim)
         if self.planned_leaf_kw is not None:
             d['planned_leaf_kw'] = float(self.planned_leaf_kw)
+        if self.leaf_intent is not None:
+            d['leaf_intent'] = self.leaf_intent
         return d
 
 

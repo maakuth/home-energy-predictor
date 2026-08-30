@@ -145,6 +145,7 @@ def get_ha_relevant_entities() -> list[str]:
         
         # Heat Pumps and Loads
         'sensor.mlp_teho',                        # GSHP power (W)
+        os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'),
         'sensor.mlp_varaajan_lampotila',          # GSHP accumulator temp (°C)
         'sensor.mlp_pumpun_lampotla',             # GSHP pump temp (°C)
         'sensor.saikaan_olohuone_current_power',  # AAHP living room (W)
@@ -494,6 +495,8 @@ def synthesize_predictions(
             'discharge_to_export_kwh': None,
             'planned_gshp_kw': None,
             'gshp_intent': None,
+            'planned_resistive_kw': None,
+            'resistive_heater_intent': None,
         }
         predictions.append(record)
     
@@ -546,7 +549,8 @@ def fetch_sqlite_predictions(
                     'grid_import_kwh', 'grid_export_kwh',
                     'charge_from_solar_kwh', 'charge_from_grid_kwh',
                     'discharge_to_load_kwh', 'discharge_to_export_kwh',
-                    'planned_gshp_kw', 'gshp_intent']:
+                    'planned_gshp_kw', 'gshp_intent',
+                    'planned_resistive_kw', 'resistive_heater_intent']:
             if col in columns:
                 available_cols.append(col)
         
@@ -631,6 +635,7 @@ def fetch_ha_measurements(
             'sensor.sahkokauppa_nyt',                      # Grid power (kW)
             os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'),           # Solar actual (kW)
             'sensor.mlp_teho',                              # GSHP power (W)
+            os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'),
             'sensor.tasmota_energy_power_3',                # Leaf power (W)
             'sensor.ulkona_temperature_2',                  # Outside temp (°C)
         ]

@@ -76,7 +76,10 @@ def fetch_states_history(
             
             df = pd.DataFrame(entries)
             df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
-            df['state'] = pd.to_numeric(df['state'], errors='coerce')
+            if eid.startswith('switch.'):
+                df['state'] = df['state'].astype(str)
+            else:
+                df['state'] = pd.to_numeric(df['state'], errors='coerce')
             # Set timestamp as index to ensure proper datetime-based filtering
             results[eid] = df.dropna().sort_values('timestamp').set_index('timestamp').drop(columns=['ts'])
 

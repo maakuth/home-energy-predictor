@@ -158,6 +158,24 @@ class JointLinprogTests(unittest.TestCase):
         self.assertAlmostEqual(plan[0].grid_import_kwh, 0.0, delta=1e-6)
         self.assertGreater(plan[0].planned_gshp_kw, 0.0)
 
+    def test_resistive_source_replaces_disabled_gshp(self):
+        plan = self._plan(
+            [1.0, 1.0], [0.0, 0.0], [0.01, 0.50],
+            outside_temps=[20.0, 20.0], current_acc_temp=45.0,
+            GSHP_OPTIMIZE_ENABLED='0',
+            RESISTIVE_HEATER_OPTIMIZE_ENABLED='1',
+            RESISTIVE_HEATER_POWER_KW='6.0',
+            RESISTIVE_HEATER_EFFECTIVE_LITERS='150',
+            RESISTIVE_HEATER_MAX_TEMP='60.0',
+            GSHP_BASELINE_DEMAND_KW='0.0',
+            GSHP_HEAT_LOSS_K='0.0',
+        )
+
+        self.assertEqual(plan[0].gshp_intent, 'STOP')
+        self.assertEqual(plan[0].resistive_heater_intent, 'ON')
+        self.assertEqual(plan[0].planned_gshp_kw, 0.0)
+        self.assertGreater(plan[0].planned_resistive_kw, 0.0)
+
     def test_leaf_ev_charging_cooptimization(self):
         """Leaf EV target energy should be allocated to the cheapest intervals."""
         preds = [1.0, 1.0, 1.0, 1.0]

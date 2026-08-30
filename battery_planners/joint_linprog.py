@@ -172,6 +172,9 @@ class JointLinprogPlanner(BatteryPlanner):
 
         # GSHP configuration
         gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True)
+        resistive_enabled = get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False)
+        use_resistive = resistive_enabled and not gshp_enabled
+        heat_source_enabled = gshp_enabled or use_resistive
         p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
         p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)
         if 'GSHP_ELECTRIC_POWER_KW' in os.environ and 'GSHP_POWER_MIN_KW' not in os.environ and 'GSHP_POWER_MAX_KW' not in os.environ:
@@ -181,11 +184,20 @@ class JointLinprogPlanner(BatteryPlanner):
         heating_eff = get_env_float('GSHP_HEATING_EFFICIENCY', 1.0)
         reservoir_l = get_env_float('GSHP_RESERVOIR_LITERS', 500.0)
         kwh_per_degree = (reservoir_l * 4.18) / 3600.0  # ~0.580556 kWh / °C
+        heating_kwh_per_degree = kwh_per_degree
         min_temp = get_env_float('GSHP_MIN_TEMP', 42.0)
         max_temp = get_env_float('GSHP_MAX_TEMP', 55.0)
         heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135)
         baseline_demand_kw = get_env_float('GSHP_BASELINE_DEMAND_KW', 1.0)
         sauna_demand_kw = get_env_float('SAUNA_HOT_WATER_DEMAND_KW', 6.0)
+
+        if use_resistive:
+            p_min = p_max = get_env_float('RESISTIVE_HEATER_POWER_KW', 6.0)
+            cop = get_env_float('RESISTIVE_HEATER_EFFICIENCY', 1.0)
+            heating_eff = 1.0
+            effective_l = get_env_float('RESISTIVE_HEATER_EFFECTIVE_LITERS', 150.0)
+            heating_kwh_per_degree = (effective_l * 4.18) / 3600.0
+            max_temp = get_env_float('RESISTIVE_HEATER_MAX_TEMP', 60.0)
 
         initial_acc_temp = float((context or {}).get('current_acc_temp', get_env_float('GSHP_INITIAL_TEMP', 50.0)))
         initial_acc_temp = np.clip(initial_acc_temp, min_temp, max_temp)
@@ -255,7 +267,7 @@ class JointLinprogPlanner(BatteryPlanner):
             objective[index(i, overflow)] = 1e3
             objective[index(i, temp_underflow)] = 1e4  # Heavy penalty for falling below min temp
 
-            max_gshp_interval_kwh = (p_max * interval_hours) if gshp_enabled else 0.0
+            max_gshp_interval_kwh = (p_max * interval_hours) if heat_source_enabled else 0.0
             max_leaf_interval_kwh = (leaf_max_power_kw * interval_hours) if leaf_enabled else 0.0
 
             bounds.extend([
@@ -283,7 +295,7 @@ class JointLinprogPlanner(BatteryPlanner):
 
         # Terminal heat valuation (incentivize leaving tank warm if heated cheaply)
         avg_price = float(np.mean(import_prices[:horizon]))
-        objective[index(horizon - 1, acc_temp)] = -(avg_price / cop) * (kwh_per_degree * 0.25) * (discount ** (horizon - 1))
+        objective[index(horizon - 1, acc_temp)] = -(avg_price / cop) * (heating_kwh_per_degree * 0.25) * (discount ** (horizon - 1))
 
         equal_rows: list[np.ndarray] = []
         equal_values: list[float] = []
@@ -329,7 +341,7 @@ class JointLinprogPlanner(BatteryPlanner):
             # acc_temp[i] - acc_temp[i-1] - (cop * heating_eff / kwh_per_degree)*gshp_kwh[i] - temp_underflow[i] = - (demand * dt / kwh_per_degree)
             row = np.zeros(n_vars)
             row[index(i, acc_temp)] = 1
-            heat_gain_coeff = (cop * heating_eff) / kwh_per_degree
+            heat_gain_coeff = (cop * heating_eff) / heating_kwh_per_degree
             row[index(i, gshp_kwh)] = -heat_gain_coeff
             row[index(i, temp_underflow)] = -1.0
             thermal_loss_deg = (thermal_demand_kw[i] * interval_hours) / kwh_per_degree
@@ -425,8 +437,13 @@ class JointLinprogPlanner(BatteryPlanner):
             discharge_load = max(0.0, x[index(i, battery_house)])
             discharge_export = max(0.0, x[index(i, battery_export)])
             p_gshp = max(0.0, x[index(i, gshp_kwh)]) / interval_hours
+            planned_gshp_kw = 0.0 if use_resistive else p_gshp
+            planned_resistive_kw = p_gshp if use_resistive else 0.0
+            gshp_intent = 'START' if planned_gshp_kw > 0.05 else 'STOP'
+            resistive_intent = 'ON' if planned_resistive_kw > 0.05 else 'OFF'
             t_acc = float(x[index(i, acc_temp)])
             p_leaf = max(0.0, x[index(i, leaf_kwh)]) / interval_hours
+            leaf_intent = 'ON' if p_leaf > 0.05 else 'OFF'
 
             grid_import = max(0.0, x[index(i, grid_house)] + charge_grid + committed[i])
             grid_export = max(0.0, x[index(i, solar_export)] + discharge_export)
@@ -472,9 +489,13 @@ class JointLinprogPlanner(BatteryPlanner):
                 discharge_budget_kwh=float(
                     max(discharge_load, lp_headroom_kwh) if i == 0 else discharge_load
                 ),
-                planned_gshp_kw=float(p_gshp),
+                planned_gshp_kw=float(planned_gshp_kw),
+                gshp_intent=gshp_intent,
+                planned_resistive_kw=float(planned_resistive_kw),
+                resistive_heater_intent=resistive_intent,
                 gshp_temp_sim=float(t_acc),
                 planned_leaf_kw=float(p_leaf),
+                leaf_intent=leaf_intent,
             ))
             starting_soc = ending_soc
 
@@ -533,7 +554,11 @@ class JointLinprogPlanner(BatteryPlanner):
                 net_load_without_battery_kwh=float(load[i] - solar[i]),
                 discharge_budget_kwh=0.0,
                 planned_gshp_kw=0.0,
+                gshp_intent='STOP',
+                planned_resistive_kw=0.0,
+                resistive_heater_intent='OFF',
                 gshp_temp_sim=float(acc_temp),
                 planned_leaf_kw=0.0,
+                leaf_intent='OFF',
             ))
         return plan

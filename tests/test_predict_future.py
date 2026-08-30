@@ -361,6 +361,22 @@ class TestComputeBaseloadAtLag(unittest.TestCase):
         # baseload = 1.5 + 0.5 - 0 - 0 - (-2) = 4.0
         self.assertAlmostEqual(result, 4.0, places=5)
 
+    def test_resistive_heater_is_removed_from_lagged_baseload(self):
+        ts = datetime.now(timezone.utc) - timedelta(hours=1)
+        idx = pd.DatetimeIndex([ts])
+        anchor = {
+            'sensor.sahkokauppa_nyt': pd.DataFrame({'state': [8.0]}, index=idx),
+            'sensor.solarh_63038_real_power_kw': pd.DataFrame({'state': [0.0]}, index=idx),
+            'sensor.mlp_teho': pd.DataFrame({'state': [0.0]}, index=idx),
+            'sensor.tasmota_energy_power_3': pd.DataFrame({'state': [0.0]}, index=idx),
+            'sensor.be_stat_batt_power': pd.DataFrame({'state': [0.0]}, index=idx),
+            'switch.mlp_vastus_output_0': pd.DataFrame({'state': ['on']}, index=idx),
+        }
+
+        result = compute_baseload_at_lag(anchor, 1)
+
+        self.assertAlmostEqual(result, 2.0, places=5)
+
     def test_time_skew_battery_stopped_charging(self):
         """Battery changed state between target_ts and nearest reading.
 

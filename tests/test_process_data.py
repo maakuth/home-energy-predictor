@@ -84,6 +84,27 @@ class TestProcessData(unittest.TestCase):
         df = pd.read_csv(output_path, index_col=0)
         self.assertGreaterEqual(df['baseload_power'].min(), -0.001)
 
+    def test_resistive_heater_is_removed_from_baseload(self):
+        raw_path = os.path.join(self.test_dir, 'state', 'raw_data.csv')
+        raw = pd.read_csv(raw_path, index_col=0)
+        raw['resistive_heater_power'] = 6000.0
+        raw['total_power'] = raw['total_power'] + 6.0
+        raw.to_csv(raw_path)
+
+        from process_data import process_data
+        process_data()
+        result = pd.read_csv(
+            os.path.join(self.test_dir, 'state', 'processed_data.csv'), index_col=0,
+        )
+
+        expected = (
+            result['total_home_power']
+            - result['gshp_power'] / 1000.0
+            - result['leaf_power'] / 1000.0
+            - 6.0
+        ).clip(lower=0)
+        self.assertLess((result['baseload_power'] - expected).abs().max(), 1e-6)
+
     def test_cyclic_encoding_bounds(self):
         from process_data import process_data
         process_data()

@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
-from utils.ha_utils import get_ha_state, push_ha_state
+from utils.ha_utils import call_ha_service, get_ha_state, push_ha_state
 from typing import cast
 from utils.type_defs import BatteryAction
 from utils.battery_utils import (
@@ -39,12 +39,84 @@ def _get_interval_minutes() -> int:
         return 15
 
 
+def control_resistive_heater(
+    current_plan: dict | None,
+    accumulator_temp: float | None,
+) -> None:
+    """Apply the current resistive-heater intent, failing closed without temperature."""
+    entity_id = os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')
+    max_temp = float(os.getenv('RESISTIVE_HEATER_MAX_TEMP', '60.0'))
+    planned_cutoff = max_temp
+    plan_is_current = False
+    slot_id = None
+    if current_plan is not None:
+        try:
+            planned_cutoff = min(max_temp, float(current_plan.get('gshp_temp_simulated', max_temp)))
+        except (TypeError, ValueError):
+            planned_cutoff = max_temp
+        try:
+            timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
+            now = datetime.now().astimezone()
+            interval_minutes = _get_interval_minutes()
+            current_slot = now.replace(
+                minute=(now.minute // interval_minutes) * interval_minutes,
+                second=0,
+                microsecond=0,
+            )
+            plan_is_current = timestamp.replace(second=0, microsecond=0) == current_slot
+            slot_id = current_slot.isoformat()
+        except (KeyError, TypeError, ValueError):
+            plan_is_current = False
+    state_file = os.getenv(
+        'RESISTIVE_HEATER_CONTROL_STATE_FILE',
+        'state/resistive_heater_control.json',
+    )
+    completed_slot = None
+    try:
+        with open(state_file) as f:
+            completed_slot = json.load(f).get('completed_slot')
+    except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+        pass
+
+    reached_cutoff = (
+        current_plan is not None
+        and plan_is_current
+        and current_plan.get('resistive_heater_intent') == 'ON'
+        and accumulator_temp is not None
+        and accumulator_temp >= planned_cutoff
+    )
+    if reached_cutoff and slot_id is not None:
+        try:
+            parent = os.path.dirname(state_file)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(state_file, 'w') as f:
+                json.dump({'completed_slot': slot_id}, f)
+            completed_slot = slot_id
+        except OSError as exc:
+            print(f'Could not persist resistive heater cutoff: {exc}')
+
+    should_heat = (
+        current_plan is not None
+        and plan_is_current
+        and completed_slot != slot_id
+        and current_plan.get('resistive_heater_intent') == 'ON'
+        and accumulator_temp is not None
+        and accumulator_temp < planned_cutoff
+    )
+    call_ha_service(
+        'switch', 'turn_on' if should_heat else 'turn_off',
+        {'entity_id': entity_id}, return_response=False,
+    )
+
+
 def main():
     soc = get_ha_state('sensor.be_soc')
     battery_power = get_ha_state('sensor.be_stat_batt_power')
     grid_power = get_ha_state('sensor.sahkokauppa_20s')
     solar = get_ha_state(os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'))
     gshp = get_ha_state('sensor.mlp_teho')
+    accumulator = get_ha_state('sensor.mlp_varaajan_lampotila')
     leaf = get_ha_state('sensor.tasmota_energy_power_3')
     p1 = get_ha_state('sensor.current_phase_1')
     p2 = get_ha_state('sensor.current_phase_2')
@@ -59,6 +131,7 @@ def main():
     solar_raw = _get_float(solar)
     solar_kw = solar_raw if solar_raw is not None else 0.0
     gshp_kw = (_get_float(gshp) or 0.0) / 1000.0
+    accumulator_temp = _get_float(accumulator)
     leaf_kw = (_get_float(leaf) or 0.0) / 1000.0
     i_p1 = _get_float(p1)
     i_p2 = _get_float(p2)
@@ -87,6 +160,8 @@ def main():
         plan = None
 
     if not plan:
+        if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+            control_resistive_heater(None, accumulator_temp)
         return
 
     plan_mtime = None
@@ -98,6 +173,9 @@ def main():
     current = get_current_plan_entry(plan)
     if current is None:
         print('No current plan entry found')
+
+    if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+        control_resistive_heater(current, accumulator_temp)
 
     planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
     planned_action = current.get('battery_action', 'idle') if current else 'idle'

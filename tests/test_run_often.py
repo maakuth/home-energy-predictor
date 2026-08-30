@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 class TestRunOften(unittest.TestCase):
@@ -51,6 +51,66 @@ class TestRunOften(unittest.TestCase):
             val = values.get(entity_id, '0.0')
             return {'state': str(val)}
         return MagicMock(side_effect=side_effect)
+
+    @patch('run_often.call_ha_service')
+    def test_resistive_heater_control_follows_on_intent(self, mock_service):
+        from run_often import control_resistive_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        control_resistive_heater(
+            {'timestamp': slot.isoformat(), 'resistive_heater_intent': 'ON'},
+            accumulator_temp=50.0,
+        )
+
+        mock_service.assert_called_once_with(
+            'switch', 'turn_on',
+            {'entity_id': 'switch.mlp_vastus_output_0'},
+            return_response=False,
+        )
+
+    @patch('run_often.call_ha_service')
+    def test_resistive_heater_control_fails_closed(self, mock_service):
+        from run_often import control_resistive_heater
+
+        control_resistive_heater(
+            {'resistive_heater_intent': 'ON'},
+            accumulator_temp=None,
+        )
+
+        mock_service.assert_called_once_with(
+            'switch', 'turn_off',
+            {'entity_id': 'switch.mlp_vastus_output_0'},
+            return_response=False,
+        )
+
+    @patch('run_often.call_ha_service')
+    def test_resistive_heater_control_rejects_stale_plan(self, mock_service):
+        from run_often import control_resistive_heater
+        stale = datetime.now().astimezone() - timedelta(hours=1)
+
+        control_resistive_heater(
+            {'timestamp': stale.isoformat(), 'resistive_heater_intent': 'ON'},
+            accumulator_temp=50.0,
+        )
+
+        self.assertEqual(mock_service.call_args.args[1], 'turn_off')
+
+    @patch('run_often.call_ha_service')
+    def test_resistive_heater_stays_off_after_reaching_interval_cutoff(self, mock_service):
+        from run_often import control_resistive_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        plan = {
+            'timestamp': slot.isoformat(),
+            'resistive_heater_intent': 'ON',
+            'gshp_temp_simulated': 52.0,
+        }
+
+        control_resistive_heater(plan, accumulator_temp=52.0)
+        control_resistive_heater(plan, accumulator_temp=51.5)
+
+        self.assertEqual([item.args[1] for item in mock_service.call_args_list], ['turn_off', 'turn_off'])
 
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')

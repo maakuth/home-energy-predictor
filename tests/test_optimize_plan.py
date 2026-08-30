@@ -1224,6 +1224,76 @@ class EffectiveCostTests(unittest.TestCase):
 
 
 class GSHPPlanTests(unittest.TestCase):
+    def test_resistive_heater_uses_top_section_capacity(self):
+        prediction_timestamps = [datetime.now(timezone.utc)]
+
+        with patched_env({
+            "GSHP_OPTIMIZE_ENABLED": "false",
+            "RESISTIVE_HEATER_OPTIMIZE_ENABLED": "true",
+            "GSHP_INITIAL_TEMP": "45.0",
+            "GSHP_MIN_TEMP": "45.0",
+            "GSHP_BASELINE_DEMAND_KW": "0.0",
+            "GSHP_HEAT_LOSS_K": "0.0",
+            "RESISTIVE_HEATER_POWER_KW": "6.0",
+            "RESISTIVE_HEATER_EFFECTIVE_LITERS": "150",
+            "RESISTIVE_HEATER_MAX_TEMP": "60.0",
+            "PLAN_INTERVAL_MINUTES": "15",
+        }):
+            plan = plan_gshp_dispatch(
+                prediction_timestamps, [0], [20.0],
+                np.array([0.01]), np.array([0.01]), np.array([0.0]),
+            )
+
+        expected_gain = (6.0 * 0.25) / ((150.0 * 4.18) / 3600.0)
+        self.assertEqual(plan[0]["gshp_intent"], "STOP")
+        self.assertEqual(plan[0]["resistive_heater_intent"], "ON")
+        self.assertAlmostEqual(plan[0]["resistive_heater_kw"], 6.0)
+        self.assertAlmostEqual(plan[0]["gshp_temp_sim"], 45.0 + expected_gain, places=2)
+
+    def test_resistive_heater_clips_at_its_higher_max_temp(self):
+        with patched_env({
+            "GSHP_OPTIMIZE_ENABLED": "false",
+            "RESISTIVE_HEATER_OPTIMIZE_ENABLED": "true",
+            "GSHP_INITIAL_TEMP": "59.0",
+            "GSHP_MIN_TEMP": "45.0",
+            "GSHP_BASELINE_DEMAND_KW": "0.0",
+            "GSHP_HEAT_LOSS_K": "0.0",
+            "RESISTIVE_HEATER_POWER_KW": "6.0",
+            "RESISTIVE_HEATER_EFFECTIVE_LITERS": "150",
+            "RESISTIVE_HEATER_MAX_TEMP": "60.0",
+            "PLAN_INTERVAL_MINUTES": "15",
+        }):
+            plan = plan_gshp_dispatch(
+                [datetime.now(timezone.utc)], [0], [20.0],
+                np.array([0.01]), np.array([0.01]), np.array([0.0]),
+            )
+
+        self.assertEqual(plan[0]["resistive_heater_intent"], "ON")
+        self.assertLess(plan[0]["resistive_heater_kw"], 6.0)
+        self.assertAlmostEqual(plan[0]["gshp_temp_sim"], 60.0)
+
+    def test_resistive_mode_keeps_full_reservoir_decay_capacity(self):
+        with patched_env({
+            "GSHP_OPTIMIZE_ENABLED": "false",
+            "RESISTIVE_HEATER_OPTIMIZE_ENABLED": "true",
+            "GSHP_INITIAL_TEMP": "50.0",
+            "GSHP_RESERVOIR_LITERS": "500",
+            "GSHP_BASELINE_DEMAND_KW": "1.0",
+            "GSHP_HEAT_LOSS_K": "0.0",
+            "RESISTIVE_HEATER_EFFECTIVE_LITERS": "150",
+            "PLAN_INTERVAL_MINUTES": "15",
+        }):
+            plan = plan_gshp_dispatch(
+                [datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(minutes=15)],
+                [0, 0], [20.0, 20.0],
+                np.array([0.30, 0.20]), np.array([0.30, 0.20]), np.array([0.0, 0.0]),
+            )
+
+        full_capacity = (500.0 * 4.18) / 3600.0
+        expected_temp = 50.0 - (0.5 * 0.25) / full_capacity
+        self.assertEqual(plan[0]["resistive_heater_intent"], "OFF")
+        self.assertAlmostEqual(plan[0]["gshp_temp_sim"], expected_temp, places=5)
+
     def test_gshp_starts_at_min_temp(self):
         # Initial temp is 65.0C. High loss, but lookahead window (8h) shouldn't hit 45.0 yet.
         prediction_timestamps = [datetime.now()] * 40

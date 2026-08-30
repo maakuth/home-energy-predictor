@@ -22,6 +22,7 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
         'sensor.sahkokauppa_nyt': 'total_power',
         os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'): 'solar_actual',
         'sensor.mlp_teho': 'gshp_actual_w',
+        os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'): 'resistive_actual_kw',
         'sensor.be_stat_batt_power': 'battery_actual_w'
     }
     
@@ -34,7 +35,12 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
             df = df.rename(columns={'state': col_name})
             if not isinstance(df.index, pd.DatetimeIndex):
                 df = df.set_index('timestamp')
-            all_resampled.append(df.resample('15min').mean())
+            if col_name == 'resistive_actual_kw':
+                heater_kw = float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0'))
+                df[col_name] = df[col_name].astype(str).str.lower().eq('on').astype(float) * heater_kw
+                all_resampled.append(df.resample('15min').ffill())
+            else:
+                all_resampled.append(df.resample('15min').mean())
     
     if not all_resampled:
         print("⚠️ No data fetched from PostgreSQL.")
@@ -44,7 +50,10 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
     # Total home power is grid_meter + solar_production - battery_net_power
     battery_kw = df_actual.get('battery_actual_w', 0) / 1000.0
     df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0) - battery_kw
-    df_actual['gshp_actual_kw'] = df_actual.get('gshp_actual_w', 0) / 1000.0
+    df_actual['gshp_actual_kw'] = (
+        df_actual.get('gshp_actual_w', 0) / 1000.0
+        + df_actual.get('resistive_actual_kw', 0)
+    )
     return df_actual.reindex(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw']).fillna(0)
 
 def get_archived_predictions(

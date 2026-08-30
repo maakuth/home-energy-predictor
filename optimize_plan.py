@@ -304,6 +304,10 @@ def plan_gshp_dispatch(
     solar_forecast_kw: Optional[np.ndarray] = None,
 ) -> list[dict[str, Any]]:
     # Constants/Defaults (can be overridden by .env)
+    gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True)
+    resistive_enabled = get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False)
+    use_resistive = resistive_enabled and not gshp_enabled
+    heat_source_enabled = gshp_enabled or use_resistive
     p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
     p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)
     # Maintain fallback for GSHP_ELECTRIC_POWER_KW if both are equal (no ramp)
@@ -314,6 +318,7 @@ def plan_gshp_dispatch(
     heating_efficiency = get_env_float('GSHP_HEATING_EFFICIENCY', 1.0)
     reservoir_l = get_env_float('GSHP_RESERVOIR_LITERS', 500)
     kwh_per_degree = (reservoir_l * 4.18) / 3600.0 
+    heating_kwh_per_degree = kwh_per_degree
     
     min_temp = get_env_float('GSHP_MIN_TEMP', 42.0)
     max_temp = get_env_float('GSHP_MAX_TEMP', 55.0)
@@ -324,6 +329,18 @@ def plan_gshp_dispatch(
     initial_temp = get_env_float('GSHP_INITIAL_TEMP', 50.0)
     is_hp_running = get_env_bool('GSHP_IS_RUNNING', False)
     layering_drop = get_env_float('GSHP_INITIAL_TEMP_DROP', 3.0)
+
+    if use_resistive:
+        p_min = p_max = get_env_float('RESISTIVE_HEATER_POWER_KW', 6.0)
+        cop = get_env_float('RESISTIVE_HEATER_EFFICIENCY', 1.0)
+        heating_efficiency = 1.0
+        effective_l = get_env_float('RESISTIVE_HEATER_EFFECTIVE_LITERS', 150.0)
+        heating_kwh_per_degree = (effective_l * 4.18) / 3600.0
+        max_temp = get_env_float('RESISTIVE_HEATER_MAX_TEMP', 60.0)
+        is_hp_running = get_env_bool('RESISTIVE_HEATER_IS_RUNNING', False)
+        layering_drop = 0.0
+    elif not heat_source_enabled:
+        is_hp_running = False
 
     # Strategic stop parameters
     stop_diff_threshold = get_env_float('GSHP_STRATEGIC_STOP_DIFF_EUR', 0.02)
@@ -421,7 +438,7 @@ def plan_gshp_dispatch(
             # Strategic Buffer/Pre-heating
             # Fill more aggressively if we have solar (effective price is lower than import)
             has_solar = (price < import_prices[i])
-            buffer_margin = 0.0 if has_solar else 1.5
+            buffer_margin = 0.0 if (has_solar or use_resistive) else 1.5
             
             if not should_start and current_temp < (max_temp - buffer_margin):
                 # Adaptive lookahead: if we have solar, don't wait for absolute minimum 8h away.
@@ -432,7 +449,7 @@ def plan_gshp_dispatch(
                 if price <= cheapest_in_window:
                     should_start = True
 
-            if should_start:
+            if should_start and heat_source_enabled:
                 is_hp_running = True
                 current_temp -= layering_drop
 
@@ -451,8 +468,9 @@ def plan_gshp_dispatch(
             current_electric_kw = 0
             current_heat_kw = 0
 
-        net_heat_kw = (current_heat_kw * heating_efficiency) - demand_kw
-        temp_delta = (net_heat_kw * interval_h) / kwh_per_degree
+        heat_gain = (current_heat_kw * heating_efficiency * interval_h) / heating_kwh_per_degree
+        decay = (demand_kw * interval_h) / kwh_per_degree
+        temp_delta = heat_gain - decay
         
         new_temp = current_temp + temp_delta
         
@@ -471,9 +489,11 @@ def plan_gshp_dispatch(
         current_temp = new_temp
         
         gshp_plan.append({
-            'gshp_intent': 'START' if (actual_electric_kw > 0) else 'STOP',
+            'gshp_intent': 'START' if (actual_electric_kw > 0 and not use_resistive) else 'STOP',
+            'resistive_heater_intent': 'ON' if (actual_electric_kw > 0 and use_resistive) else 'OFF',
             'gshp_temp_sim': float(current_temp),
-            'gshp_electric_kw': float(actual_electric_kw)
+            'gshp_electric_kw': float(actual_electric_kw if not use_resistive else 0.0),
+            'resistive_heater_kw': float(actual_electric_kw if use_resistive else 0.0),
         })
         
     return gshp_plan
@@ -554,6 +574,10 @@ def optimize() -> None:
 
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
+    resistive_state = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
+    os.environ['RESISTIVE_HEATER_IS_RUNNING'] = (
+        '1' if parse_ha_bool(resistive_state, default=False) else '0'
+    )
 
     outside_temps = [p.get('outside_temp', 5.0) for p in predictions_data]
     is_sauna_active = [p.get('is_sauna_active', 0) for p in predictions_data]
@@ -561,6 +585,7 @@ def optimize() -> None:
 
     # Combine Baseload + Planned GSHP + Planned EV (XPZ) for Battery optimization
     planned_gshp_kw = np.array([g['gshp_electric_kw'] for g in gshp_plan])
+    planned_resistive_kw = np.array([g['resistive_heater_kw'] for g in gshp_plan])
     
     # EV Strategy:
     # 1. Target SoC logic: Calculate kWh needed.
@@ -654,7 +679,7 @@ def optimize() -> None:
     
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.
-    battery_optimization_load_kw = predictions + planned_gshp_kw
+    battery_optimization_load_kw = predictions + planned_gshp_kw + planned_resistive_kw
 
     # NOTE: planned_ev_kw is NOT included in total_planned_load_kw.
     # The ML baseload training target (total_power - gshp - leaf) already
@@ -671,7 +696,7 @@ def optimize() -> None:
     heating_plan = [1 if p <= price_threshold else 0 for p in effective_prices]
 
     # Battery Dispatch uses Baseload + GSHP
-    predictions_kwh = (predictions + planned_gshp_kw) * get_plan_interval_hours()
+    predictions_kwh = battery_optimization_load_kw * get_plan_interval_hours()
     solar_kwh = solar_array * get_plan_interval_hours()
     # Worst-case solar (p10) in matching kWh units for the battery LP's
     # optional hedge blend (BATTERY_SOLAR_HEDGE_ALPHA; default 1.0 = unused).
@@ -717,14 +742,38 @@ def optimize() -> None:
     # Use battery optimization if available, otherwise fall back to no-battery plan
     if is_battery_enabled():
         planner = BatteryPlannerFactory.create()
+        from battery_planners.joint_linprog import JointLinprogPlanner
+        is_joint = isinstance(planner, JointLinprogPlanner)
+        if is_joint:
+            planner_load_kwh = predictions * get_plan_interval_hours()
+            planner_committed_kwh = planned_ev_kw * get_plan_interval_hours()
+        else:
+            planner_load_kwh = predictions_kwh
+            planner_committed_kwh = committed_load_kwh
         battery_plan_entries = planner.plan(
-            predictions_kwh, solar_kwh, import_prices, export_prices,
-            prediction_timestamps, committed_load_kwh, allow_export=allow_export,
+            planner_load_kwh, solar_kwh, import_prices, export_prices,
+            prediction_timestamps, planner_committed_kwh, allow_export=allow_export,
             initial_soc_pct=current_battery_soc_pct,
             context=battery_context,
         )
         # Convert BatteryPlanEntry objects to dicts for compatibility with rest of code
         battery_plan = [entry.to_dict() for entry in battery_plan_entries]
+        if is_joint and battery_plan_entries:
+            for i, b_entry in enumerate(battery_plan_entries):
+                if b_entry.planned_gshp_kw is not None:
+                    planned_gshp_kw[i] = b_entry.planned_gshp_kw
+                    gshp_plan[i]['gshp_electric_kw'] = b_entry.planned_gshp_kw
+                    gshp_plan[i]['gshp_intent'] = b_entry.gshp_intent or 'STOP'
+                if b_entry.planned_resistive_kw is not None:
+                    planned_resistive_kw[i] = b_entry.planned_resistive_kw
+                    gshp_plan[i]['resistive_heater_kw'] = b_entry.planned_resistive_kw
+                    gshp_plan[i]['resistive_heater_intent'] = b_entry.resistive_heater_intent or 'OFF'
+                if b_entry.gshp_temp_sim is not None:
+                    gshp_plan[i]['gshp_temp_sim'] = b_entry.gshp_temp_sim
+                if b_entry.planned_leaf_kw is not None:
+                    planned_leaf_kw[i] = b_entry.planned_leaf_kw
+                    leaf_intents[i] = b_entry.leaf_intent or 'OFF'
+            total_planned_load_kw = predictions + planned_gshp_kw + planned_resistive_kw + planned_leaf_kw
     else:
         battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
 
@@ -745,6 +794,7 @@ def optimize() -> None:
             
         p_baseload_kw = float(predictions[i])
         p_gshp_kw = float(planned_gshp_kw[i])
+        p_resistive_kw = float(planned_resistive_kw[i])
         p_ev_kw = float(planned_ev_kw[i])
         p_leaf_kw = float(planned_leaf_kw[i])
         p_market = float(market_prices[i])
@@ -773,6 +823,7 @@ def optimize() -> None:
             'sarima_lower_95': float(sarima_lower.iloc[i]) if not np.isnan(sarima_lower.iloc[i]) else None,
             'sarima_upper_95': float(sarima_upper.iloc[i]) if not np.isnan(sarima_upper.iloc[i]) else None,
             'planned_gshp_kw': p_gshp_kw,
+            'planned_resistive_kw': p_resistive_kw,
             'planned_ev_kw': p_ev_kw,
             'planned_leaf_kw': p_leaf_kw,
             'leaf_intent': leaf_intents[i],
@@ -790,9 +841,17 @@ def optimize() -> None:
             'ev_charge': bool(ev_plan[i]),
             'heat_boost': bool(heating_plan[i]),
             'gshp_intent': g['gshp_intent'],
+            'resistive_heater_intent': g['resistive_heater_intent'],
             'gshp_temp_simulated': g['gshp_temp_sim'],
             **b,
         }
+        entry['planned_gshp_kw'] = p_gshp_kw
+        entry['gshp_intent'] = g['gshp_intent']
+        entry['planned_resistive_kw'] = p_resistive_kw
+        entry['resistive_heater_intent'] = g['resistive_heater_intent']
+        entry['gshp_temp_simulated'] = g['gshp_temp_sim']
+        entry['planned_leaf_kw'] = p_leaf_kw
+        entry['leaf_intent'] = leaf_intents[i]
         entry['effective_cost'] = compute_effective_cost(entry)
         final_plan.append(entry)
         
@@ -833,6 +892,8 @@ def optimize() -> None:
                 discharge_to_export_kwh REAL,
                 planned_gshp_kw REAL,
                 gshp_intent TEXT,
+                planned_resistive_kw REAL,
+                resistive_heater_intent TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
@@ -858,7 +919,9 @@ def optimize() -> None:
             'discharge_to_load_kwh': 'REAL',
             'discharge_to_export_kwh': 'REAL',
             'planned_gshp_kw': 'REAL',
-            'gshp_intent': 'TEXT'
+            'gshp_intent': 'TEXT',
+            'planned_resistive_kw': 'REAL',
+            'resistive_heater_intent': 'TEXT'
         }
         
         for col, col_type in new_cols.items():
@@ -888,7 +951,9 @@ def optimize() -> None:
                 item.get('discharge_to_load_kwh'),
                 item.get('discharge_to_export_kwh'),
                 item.get('planned_gshp_kw'),
-                item.get('gshp_intent')
+                item.get('gshp_intent'),
+                item.get('planned_resistive_kw'),
+                item.get('resistive_heater_intent')
             )
             for item in final_plan
         ]
@@ -900,9 +965,9 @@ def optimize() -> None:
                 is_fallback_price, version, battery_action, battery_power_kw, 
                 battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh,
                 charge_from_solar_kwh, charge_from_grid_kwh, discharge_to_load_kwh, discharge_to_export_kwh,
-                planned_gshp_kw, gshp_intent
+                planned_gshp_kw, gshp_intent, planned_resistive_kw, resistive_heater_intent
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
 
         

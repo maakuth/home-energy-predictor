@@ -14,6 +14,7 @@ RESAMPLE_INTERVAL: str = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
 ENTITIES: dict[str, str] = {
     'sensor.ulkona_temperature_2': 'outside_temp',
     'sensor.mlp_teho': 'gshp_power',
+    os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'): 'resistive_heater_power',
     'sensor.saikaan_olohuone_current_power': 'aahp_living_power',
     'sensor.mokkimokin_ilp_power': 'aahp_cabin_power',
     'sensor.mummun_energy': 'mummun_energy',
@@ -109,14 +110,19 @@ def main() -> None:
         df['timestamp'] = pd.to_datetime(df['ts'], unit='s', utc=True)
         df = df.set_index('timestamp').drop(columns=['ts'])
         
-        # Numeric conversion (except for position)
-        if col_name != 'ev_position':
+        # Convert the heater switch to its interval electrical power.
+        if col_name == 'resistive_heater_power':
+            heater_w = float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')) * 1000.0
+            df[col_name] = df[col_name].astype(str).str.lower().eq('on').astype(float) * heater_w
+        elif col_name != 'ev_position':
             df[col_name] = pd.to_numeric(df[col_name], errors='coerce')
         
         # Resample to configured interval (default 15 minutes).
         if col_name == 'ev_position':
             # Is home if any state in the interval says 'home'.
             resampled = df[col_name].resample(RESAMPLE_INTERVAL).apply(lambda x: 'home' in x.values if not x.empty else None)  # type: ignore[arg-type]
+        elif col_name == 'resistive_heater_power':
+            resampled = df[col_name].resample(RESAMPLE_INTERVAL).ffill()
         elif col_name == 'mummun_energy':
             # Handle energy total to power conversion later
             resampled = df[col_name].resample(RESAMPLE_INTERVAL).mean()

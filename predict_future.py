@@ -65,6 +65,7 @@ def compute_baseload_at_lag(
             ('sensor.sahkokauppa_nyt', 'total', 1.0),
             (os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 'solar', 1.0),
             ('sensor.mlp_teho', 'gshp', 1 / 1000.0),
+            (os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'), 'resistive', 1.0),
             ('sensor.tasmota_energy_power_3', 'leaf', 1 / 1000.0),
             ('sensor.be_stat_batt_power', 'battery', 1 / 1000.0),
         ]
@@ -76,8 +77,11 @@ def compute_baseload_at_lag(
                 continue
             if not isinstance(df.index, pd.DatetimeIndex):
                 df = df.set_index('timestamp')
-            s = pd.to_numeric(df['state'], errors='coerce').dropna()
-            s = s * scale
+            if name == 'resistive':
+                heater_kw = float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0'))
+                s = df['state'].astype(str).str.lower().eq('on').astype(float) * heater_kw
+            else:
+                s = pd.to_numeric(df['state'], errors='coerce').dropna() * scale
             s.name = name
             series_list.append(s)
 
@@ -109,6 +113,8 @@ def compute_baseload_at_lag(
 
         gshp = row.get('gshp', 0.0)
         gshp = float(gshp) if pd.notna(gshp) else 0.0
+        resistive = row.get('resistive', 0.0)
+        resistive = float(resistive) if pd.notna(resistive) else 0.0
         leaf = row.get('leaf', 0.0)
         leaf = float(leaf) if pd.notna(leaf) else 0.0
         battery = row.get('battery', 0.0)
@@ -117,7 +123,7 @@ def compute_baseload_at_lag(
         if 'battery' not in combined.columns:
             print(f"⚠️ Battery sensor data unavailable for baseload lag at {hours_back}h — baseload may include battery charging")
 
-        return max(0.0, total + solar - gshp - leaf - battery)
+        return max(0.0, total + solar - gshp - resistive - leaf - battery)
     except Exception as e:
         print(f"⚠️ Error calculating anchor at lag {hours_back}h: {e}")
         return 1.0
@@ -320,6 +326,7 @@ def predict() -> None:
         'sensor.sahkokauppa_nyt', 
         os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 
         'sensor.mlp_teho',
+        os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'),
         'sensor.tasmota_energy_power_3',
         'sensor.be_stat_batt_power'
     ]
@@ -562,6 +569,8 @@ def predict() -> None:
                 discharge_to_export_kwh REAL,
                 planned_gshp_kw REAL,
                 gshp_intent TEXT,
+                planned_resistive_kw REAL,
+                resistive_heater_intent TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
@@ -587,7 +596,9 @@ def predict() -> None:
             'discharge_to_load_kwh': 'REAL',
             'discharge_to_export_kwh': 'REAL',
             'planned_gshp_kw': 'REAL',
-            'gshp_intent': 'TEXT'
+            'gshp_intent': 'TEXT',
+            'planned_resistive_kw': 'REAL',
+            'resistive_heater_intent': 'TEXT'
         }
         
         for col, col_type in new_cols.items():
