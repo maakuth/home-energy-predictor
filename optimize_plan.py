@@ -17,6 +17,23 @@ from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPla
 load_dotenv(override=True)
 
 
+def write_plan_atomically(plan_file: str, plan: list[dict[str, Any]]) -> None:
+    """Publish a complete plan in one replacement operation for live readers."""
+    temp_file = f'{plan_file}.tmp'
+    try:
+        with open(temp_file, 'w') as f:
+            json.dump(plan, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, plan_file)
+    except OSError:
+        try:
+            os.remove(temp_file)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 # Backward compatibility wrapper for tests
 def plan_battery_dispatch(
     predictions: np.ndarray | list[float],
@@ -857,8 +874,7 @@ def optimize() -> None:
         
     # Support environment variable override for testing
     plan_file = os.getenv('TEST_PLAN_FILE', 'state/optimization_plan.json')
-    with open(plan_file, 'w') as f:
-        json.dump(final_plan, f, indent=2)
+    write_plan_atomically(plan_file, final_plan)
     print(f'\n✅ Plan saved to {plan_file}')
 
     # Archive the TOTAL planned usage to hepo.db for accuracy tracking

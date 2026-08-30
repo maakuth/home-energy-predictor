@@ -65,6 +65,8 @@ class TestRunOften(unittest.TestCase):
                 'planned_resistive_kw': 6.0,
             },
             accumulator_temp=50.0,
+            now=slot,
+            plan_mtime=slot.timestamp(),
         )
 
         mock_service.assert_called_once_with(
@@ -91,6 +93,25 @@ class TestRunOften(unittest.TestCase):
         )
 
         self.assertEqual(mock_service.call_args.args[1], 'turn_on')
+
+    @patch('run_often.call_ha_service')
+    def test_resistive_heater_rejects_plan_from_previous_slot(self, mock_service):
+        from run_often import control_resistive_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        control_resistive_heater(
+            {
+                'timestamp': slot.isoformat(),
+                'resistive_heater_intent': 'ON',
+                'planned_resistive_kw': 6.0,
+            },
+            accumulator_temp=45.0,
+            now=slot,
+            plan_mtime=(slot - timedelta(seconds=1)).timestamp(),
+        )
+
+        self.assertEqual(mock_service.call_args.args[1], 'turn_off')
 
     @patch('run_often.call_ha_service')
     def test_resistive_heater_control_fails_closed(self, mock_service):

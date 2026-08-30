@@ -43,12 +43,14 @@ def control_resistive_heater(
     current_plan: dict | None,
     accumulator_temp: float | None,
     now: datetime | None = None,
+    plan_mtime: float | None = None,
 ) -> None:
     """Deliver the planned resistive energy while failing closed on unsafe state."""
     entity_id = os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')
     max_temp = float(os.getenv('RESISTIVE_HEATER_MAX_TEMP', '60.0'))
     heater_kw = max(0.0, float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')))
     plan_is_current = False
+    plan_is_fresh = False
     slot_id = None
     elapsed_seconds = 0.0
     now = now or datetime.now().astimezone()
@@ -62,6 +64,7 @@ def control_resistive_heater(
                 microsecond=0,
             )
             plan_is_current = timestamp.replace(second=0, microsecond=0) == current_slot
+            plan_is_fresh = plan_mtime is None or plan_mtime >= current_slot.timestamp()
             slot_id = current_slot.isoformat()
             elapsed_seconds = max(0.0, (now - current_slot).total_seconds())
         except (KeyError, TypeError, ValueError):
@@ -80,6 +83,7 @@ def control_resistive_heater(
     reached_cutoff = (
         current_plan is not None
         and plan_is_current
+        and plan_is_fresh
         and current_plan.get('resistive_heater_intent') == 'ON'
         and accumulator_temp is not None
         and accumulator_temp >= max_temp
@@ -109,12 +113,15 @@ def control_resistive_heater(
     should_heat = (
         current_plan is not None
         and plan_is_current
+        and plan_is_fresh
         and completed_slot != slot_id
         and current_plan.get('resistive_heater_intent') == 'ON'
         and accumulator_temp is not None
         and accumulator_temp < max_temp
         and elapsed_seconds < planned_runtime_seconds
     )
+    if current_plan is not None and plan_is_current and not plan_is_fresh:
+        print('Resistive heater held off: plan predates current interval')
     call_ha_service(
         'switch', 'turn_on' if should_heat else 'turn_off',
         {'entity_id': entity_id}, return_response=False,
@@ -163,11 +170,13 @@ def main():
     phase_str = f'L1: {i_p1 if i_p1 is not None else "?"}, L2: {i_p2 if i_p2 is not None else "?"}, L3: {i_p3 if i_p3 is not None else "?"}'
     print(f'Phase Currents: {phase_str}')
 
+    plan_mtime = None
     try:
         with open('state/optimization_plan.json') as f:
             plan = json.load(f)
-    except FileNotFoundError:
-        print('No optimization_plan.json found')
+            plan_mtime = os.fstat(f.fileno()).st_mtime
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        print('No readable optimization_plan.json found')
         plan = None
 
     if not plan:
@@ -175,18 +184,12 @@ def main():
             control_resistive_heater(None, accumulator_temp)
         return
 
-    plan_mtime = None
-    try:
-        plan_mtime = os.path.getmtime('state/optimization_plan.json')
-    except OSError:
-        pass
-
     current = get_current_plan_entry(plan)
     if current is None:
         print('No current plan entry found')
 
     if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
-        control_resistive_heater(current, accumulator_temp)
+        control_resistive_heater(current, accumulator_temp, plan_mtime=plan_mtime)
 
     planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
     planned_action = current.get('battery_action', 'idle') if current else 'idle'

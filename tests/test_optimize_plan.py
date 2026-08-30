@@ -91,12 +91,22 @@ class OptimizeArchivingTests(unittest.TestCase):
         # GSHP might be 0 or more depending on prices/temp
         self.assertGreaterEqual(row[0], 2.0)
         self.assertNotEqual(row[1], "")
-        
+
         # New battery columns should be populated (not None)
         self.assertIsNotNone(row[2]) # battery_action
         self.assertIsNotNone(row[5]) # import_price
         self.assertIsNotNone(row[6]) # export_price
         self.assertIsNotNone(row[7]) # grid_import_kwh
+
+    def test_plan_write_is_atomic(self):
+        from optimize_plan import write_plan_atomically
+
+        plan = [{'timestamp': '2026-01-01T00:00:00+00:00'}]
+        write_plan_atomically(self.plan_file, plan)
+
+        with open(self.plan_file) as f:
+            self.assertEqual(json.load(f), plan)
+        self.assertFalse(os.path.exists(f'{self.plan_file}.tmp'))
 
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')
