@@ -74,6 +74,25 @@ class TestRunOften(unittest.TestCase):
         )
 
     @patch('run_often.call_ha_service')
+    def test_resistive_heater_heats_when_starting_at_planned_end_temperature(self, mock_service):
+        from run_often import control_resistive_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        control_resistive_heater(
+            {
+                'timestamp': slot.isoformat(),
+                'resistive_heater_intent': 'ON',
+                'planned_resistive_kw': 6.0,
+                'gshp_temp_simulated': 45.0,
+            },
+            accumulator_temp=45.0,
+            now=slot,
+        )
+
+        self.assertEqual(mock_service.call_args.args[1], 'turn_on')
+
+    @patch('run_often.call_ha_service')
     def test_resistive_heater_control_fails_closed(self, mock_service):
         from run_often import control_resistive_heater
 
@@ -124,7 +143,7 @@ class TestRunOften(unittest.TestCase):
         )
 
     @patch('run_often.call_ha_service')
-    def test_resistive_heater_stays_off_after_reaching_interval_cutoff(self, mock_service):
+    def test_resistive_heater_stays_off_after_reaching_max_temperature(self, mock_service):
         from run_often import control_resistive_heater
         now = datetime.now().astimezone()
         slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
@@ -135,8 +154,9 @@ class TestRunOften(unittest.TestCase):
             'gshp_temp_simulated': 52.0,
         }
 
-        control_resistive_heater(plan, accumulator_temp=52.0)
-        control_resistive_heater(plan, accumulator_temp=51.5)
+        with patch.dict(os.environ, {'RESISTIVE_HEATER_MAX_TEMP': '52.0'}):
+            control_resistive_heater(plan, accumulator_temp=52.0, now=slot)
+            control_resistive_heater(plan, accumulator_temp=51.5, now=slot)
 
         self.assertEqual([item.args[1] for item in mock_service.call_args_list], ['turn_off', 'turn_off'])
 

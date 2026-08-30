@@ -44,10 +44,11 @@ class OptimizeArchivingTests(unittest.TestCase):
         # No cleanup needed - conftest.py handles it via tmp_path fixture
         pass
 
+    @patch('builtins.print')
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')
     @patch('optimize_plan.get_db_connection')
-    def test_optimize_archives_to_db(self, mock_db, mock_prices, mock_ha):
+    def test_optimize_archives_to_db(self, mock_db, mock_prices, mock_ha, mock_print):
         # Mocking external calls
         mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
         mock_prices.return_value = ([0.1], [0], "Nordpool", False, False, None)
@@ -58,6 +59,9 @@ class OptimizeArchivingTests(unittest.TestCase):
         mock_ha.side_effect = lambda x: {"state": "0"} if x == "sensor.mlp_teho" else {"state": "50.0"}
 
         optimize()
+
+        output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn('Resistive Intent', output)
         
         # Verify DB
         self.assertTrue(os.path.exists(self.db_file))

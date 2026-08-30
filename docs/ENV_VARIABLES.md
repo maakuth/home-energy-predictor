@@ -109,7 +109,7 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 | `GSHP_STRATEGIC_STOP_DIFF_EUR` | Spot-price difference that triggers a strategic stop. | `0.05` | €/kWh. If the current effective price is `>=` (cheapest price in the safe lookahead window + this value), the pump stops to wait for cheaper hours. |
 | `GSHP_OPTIMIZE_ENABLED` | Enable the compressor heat source. | `false` | Keep disabled while the GSHP is unreliable. Re-enable after replacement while disabling resistive optimization. |
 | `RESISTIVE_HEATER_OPTIMIZE_ENABLED` | Co-optimize the top-mounted resistive element as an independent heat source. | `true` | The joint LP may run it together with the GSHP; their combined electrical load is included in grid and fuse constraints. |
-| `RESISTIVE_HEATER_ENTITY` | Home Assistant switch controlled by `run_often.py`. | `switch.mlp_vastus_output_0` | The controller turns it off when the plan is OFF, temperature is unavailable, or the planned/absolute ceiling is reached. |
+| `RESISTIVE_HEATER_ENTITY` | Home Assistant switch controlled by `run_often.py`. | `switch.mlp_vastus_output_0` | The controller turns it off when the plan is OFF, temperature is unavailable, the scheduled duty-cycle runtime ends, or the absolute ceiling is reached. |
 | `RESISTIVE_HEATER_POWER_KW` | Fixed electrical and thermal output while on. | `6.0` | kW. Also used to remove heater consumption from ML baseload history. |
 | `RESISTIVE_HEATER_EFFICIENCY` | Electrical-to-thermal conversion efficiency. | `1.0` | Dimensionless. |
 | `RESISTIVE_HEATER_EFFECTIVE_LITERS` | Effective heated top volume. | `150` | L. Only heating gain uses this value; passive decay keeps the existing reservoir model. |

@@ -48,16 +48,11 @@ def control_resistive_heater(
     entity_id = os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')
     max_temp = float(os.getenv('RESISTIVE_HEATER_MAX_TEMP', '60.0'))
     heater_kw = max(0.0, float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')))
-    planned_cutoff = max_temp
     plan_is_current = False
     slot_id = None
     elapsed_seconds = 0.0
     now = now or datetime.now().astimezone()
     if current_plan is not None:
-        try:
-            planned_cutoff = min(max_temp, float(current_plan.get('gshp_temp_simulated', max_temp)))
-        except (TypeError, ValueError):
-            planned_cutoff = max_temp
         try:
             timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
             interval_minutes = _get_interval_minutes()
@@ -87,7 +82,7 @@ def control_resistive_heater(
         and plan_is_current
         and current_plan.get('resistive_heater_intent') == 'ON'
         and accumulator_temp is not None
-        and accumulator_temp >= planned_cutoff
+        and accumulator_temp >= max_temp
     )
     if reached_cutoff and slot_id is not None:
         try:
@@ -117,7 +112,7 @@ def control_resistive_heater(
         and completed_slot != slot_id
         and current_plan.get('resistive_heater_intent') == 'ON'
         and accumulator_temp is not None
-        and accumulator_temp < planned_cutoff
+        and accumulator_temp < max_temp
         and elapsed_seconds < planned_runtime_seconds
     )
     call_ha_service(
