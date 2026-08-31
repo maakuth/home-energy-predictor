@@ -307,7 +307,7 @@ class TestRunOften(unittest.TestCase):
             from run_often import main
             main()
 
-        mock_push_state.assert_called_once()
+        self.assertEqual(mock_push_state.call_count, 2)
         args, kwargs = mock_push_state.call_args
         self.assertEqual(args[0], 'sensor.hepo_period_balance')
         self.assertEqual(args[1], '1.700')  # 2.5 - 0.8

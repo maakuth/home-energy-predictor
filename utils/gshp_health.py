@@ -36,3 +36,12 @@ def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None):
 
 def gshp_is_failed() -> bool:
     return update_gshp_health(None, 0.0, 0.0).get('status') == 'failed'
+
+
+def health_attributes(state):
+    return {
+        'friendly_name': 'HEPO GSHP Health',
+        'compressor_kw': float(state.get('compressor_kw', 0.0)),
+        'bad_samples': int(state.get('bad_samples', 0)),
+        'good_samples': int(state.get('good_samples', 0)),
+    }

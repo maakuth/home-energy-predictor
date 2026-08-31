@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from utils.gshp_health import update_gshp_health
+from utils.gshp_health import health_attributes, update_gshp_health
 
 
 def test_latches_failure_and_recovers_from_electrical_response(tmp_path):
@@ -22,3 +22,10 @@ def test_subtracts_active_element_power_before_judging_response(tmp_path):
         shared_power_kw=6.0, element_power_kw=6.0, path=tmp_path / 'health.json',
     )
     assert state['bad_samples'] == 1
+
+
+def test_health_attributes_are_safe_to_publish():
+    assert health_attributes({'status': 'failed', 'compressor_kw': 0.2, 'bad_samples': 3}) == {
+        'friendly_name': 'HEPO GSHP Health', 'compressor_kw': 0.2,
+        'bad_samples': 3, 'good_samples': 0,
+    }

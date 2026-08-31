@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from utils.ha_utils import call_ha_service, get_ha_state, push_ha_state
 from typing import cast
 from utils.type_defs import BatteryAction
-from utils.gshp_health import update_gshp_health
+from utils.gshp_health import health_attributes, update_gshp_health
 from utils.battery_utils import (
     push_battery_control,
     compute_load_following_setpoint,
@@ -251,6 +251,7 @@ def main():
         + (float(os.getenv('BULK_HEATER_POWER_KW', '6.0')) if str((bulk or {}).get('state', '')).lower() == 'on' else 0.0)
     )
     health = update_gshp_health(current, gshp_kw, element_kw)
+    push_ha_state('sensor.hepo_gshp_health', health.get('status', 'normal'), health_attributes(health))
     if health.get('status') == 'failed':
         print(f"GSHP electrical fault latched: compressor={health.get('compressor_kw', 0.0):.2f}kW")
 
