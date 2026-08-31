@@ -419,6 +419,45 @@ class JointLinprogPlanner(BatteryPlanner):
                 allow_export, initial_acc_temp,
             )
 
+        import_is_constrained = any(
+            result.x[index(i, grid_house)] + result.x[index(i, grid_battery)]
+            >= max_grid_import_kwh - committed[i] - 1e-7
+            for i in range(horizon)
+        )
+
+        # Resolve equally-costly constrained-import plans lexicographically.
+        # Upper-zone heat protects hot-water availability, grid battery charging
+        # is next, and the bulk element receives only the remaining capacity.
+        priority_rows = [objective.copy()]
+        priority_values = [result.fun + 1e-8]
+        upper_result = None
+        if import_is_constrained:
+            upper_priority = np.zeros(n_vars)
+            for i in range(horizon):
+                upper_priority[index(i, resistive_kwh)] = -1.0
+            upper_result = linprog(
+                upper_priority,
+                A_ub=np.vstack([np.asarray(upper_rows), np.asarray(priority_rows)]),
+                b_ub=np.append(np.asarray(upper_values), priority_values),
+                A_eq=np.asarray(equal_rows), b_eq=np.asarray(equal_values), bounds=bounds,
+                method='highs', options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
+            )
+        if upper_result is not None and upper_result.success:
+            upper_row = -upper_priority
+            priority_rows.append(upper_row)
+            priority_values.append(float(upper_row @ upper_result.x) + 1e-8)
+            battery_priority = np.zeros(n_vars)
+            for i in range(horizon):
+                battery_priority[index(i, grid_battery)] = -1.0
+            battery_result = linprog(
+                battery_priority,
+                A_ub=np.vstack([np.asarray(upper_rows), np.asarray(priority_rows)]),
+                b_ub=np.append(np.asarray(upper_values), priority_values),
+                A_eq=np.asarray(equal_rows), b_eq=np.asarray(equal_values), bounds=bounds,
+                method='highs', options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
+            )
+            result = battery_result if battery_result.success else upper_result
+
         # Headroom pass for interval 0 (real-time load-following flexibility)
         headroom_objective = np.zeros(n_vars)
         headroom_objective[index(0, battery_house)] = -1
