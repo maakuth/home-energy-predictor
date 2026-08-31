@@ -20,6 +20,7 @@ from scipy.optimize import linprog
 
 from .base import BatteryPlanEntry, BatteryPlanner, BatteryPlannerContext
 from utils.type_defs import BatteryAction
+from utils.gshp_health import gshp_is_failed
 
 
 def get_env_float(name: str, default: float) -> float:
@@ -171,7 +172,7 @@ class JointLinprogPlanner(BatteryPlanner):
         discount = np.clip(get_env_float('BATTERY_LP_DISCOUNT', 0.995), 0.0, 1.0)
 
         # GSHP configuration
-        gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True)
+        gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True) and not gshp_is_failed()
         resistive_enabled = get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False)
         p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
         p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)

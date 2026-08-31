@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, parse_ha_bool
 from utils.price_utils import fetch_market_prices, align_interval_prices, get_grid_fees, estimate_export_prices
 from utils.git_utils import get_model_version
+from utils.gshp_health import gshp_is_failed
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.db_utils import fetch_states_history
 from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPlannerContext
@@ -321,7 +322,7 @@ def plan_gshp_dispatch(
     solar_forecast_kw: Optional[np.ndarray] = None,
 ) -> list[dict[str, Any]]:
     # Constants/Defaults (can be overridden by .env)
-    gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True)
+    gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True) and not gshp_is_failed()
     resistive_enabled = get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False)
     use_resistive = resistive_enabled and not gshp_enabled
     heat_source_enabled = gshp_enabled or use_resistive
