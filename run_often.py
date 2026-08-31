@@ -39,6 +39,21 @@ def _get_interval_minutes() -> int:
         return 15
 
 
+def _fuse_still_overloaded(
+    battery_kw: float,
+    battery_w: float,
+    phase_currents: list[float | None],
+) -> bool:
+    """Check the projected phase currents after the requested battery response."""
+    fuse_a = float(os.getenv('MAIN_FUSE_SIZE_A', '25.0'))
+    battery_delta_w = battery_kw * 1000.0 - battery_w
+    phase_delta_a = battery_delta_w / (3.0 * 230.0)
+    return any(
+        current is not None and abs(current + phase_delta_a) > fuse_a + 0.01
+        for current in phase_currents
+    )
+
+
 def control_resistive_heater(
     current_plan: dict | None,
     accumulator_temp: float | None,
@@ -444,6 +459,24 @@ def main():
         adjusted_battery_kw = 0.0
         guard_msg = f"soc guard: discharge blocked at SoC {soc_pct:.1f}% (floor {floor_pct:.0f}%)"
         fuse_msg = f"{fuse_msg}; {guard_msg}" if fuse_msg else guard_msg
+
+    # Priority under an unresolvable phase overload: preserve the upper element,
+    # use the battery first, then shed the lower whole-reservoir element.
+    if (
+        os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+        and current is not None
+        and current.get('bulk_heater_intent') == 'ON'
+        and _fuse_still_overloaded(
+            adjusted_battery_kw, battery_w, [i_p1, i_p2, i_p3],
+        )
+    ):
+        call_ha_service(
+            'switch', 'turn_off',
+            {'entity_id': os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1')},
+            return_response=False,
+        )
+        priority_msg = 'bulk heater shed after battery fuse response'
+        fuse_msg = f"{fuse_msg}; {priority_msg}" if fuse_msg else priority_msg
 
     if fuse_msg:
         print(f'Fuse cap: {fuse_msg}')
