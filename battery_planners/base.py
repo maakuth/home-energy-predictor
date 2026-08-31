@@ -246,6 +246,8 @@ class BatteryPlanEntry:
     gshp_intent: Optional[str] = None
     planned_resistive_kw: Optional[float] = None
     resistive_heater_intent: Optional[str] = None
+    planned_bulk_heater_kw: Optional[float] = None
+    bulk_heater_intent: Optional[str] = None
     gshp_temp_sim: Optional[float] = None  # Simulated accumulator temperature (°C)
     planned_leaf_kw: Optional[float] = None  # Co-optimized Leaf charging power (kW)
     leaf_intent: Optional[str] = None
@@ -277,6 +279,10 @@ class BatteryPlanEntry:
             d['planned_resistive_kw'] = float(self.planned_resistive_kw)
         if self.resistive_heater_intent is not None:
             d['resistive_heater_intent'] = self.resistive_heater_intent
+        if self.planned_bulk_heater_kw is not None:
+            d['planned_bulk_heater_kw'] = float(self.planned_bulk_heater_kw)
+        if self.bulk_heater_intent is not None:
+            d['bulk_heater_intent'] = self.bulk_heater_intent
         if self.gshp_temp_sim is not None:
             d['gshp_temp_sim'] = float(self.gshp_temp_sim)
         if self.planned_leaf_kw is not None:

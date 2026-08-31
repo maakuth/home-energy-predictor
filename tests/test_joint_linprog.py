@@ -202,6 +202,26 @@ class JointLinprogTests(unittest.TestCase):
         self.assertAlmostEqual(plan[0].planned_resistive_kw or 0.0, 6.0, places=4)
         self.assertAlmostEqual(plan[0].grid_import_kwh, 11.0, places=4)
 
+    def test_bulk_heater_heats_whole_reservoir_independently(self):
+        plan = self._plan(
+            [1.0, 1.0], [0.0, 0.0], [0.01, 0.50],
+            outside_temps=[20.0, 20.0], current_acc_temp=42.0,
+            GSHP_OPTIMIZE_ENABLED='0',
+            RESISTIVE_HEATER_OPTIMIZE_ENABLED='0',
+            BULK_HEATER_OPTIMIZE_ENABLED='1',
+            BULK_HEATER_POWER_KW='6.0',
+            BULK_HEATER_MAX_TEMP='60.0',
+            GSHP_BASELINE_DEMAND_KW='6.0',
+            GSHP_HEAT_LOSS_K='0.0',
+            BATTERY_MAX_CHARGE_KW='0.0',
+            BATTERY_MAX_DISCHARGE_KW='0.0',
+        )
+
+        self.assertEqual(plan[0].bulk_heater_intent, 'ON')
+        self.assertAlmostEqual(plan[0].planned_bulk_heater_kw or 0.0, 6.0, places=4)
+        expected_gain = (6.0 - 3.0) / ((500.0 * 4.18) / 3600.0)
+        self.assertAlmostEqual(plan[0].gshp_temp_sim or 0.0, 42.0 + expected_gain, places=4)
+
     def test_leaf_ev_charging_cooptimization(self):
         """Leaf EV target energy should be allocated to the cheapest intervals."""
         preds = [1.0, 1.0, 1.0, 1.0]

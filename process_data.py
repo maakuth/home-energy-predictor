@@ -19,7 +19,7 @@ def process_data() -> None:
     df = df[~df.index.duplicated(keep='first')]
     
     print('Denoising and filling gaps...')
-    fill_zero_cols = ['gshp_power', 'resistive_heater_power', 'aahp_living_power', 'aahp_cabin_power', 'mummun_power', 'solar_forecast', 'solar_actual', 'leaf_power']
+    fill_zero_cols = ['gshp_power', 'resistive_heater_power', 'bulk_heater_power', 'aahp_living_power', 'aahp_cabin_power', 'mummun_power', 'solar_forecast', 'solar_actual', 'leaf_power']
     for col in fill_zero_cols:
         if col in df.columns:
             df[col] = df[col].fillna(0)
@@ -47,13 +47,10 @@ def process_data() -> None:
     # baseload accounting and expose the GSHP-only component separately.
     if 'gshp_power' in df.columns:
         df['heating_power'] = df['gshp_power']
-        if 'resistive_heater_power' in df.columns:
-            df['heating_power'] = df[
-                ['heating_power', 'resistive_heater_power']
-            ].max(axis=1)
-            df['gshp_power'] = (
-                df['heating_power'] - df['resistive_heater_power']
-            ).clip(lower=0)
+        element_cols = [c for c in ('resistive_heater_power', 'bulk_heater_power') if c in df.columns]
+        if element_cols:
+            # The shared meter includes both elements and the compressor.
+            df['gshp_power'] = (df['heating_power'] - df[element_cols].sum(axis=1)).clip(lower=0)
     
     # --- RESOLUTION AGNOSTIC STEP ---
     # Detect frequency to set correct lag shifts
@@ -85,8 +82,10 @@ def process_data() -> None:
             heating_kw = df['heating_power'] / 1000.0
         else:
             gshp_kw = (df['gshp_power'] / 1000.0) if 'gshp_power' in df.columns else 0.0
-            resistive_kw = (df['resistive_heater_power'] / 1000.0) if 'resistive_heater_power' in df.columns else 0.0
-            heating_kw = gshp_kw + resistive_kw
+            heating_kw = gshp_kw
+            for col in ('resistive_heater_power', 'bulk_heater_power'):
+                if col in df.columns:
+                    heating_kw = heating_kw + df[col] / 1000.0
         leaf_kw = (df['leaf_power'] / 1000.0) if 'leaf_power' in df.columns else 0.0
         df['baseload_power'] = df['total_home_power'] - heating_kw - leaf_kw
         df['baseload_power'] = df['baseload_power'].clip(lower=0)

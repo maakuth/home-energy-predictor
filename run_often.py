@@ -128,6 +128,44 @@ def control_resistive_heater(
     )
 
 
+def control_bulk_heater(
+    current_plan: dict | None,
+    accumulator_temp: float | None,
+    now: datetime | None = None,
+    plan_mtime: float | None = None,
+) -> None:
+    """Deliver the whole-reservoir element plan with the same fail-closed rules."""
+    entity_id = os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1')
+    max_temp = float(os.getenv('BULK_HEATER_MAX_TEMP', '60.0'))
+    heater_kw = max(0.0, float(os.getenv('BULK_HEATER_POWER_KW', '6.0')))
+    now = now or datetime.now().astimezone()
+    is_current = False
+    is_fresh = False
+    elapsed_seconds = 0.0
+    if current_plan is not None:
+        try:
+            timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
+            interval_minutes = _get_interval_minutes()
+            slot = now.replace(minute=(now.minute // interval_minutes) * interval_minutes, second=0, microsecond=0)
+            is_current = timestamp.replace(second=0, microsecond=0) == slot
+            is_fresh = plan_mtime is None or plan_mtime >= slot.timestamp()
+            elapsed_seconds = max(0.0, (now - slot).total_seconds())
+        except (KeyError, TypeError, ValueError):
+            pass
+    try:
+        planned_kw = max(0.0, min(heater_kw, float((current_plan or {}).get('planned_bulk_heater_kw', 0.0))))
+    except (TypeError, ValueError):
+        planned_kw = 0.0
+    should_heat = (
+        current_plan is not None and is_current and is_fresh
+        and current_plan.get('bulk_heater_intent') == 'ON'
+        and accumulator_temp is not None and accumulator_temp < max_temp
+        and heater_kw > 0
+        and elapsed_seconds < _get_interval_minutes() * 60.0 * planned_kw / heater_kw
+    )
+    call_ha_service('switch', 'turn_on' if should_heat else 'turn_off', {'entity_id': entity_id}, return_response=False)
+
+
 def main():
     soc = get_ha_state('sensor.be_soc')
     battery_power = get_ha_state('sensor.be_stat_batt_power')
@@ -182,6 +220,8 @@ def main():
     if not plan:
         if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
             control_resistive_heater(None, accumulator_temp)
+        if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+            control_bulk_heater(None, accumulator_temp)
         return
 
     current = get_current_plan_entry(plan)
@@ -190,6 +230,8 @@ def main():
 
     if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
         control_resistive_heater(current, accumulator_temp, plan_mtime=plan_mtime)
+    if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+        control_bulk_heater(current, accumulator_temp, plan_mtime=plan_mtime)
 
     planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
     planned_action = current.get('battery_action', 'idle') if current else 'idle'

@@ -16,6 +16,7 @@ ENTITIES: dict[str, str] = {
     # Shared electrical meter; process_data splits out the resistive component.
     'sensor.mlp_teho': 'gshp_power',
     os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'): 'resistive_heater_power',
+    os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'): 'bulk_heater_power',
     'sensor.saikaan_olohuone_current_power': 'aahp_living_power',
     'sensor.mokkimokin_ilp_power': 'aahp_cabin_power',
     'sensor.mummun_energy': 'mummun_energy',
@@ -112,8 +113,9 @@ def main() -> None:
         df = df.set_index('timestamp').drop(columns=['ts'])
         
         # Convert the heater switch to its interval electrical power.
-        if col_name == 'resistive_heater_power':
-            heater_w = float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')) * 1000.0
+        if col_name in {'resistive_heater_power', 'bulk_heater_power'}:
+            power_var = 'RESISTIVE_HEATER_POWER_KW' if col_name == 'resistive_heater_power' else 'BULK_HEATER_POWER_KW'
+            heater_w = float(os.getenv(power_var, '6.0')) * 1000.0
             df[col_name] = df[col_name].astype(str).str.lower().eq('on').astype(float) * heater_w
         elif col_name != 'ev_position':
             df[col_name] = pd.to_numeric(df[col_name], errors='coerce')

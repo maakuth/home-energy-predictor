@@ -103,6 +103,8 @@ class SqlitePredictionRecord(TypedDict, total=False):
     gshp_intent: str
     planned_resistive_kw: float
     resistive_heater_intent: str
+    planned_bulk_heater_kw: float
+    bulk_heater_intent: str
 
 
 class PlanEntryDict(TypedDict):

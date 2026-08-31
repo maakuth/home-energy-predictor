@@ -66,6 +66,7 @@ def compute_baseload_at_lag(
             (os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 'solar', 1.0),
             ('sensor.mlp_teho', 'gshp', 1 / 1000.0),
             (os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'), 'resistive', 1.0),
+            (os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'), 'bulk_heater', 1.0),
             ('sensor.tasmota_energy_power_3', 'leaf', 1 / 1000.0),
             ('sensor.be_stat_batt_power', 'battery', 1 / 1000.0),
         ]
@@ -77,8 +78,10 @@ def compute_baseload_at_lag(
                 continue
             if not isinstance(df.index, pd.DatetimeIndex):
                 df = df.set_index('timestamp')
-            if name == 'resistive':
-                heater_kw = float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0'))
+            if name in {'resistive', 'bulk_heater'}:
+                heater_kw = float(os.getenv(
+                    'RESISTIVE_HEATER_POWER_KW' if name == 'resistive' else 'BULK_HEATER_POWER_KW', '6.0',
+                ))
                 s = df['state'].astype(str).str.lower().eq('on').astype(float) * heater_kw
             else:
                 s = pd.to_numeric(df['state'], errors='coerce').dropna() * scale
@@ -117,7 +120,9 @@ def compute_baseload_at_lag(
         heating = float(heating) if pd.notna(heating) else 0.0
         resistive = row.get('resistive', 0.0)
         resistive = float(resistive) if pd.notna(resistive) else 0.0
-        heating = max(heating, resistive)
+        bulk_heater = row.get('bulk_heater', 0.0)
+        bulk_heater = float(bulk_heater) if pd.notna(bulk_heater) else 0.0
+        heating = max(heating, resistive + bulk_heater)
         leaf = row.get('leaf', 0.0)
         leaf = float(leaf) if pd.notna(leaf) else 0.0
         battery = row.get('battery', 0.0)

@@ -76,6 +76,30 @@ class TestRunOften(unittest.TestCase):
         )
 
     @patch('run_often.call_ha_service')
+    def test_bulk_heater_control_uses_its_own_entity_and_intent(self, mock_service):
+        from run_often import control_bulk_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        with patch.dict(os.environ, {'BULK_HEATER_ENTITY': 'switch.mlp_vastus_output_1'}):
+            control_bulk_heater(
+                {
+                    'timestamp': slot.isoformat(),
+                    'bulk_heater_intent': 'ON',
+                    'planned_bulk_heater_kw': 6.0,
+                },
+                accumulator_temp=50.0,
+                now=slot,
+                plan_mtime=slot.timestamp(),
+            )
+
+        mock_service.assert_called_once_with(
+            'switch', 'turn_on',
+            {'entity_id': 'switch.mlp_vastus_output_1'},
+            return_response=False,
+        )
+
+    @patch('run_often.call_ha_service')
     def test_resistive_heater_heats_when_starting_at_planned_end_temperature(self, mock_service):
         from run_often import control_resistive_heater
         now = datetime.now().astimezone()

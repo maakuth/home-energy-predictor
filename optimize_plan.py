@@ -511,6 +511,8 @@ def plan_gshp_dispatch(
             'gshp_temp_sim': float(current_temp),
             'gshp_electric_kw': float(actual_electric_kw if not use_resistive else 0.0),
             'resistive_heater_kw': float(actual_electric_kw if use_resistive else 0.0),
+            'bulk_heater_kw': 0.0,
+            'bulk_heater_intent': 'OFF',
         })
         
     return gshp_plan
@@ -603,6 +605,7 @@ def optimize() -> None:
     # Combine Baseload + Planned GSHP + Planned EV (XPZ) for Battery optimization
     planned_gshp_kw = np.array([g['gshp_electric_kw'] for g in gshp_plan])
     planned_resistive_kw = np.array([g['resistive_heater_kw'] for g in gshp_plan])
+    planned_bulk_heater_kw = np.zeros(len(gshp_plan))
     
     # EV Strategy:
     # 1. Target SoC logic: Calculate kWh needed.
@@ -696,7 +699,7 @@ def optimize() -> None:
     
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.
-    battery_optimization_load_kw = predictions + planned_gshp_kw + planned_resistive_kw
+    battery_optimization_load_kw = predictions + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw
 
     # NOTE: planned_ev_kw is NOT included in total_planned_load_kw.
     # The ML baseload training target (total_power - gshp - leaf) already
@@ -785,12 +788,14 @@ def optimize() -> None:
                     planned_resistive_kw[i] = b_entry.planned_resistive_kw
                     gshp_plan[i]['resistive_heater_kw'] = b_entry.planned_resistive_kw
                     gshp_plan[i]['resistive_heater_intent'] = b_entry.resistive_heater_intent or 'OFF'
+                if b_entry.planned_bulk_heater_kw is not None:
+                    planned_bulk_heater_kw[i] = b_entry.planned_bulk_heater_kw
                 if b_entry.gshp_temp_sim is not None:
                     gshp_plan[i]['gshp_temp_sim'] = b_entry.gshp_temp_sim
                 if b_entry.planned_leaf_kw is not None:
                     planned_leaf_kw[i] = b_entry.planned_leaf_kw
                     leaf_intents[i] = b_entry.leaf_intent or 'OFF'
-            total_planned_load_kw = predictions + planned_gshp_kw + planned_resistive_kw + planned_leaf_kw
+            total_planned_load_kw = predictions + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw + planned_leaf_kw
     else:
         battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
 
@@ -812,6 +817,7 @@ def optimize() -> None:
         p_baseload_kw = float(predictions[i])
         p_gshp_kw = float(planned_gshp_kw[i])
         p_resistive_kw = float(planned_resistive_kw[i])
+        p_bulk_heater_kw = float(planned_bulk_heater_kw[i])
         p_ev_kw = float(planned_ev_kw[i])
         p_leaf_kw = float(planned_leaf_kw[i])
         p_market = float(market_prices[i])
@@ -841,6 +847,7 @@ def optimize() -> None:
             'sarima_upper_95': float(sarima_upper.iloc[i]) if not np.isnan(sarima_upper.iloc[i]) else None,
             'planned_gshp_kw': p_gshp_kw,
             'planned_resistive_kw': p_resistive_kw,
+            'planned_bulk_heater_kw': p_bulk_heater_kw,
             'planned_ev_kw': p_ev_kw,
             'planned_leaf_kw': p_leaf_kw,
             'leaf_intent': leaf_intents[i],
@@ -859,6 +866,7 @@ def optimize() -> None:
             'heat_boost': bool(heating_plan[i]),
             'gshp_intent': g['gshp_intent'],
             'resistive_heater_intent': g['resistive_heater_intent'],
+            'bulk_heater_intent': b.get('bulk_heater_intent', 'OFF'),
             'gshp_temp_simulated': g['gshp_temp_sim'],
             **b,
         }
@@ -866,6 +874,7 @@ def optimize() -> None:
         entry['gshp_intent'] = g['gshp_intent']
         entry['planned_resistive_kw'] = p_resistive_kw
         entry['resistive_heater_intent'] = g['resistive_heater_intent']
+        entry['planned_bulk_heater_kw'] = p_bulk_heater_kw
         entry['gshp_temp_simulated'] = g['gshp_temp_sim']
         entry['planned_leaf_kw'] = p_leaf_kw
         entry['leaf_intent'] = leaf_intents[i]
@@ -910,6 +919,8 @@ def optimize() -> None:
                 gshp_intent TEXT,
                 planned_resistive_kw REAL,
                 resistive_heater_intent TEXT,
+                planned_bulk_heater_kw REAL,
+                bulk_heater_intent TEXT,
                 PRIMARY KEY (target_timestamp, generated_at)
             )
         ''')
@@ -937,7 +948,9 @@ def optimize() -> None:
             'planned_gshp_kw': 'REAL',
             'gshp_intent': 'TEXT',
             'planned_resistive_kw': 'REAL',
-            'resistive_heater_intent': 'TEXT'
+            'resistive_heater_intent': 'TEXT',
+            'planned_bulk_heater_kw': 'REAL',
+            'bulk_heater_intent': 'TEXT',
         }
         
         for col, col_type in new_cols.items():
@@ -969,7 +982,9 @@ def optimize() -> None:
                 item.get('planned_gshp_kw'),
                 item.get('gshp_intent'),
                 item.get('planned_resistive_kw'),
-                item.get('resistive_heater_intent')
+                item.get('resistive_heater_intent'),
+                item.get('planned_bulk_heater_kw'),
+                item.get('bulk_heater_intent')
             )
             for item in final_plan
         ]
@@ -981,9 +996,10 @@ def optimize() -> None:
                 is_fallback_price, version, battery_action, battery_power_kw, 
                 battery_soc_pct, import_price, export_price, grid_import_kwh, grid_export_kwh,
                 charge_from_solar_kwh, charge_from_grid_kwh, discharge_to_load_kwh, discharge_to_export_kwh,
-                planned_gshp_kw, gshp_intent, planned_resistive_kw, resistive_heater_intent
+                planned_gshp_kw, gshp_intent, planned_resistive_kw, resistive_heater_intent,
+                planned_bulk_heater_kw, bulk_heater_intent
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', data_to_insert)
 
         

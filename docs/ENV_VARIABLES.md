@@ -114,6 +114,11 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 | `RESISTIVE_HEATER_EFFICIENCY` | Electrical-to-thermal conversion efficiency. | `1.0` | Dimensionless. |
 | `RESISTIVE_HEATER_EFFECTIVE_LITERS` | Effective heated top volume. | `150` | L. Only heating gain uses this value; passive decay keeps the existing reservoir model. |
 | `RESISTIVE_HEATER_MAX_TEMP` | Resistive heating ceiling. | `60.0` | °C. |
+| `BULK_HEATER_OPTIMIZE_ENABLED` | Co-optimize the lower whole-reservoir element. | `false` | May run together with the upper element and GSHP. |
+| `BULK_HEATER_ENTITY` | Home Assistant switch for the lower element. | `switch.mlp_vastus_output_1` | Controlled independently by `run_often.py`. |
+| `BULK_HEATER_POWER_KW` | Fixed electrical and thermal output while on. | `6.0` | kW. Included in shared-meter, grid, and fuse calculations. |
+| `BULK_HEATER_EFFICIENCY` | Electrical-to-thermal conversion efficiency. | `1.0` | Dimensionless. |
+| `BULK_HEATER_MAX_TEMP` | Bulk-element safety ceiling. | `60.0` | °C. Upper accumulator temperature is used as the runtime cutoff. |
 
 ---
 

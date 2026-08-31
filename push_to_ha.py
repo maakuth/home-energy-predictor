@@ -94,6 +94,14 @@ def push_plan() -> None:
     })
     print(f'✅ Resistive heater intent pushed: {resistive_intent}')
 
+    bulk_intent = current.get('bulk_heater_intent', 'OFF')
+    push_ha_state('sensor.hepo_bulk_heater_intent', bulk_intent, {
+        'friendly_name': 'HEPO Bulk Heater Intent',
+        'planned_power_kw': current.get('planned_bulk_heater_kw', 0.0),
+        'simulated_temp': current.get('gshp_temp_simulated'),
+    })
+    print(f'✅ Bulk heater intent pushed: {bulk_intent}')
+
     # Push Leaf charging intent
     current_leaf_intent = current.get('leaf_intent', 'OFF')
     push_ha_state('sensor.hepo_leaf_charging_intent', current_leaf_intent, {

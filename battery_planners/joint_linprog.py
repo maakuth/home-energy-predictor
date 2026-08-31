@@ -192,6 +192,11 @@ class JointLinprogPlanner(BatteryPlanner):
         resistive_eff = get_env_float('RESISTIVE_HEATER_EFFICIENCY', 1.0)
         resistive_l = get_env_float('RESISTIVE_HEATER_EFFECTIVE_LITERS', 150.0)
         resistive_kwh_per_degree = (resistive_l * 4.18) / 3600.0
+        bulk_enabled = get_env_bool('BULK_HEATER_OPTIMIZE_ENABLED', False)
+        bulk_power_kw = get_env_float('BULK_HEATER_POWER_KW', 6.0)
+        bulk_eff = get_env_float('BULK_HEATER_EFFICIENCY', 1.0)
+        if bulk_enabled:
+            max_temp = max(max_temp, get_env_float('BULK_HEATER_MAX_TEMP', 60.0))
         if resistive_enabled:
             max_temp = max(max_temp, get_env_float('RESISTIVE_HEATER_MAX_TEMP', 60.0))
 
@@ -237,7 +242,8 @@ class JointLinprogPlanner(BatteryPlanner):
         # 12: leaf_kwh (electric)
         # 13: grid_overflow
         # 14: temp_underflow
-        width = 15
+        # 15: bulk_heater_kwh (electric)
+        width = 16
         n_vars = width * horizon
 
         def index(i: int, offset: int) -> int:
@@ -246,8 +252,9 @@ class JointLinprogPlanner(BatteryPlanner):
         (
             grid_house, grid_battery, solar_house, solar_battery,
             solar_export, solar_curtail, battery_house, battery_export,
-            soc, gshp_kwh, resistive_kwh, acc_temp, leaf_kwh, overflow, temp_underflow
-        ) = range(15)
+            soc, gshp_kwh, resistive_kwh, acc_temp, leaf_kwh, overflow, temp_underflow,
+            bulk_heater_kwh
+        ) = range(16)
 
         objective = np.zeros(n_vars)
         bounds = []
@@ -268,6 +275,7 @@ class JointLinprogPlanner(BatteryPlanner):
             max_resistive_interval_kwh = (
                 resistive_power_kw * interval_hours if resistive_enabled else 0.0
             )
+            max_bulk_interval_kwh = bulk_power_kw * interval_hours if bulk_enabled else 0.0
             max_leaf_interval_kwh = (leaf_max_power_kw * interval_hours) if leaf_enabled else 0.0
 
             bounds.extend([
@@ -286,6 +294,7 @@ class JointLinprogPlanner(BatteryPlanner):
                 (0, max_leaf_interval_kwh),  # leaf_kwh
                 (0, None),  # overflow
                 (0, None),  # temp_underflow
+                (0, max_bulk_interval_kwh),  # bulk_heater_kwh
             ])
 
         # Terminal valuation
@@ -312,6 +321,7 @@ class JointLinprogPlanner(BatteryPlanner):
             row[index(i, battery_house)] = 1
             row[index(i, gshp_kwh)] = -1
             row[index(i, resistive_kwh)] = -1
+            row[index(i, bulk_heater_kwh)] = -1
             row[index(i, leaf_kwh)] = -1
             equal_rows.append(row)
             equal_values.append(load[i])
@@ -345,6 +355,7 @@ class JointLinprogPlanner(BatteryPlanner):
             row[index(i, acc_temp)] = 1
             row[index(i, gshp_kwh)] = -(cop * heating_eff) / kwh_per_degree
             row[index(i, resistive_kwh)] = -resistive_eff / resistive_kwh_per_degree
+            row[index(i, bulk_heater_kwh)] = -bulk_eff / kwh_per_degree
             row[index(i, temp_underflow)] = -1.0
             thermal_loss_deg = (thermal_demand_kw[i] * interval_hours) / kwh_per_degree
             if i == 0:
@@ -440,8 +451,10 @@ class JointLinprogPlanner(BatteryPlanner):
             discharge_export = max(0.0, x[index(i, battery_export)])
             planned_gshp_kw = max(0.0, x[index(i, gshp_kwh)]) / interval_hours
             planned_resistive_kw = max(0.0, x[index(i, resistive_kwh)]) / interval_hours
+            planned_bulk_heater_kw = max(0.0, x[index(i, bulk_heater_kwh)]) / interval_hours
             gshp_intent = 'START' if planned_gshp_kw > 0.05 else 'STOP'
             resistive_intent = 'ON' if planned_resistive_kw > 0.05 else 'OFF'
+            bulk_heater_intent = 'ON' if planned_bulk_heater_kw > 0.05 else 'OFF'
             t_acc = float(x[index(i, acc_temp)])
             p_leaf = max(0.0, x[index(i, leaf_kwh)]) / interval_hours
             leaf_intent = 'ON' if p_leaf > 0.05 else 'OFF'
@@ -466,7 +479,7 @@ class JointLinprogPlanner(BatteryPlanner):
 
             # Total load including co-optimized GSHP and Leaf
             total_net_load = load[i] + (
-                planned_gshp_kw + planned_resistive_kw + p_leaf
+                planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw + p_leaf
             ) * interval_hours - solar[i]
             baseline_import = max(0.0, total_net_load) + committed[i]
             baseline_export = max(0.0, -total_net_load) if allow_export else 0.0
@@ -496,6 +509,8 @@ class JointLinprogPlanner(BatteryPlanner):
                 gshp_intent=gshp_intent,
                 planned_resistive_kw=float(planned_resistive_kw),
                 resistive_heater_intent=resistive_intent,
+                planned_bulk_heater_kw=float(planned_bulk_heater_kw),
+                bulk_heater_intent=bulk_heater_intent,
                 gshp_temp_sim=float(t_acc),
                 planned_leaf_kw=float(p_leaf),
                 leaf_intent=leaf_intent,
@@ -560,6 +575,8 @@ class JointLinprogPlanner(BatteryPlanner):
                 gshp_intent='STOP',
                 planned_resistive_kw=0.0,
                 resistive_heater_intent='OFF',
+                planned_bulk_heater_kw=0.0,
+                bulk_heater_intent='OFF',
                 gshp_temp_sim=float(acc_temp),
                 planned_leaf_kw=0.0,
                 leaf_intent='OFF',
