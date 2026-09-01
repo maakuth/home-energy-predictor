@@ -8,6 +8,7 @@
 - Offer to save your work to git frequently
 - Don't do heredoc hacks or other shenanigans to modify files. If there's something preventing file modification, say so and the user will help.
 - There are a lot of tunables in .env.template, documented in ENV_VARIABLES.md. If the user asks for some model behaviour change, see if there's a tunable that could be used to implement it.
+- pyright flags type issues, don't ignore them but fix.
 
 ## The environment
 - DON'T do any changes to database or home assistant without explicit permission. The machine running agent probably doesn't even have access to these.
