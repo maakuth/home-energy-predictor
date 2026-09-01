@@ -250,6 +250,15 @@ def main():
         (float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')) if str((upper or {}).get('state', '')).lower() == 'on' else 0.0)
         + (float(os.getenv('BULK_HEATER_POWER_KW', '6.0')) if str((bulk or {}).get('state', '')).lower() == 'on' else 0.0)
     )
+    print(
+        'GSHP health inputs: '
+        f'shared={gshp_kw:.2f}kW, '
+        f'upper={str((upper or {}).get("state", "unknown"))} '
+        f'({os.getenv("RESISTIVE_HEATER_POWER_KW", "6.0")}kW), '
+        f'bulk={str((bulk or {}).get("state", "unknown"))} '
+        f'({os.getenv("BULK_HEATER_POWER_KW", "6.0")}kW), '
+        f'deducted={element_kw:.2f}kW'
+    )
     health = update_gshp_health(current, gshp_kw, element_kw)
     push_ha_state('sensor.hepo_gshp_health', health.get('status', 'normal'), health_attributes(health))
     if health.get('status') == 'failed':

@@ -29,3 +29,13 @@ def test_health_attributes_are_safe_to_publish():
         'friendly_name': 'HEPO GSHP Health', 'compressor_kw': 0.2,
         'bad_samples': 3, 'good_samples': 0,
     }
+
+
+def test_recovers_when_shared_power_is_present_without_elements(tmp_path):
+    path = tmp_path / 'health.json'
+    path.write_text('{"status": "failed", "bad_samples": 3, "good_samples": 0}')
+
+    state = update_gshp_health(None, shared_power_kw=3.5, element_power_kw=0.0, path=path)
+
+    assert state['status'] == 'normal'
+    assert state['bad_samples'] == 0
