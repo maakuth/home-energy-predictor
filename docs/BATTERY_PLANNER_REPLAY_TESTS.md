@@ -140,7 +140,28 @@ pytest tests/test_battery_planner_replay.py -v -s
 
 # Skip slow SARIMA tests (faster iteration)
 pytest tests/ -k 'not sarima' -v
+
+# Report the slowest tests to distinguish slow replays from hangs
+pytest -k 'not slow' --durations=25
 ```
+
+### Expected Duration
+
+Replay tests replan at every simulated 15-minute interval, so their runtime is
+the cost of many planner solves rather than one production planning run. On the
+development environment, the non-slow suite completed in about 85 minutes on
+September 2, 2026 (`367 passed, 10 skipped, 65 deselected`).
+
+The joint GSHP/battery MILP dominates that duration because it solves an exact
+mixed-integer program at each replay step to enforce whole-slot compressor
+starts. The four 24-hour `joint-linprog` quick replays took approximately
+13-27 minutes each; the equivalent heuristic and Nemotron-LP replays took
+seconds. This is slow but indicates solver progress, not a deadlock.
+
+Run replay tests from an isolated working copy when production scripts share
+the main checkout. Do not use replay duration as a production cadence estimate:
+production generates one receding-horizon plan per scheduled run, whereas a
+replay generates one plan for every historical interval.
 
 ## Test Assertions
 
