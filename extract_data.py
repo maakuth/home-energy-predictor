@@ -77,6 +77,7 @@ def extract_attribute(cur: psycopg2.extensions.cursor, metadata_id: int, attr_na
 def main() -> None:
     parser = argparse.ArgumentParser(description='Extract historical data from Home Assistant DB.')
     parser.add_argument('--days', type=int, default=365, help='Number of days to look back.')
+    parser.add_argument('--output', default='state/raw_data.csv', help='Output CSV path.')
     args = parser.parse_args()
 
     conn = psycopg2.connect(
@@ -158,9 +159,11 @@ def main() -> None:
     final_df = final_df[~final_df.index.duplicated(keep='first')]
     
     # Create final dataset
-    os.makedirs('state', exist_ok=True)
-    final_df.to_csv('state/raw_data.csv')
-    print(f"✅ Data extraction complete. Saved to state/raw_data.csv. Shape: {final_df.shape}")
+    output_dir = os.path.dirname(args.output)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    final_df.to_csv(args.output)
+    print(f"✅ Data extraction complete. Saved to {args.output}. Shape: {final_df.shape}")
 
 if __name__ == "__main__":
     main()

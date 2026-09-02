@@ -9,9 +9,13 @@ from typing import Optional
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sarimax_predictor import load_historical_data, BASELOAD_MAX_KW
 
-def train_sarima(days: int = 14, params_path: Optional[str] = None) -> None:
+def train_sarima(
+    days: int = 14,
+    params_path: Optional[str] = None,
+    data_path: str = 'state/processed_data.csv',
+) -> None:
     print(f"Loading last {days} days for SARIMA training...")
-    ts_data = load_historical_data(last_n_days=days)
+    ts_data = load_historical_data(file_path=data_path, last_n_days=days)
     
     if ts_data is None or len(ts_data) < 192:
         print("❌ Not enough data for SARIMA training.")
@@ -79,6 +83,7 @@ def train_sarima(days: int = 14, params_path: Optional[str] = None) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train SARIMA model")
     parser.add_argument("--days", type=int, default=14, help="Number of days of historical data to use (default: 14)")
+    parser.add_argument('--data-path', default='state/processed_data.csv', help='Processed training-data CSV path')
     args = parser.parse_args()
     
-    train_sarima(days=args.days)
+    train_sarima(days=args.days, data_path=args.data_path)

@@ -1,15 +1,16 @@
 from __future__ import annotations
 import os
+import argparse
 import pandas as pd
 import numpy as np
 from typing import Any
 
-def process_data() -> None:
+def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'state/processed_data.csv') -> None:
     print('Loading raw data...')
     try:
-        df = pd.read_csv('state/raw_data.csv', index_col=0, low_memory=False)
+        df = pd.read_csv(input_path, index_col=0, low_memory=False)
     except FileNotFoundError:
-        print('Error: state/raw_data.csv not found.')
+        print(f'Error: {input_path} not found.')
         return
     
     df.index = pd.to_datetime(df.index, utc=True)
@@ -184,8 +185,15 @@ def process_data() -> None:
     critical_cols = ['total_home_power', 'outside_temp', 'accumulator_temp']
     df = df.dropna(subset=[c for c in critical_cols if c in df.columns])
     
-    df.to_csv('state/processed_data.csv')
-    print(f'✅ Processing complete. Saved to state/processed_data.csv. Shape: {df.shape}')
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    df.to_csv(output_path)
+    print(f'✅ Processing complete. Saved to {output_path}. Shape: {df.shape}')
 
 if __name__ == '__main__':
-    process_data()
+    parser = argparse.ArgumentParser(description='Process extracted energy data.')
+    parser.add_argument('--input', default='state/raw_data.csv', help='Input raw-data CSV path.')
+    parser.add_argument('--output', default='state/processed_data.csv', help='Output processed-data CSV path.')
+    args = parser.parse_args()
+    process_data(args.input, args.output)

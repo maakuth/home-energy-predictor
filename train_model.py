@@ -7,9 +7,9 @@ from sklearn.metrics import mean_absolute_error
 import json
 import os
 
-def train(holdout_days: int = 0) -> None:
+def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv') -> None:
     print('Loading processed data...')
-    df = pd.read_csv('state/processed_data.csv', index_col=0)
+    df = pd.read_csv(data_path, index_col=0)
     df.index = pd.to_datetime(df.index, utc=True)
     print(f"  - Raw rows: {len(df)}")
     
@@ -102,5 +102,6 @@ def train(holdout_days: int = 0) -> None:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--holdout-days', type=int, default=0, help='Number of recent days to exclude from training')
+    parser.add_argument('--data-path', default='state/processed_data.csv', help='Processed training-data CSV path')
     args = parser.parse_args()
-    train(holdout_days=args.holdout_days)
+    train(holdout_days=args.holdout_days, data_path=args.data_path)

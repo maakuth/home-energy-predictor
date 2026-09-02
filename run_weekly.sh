@@ -16,19 +16,19 @@ source .venv/bin/activate
 
   # 1. Extract Data (Full 2 Years for Training)
   echo "[1/6] Extracting Data (730 days for training)..."
-  python extract_data.py --days 730
+  python extract_data.py --days 730 --output state/raw_data_weekly.csv
 
   # 2. Process Data
   echo "[2/6] Processing Data..."
-  python process_data.py
+  python process_data.py --input state/raw_data_weekly.csv --output state/processed_data_weekly.csv
 
   # 3. Retrain XGBoost Model
   echo "[3/6] Retraining XGBoost Model (full dataset)..."
-  python train_model.py
+  python train_model.py --data-path state/processed_data_weekly.csv
 
   # 4. Retrain SARIMA Model (extended 30-day window for better stability)
   echo "[4/6] Retraining SARIMA Model (30-day window for weekly runs)..."
-  python train_sarima.py --days 30
+  python train_sarima.py --days 30 --data-path state/processed_data_weekly.csv
 
   # 5. Predict Future
   echo "[5/6] Predicting Future..."
