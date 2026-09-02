@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import json
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 from utils.ha_utils import get_ha_state
 
@@ -18,6 +20,77 @@ def estimate_export_prices(import_prices: np.ndarray | float) -> np.ndarray | fl
 
 def estimate_import_prices(export_prices: np.ndarray | float) -> np.ndarray | float:
     return np.asarray(export_prices, dtype=float) + get_grid_fees()
+
+
+def update_monthly_spot_reference(
+    settled_prices: np.ndarray,
+    included_day: date,
+    state_file: str = 'state/kulutusvaikutus_state.json',
+) -> Optional[float]:
+    """Persist each settled local day once and return its month-to-date mean."""
+    state_path = Path(state_file)
+    month = included_day.strftime('%Y-%m')
+    day = included_day.isoformat()
+    try:
+        with state_path.open() as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        state = {}
+
+    if state.get('month') != month:
+        state = {
+            'month': month,
+            'latest_included_day': None,
+            'spot_price_sum_eur_per_kwh': 0.0,
+            'spot_price_count': 0,
+            'spot_price_mean_eur_per_kwh': None,
+        }
+
+    latest_day = state.get('latest_included_day')
+    if latest_day is None or day > latest_day:
+        prices = np.asarray(settled_prices, dtype=float)
+        prices = prices[np.isfinite(prices)]
+        if len(prices) > 0:
+            state['spot_price_sum_eur_per_kwh'] += float(prices.sum())
+            state['spot_price_count'] += int(len(prices))
+            state['latest_included_day'] = day
+
+    count = state['spot_price_count']
+    state['spot_price_mean_eur_per_kwh'] = (
+        state['spot_price_sum_eur_per_kwh'] / count if count else None
+    )
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = state_path.with_suffix(state_path.suffix + '.tmp')
+    with temp_path.open('w') as f:
+        json.dump(state, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temp_path, state_path)
+    return state['spot_price_mean_eur_per_kwh']
+
+
+def fetch_settled_daily_spot_prices(entity_id: str) -> Optional[np.ndarray]:
+    """Return the selected sensor's complete settled raw-energy price day."""
+    if entity_id == 'sensor.nordpool_total':
+        entity_id = 'sensor.average_electricity_price_today'
+    state_data = get_ha_state(entity_id)
+    if not state_data:
+        return None
+
+    attrs = state_data.get('attributes', {})
+    raw_today = attrs.get('raw_today') or attrs.get('today') or attrs.get('prices_today') or attrs.get('prices')
+    if not isinstance(raw_today, list) or not raw_today:
+        return None
+    if isinstance(raw_today[0], dict):
+        values = [entry.get('value', entry.get('price')) for entry in raw_today]
+    else:
+        values = raw_today
+    try:
+        prices = np.asarray(values, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    prices = prices[np.isfinite(prices)]
+    return prices if len(prices) else None
 
 
 def align_interval_prices(

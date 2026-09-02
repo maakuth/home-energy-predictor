@@ -8,7 +8,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, parse_ha_bool
-from utils.price_utils import fetch_market_prices, align_interval_prices, get_grid_fees, estimate_export_prices
+from utils.price_utils import (
+    align_interval_prices,
+    estimate_export_prices,
+    fetch_market_prices,
+    fetch_settled_daily_spot_prices,
+    get_grid_fees,
+    update_monthly_spot_reference,
+)
 from utils.git_utils import get_model_version
 from utils.gshp_health import gshp_is_failed
 from utils.sqlite_utils import get_db_connection, get_db_path
@@ -161,7 +168,12 @@ def load_predictions(
     return xgb_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper, prediction_solar_p10, prediction_solar_p90
 
 
-def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, export_base: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
+def build_tariff_prices(
+    market_prices: np.ndarray,
+    is_inclusive: bool = False,
+    export_base: Optional[np.ndarray] = None,
+    spot_reference: Optional[float] = None,
+) -> tuple[np.ndarray, np.ndarray]:
     grid_fees = get_grid_fees()
     market_prices = np.array(market_prices, dtype=float)
 
@@ -188,9 +200,10 @@ def build_tariff_prices(market_prices: np.ndarray, is_inclusive: bool = False, e
         # The consumption impact is the consumption-weighted spot average
         # minus the arithmetic spot average. For marginal interval pricing,
         # this reduces to the interval spot price plus a peg/reference shift.
-        # Use the available planning horizon as the reference-average proxy.
+        # Fall back to the planning horizon while the monthly state has no data.
         energy_prices = np.asarray(energy_prices, dtype=float)
-        spot_reference = float(np.mean(energy_prices))
+        if spot_reference is None or not np.isfinite(spot_reference):
+            spot_reference = float(np.mean(energy_prices))
         import_unit_prices = energy_prices + pegging_share * (peg_point - spot_reference) + fees
     elif is_inclusive:
         import_unit_prices = market_prices
@@ -534,11 +547,26 @@ def optimize() -> None:
         return
 
     print(f'Using market prices from {price_source} (Inclusive of fees: {is_inclusive})')
-    import_prices, export_prices = build_tariff_prices(market_prices, is_inclusive, export_base=export_prices_base)
+    settled_prices = None
+    if price_source and get_env_float('PEGGING_SHARE', 0.0) > 0.0:
+        settled_prices = fetch_settled_daily_spot_prices(price_source)
+    spot_reference = None
+    if settled_prices is not None:
+        spot_reference = update_monthly_spot_reference(
+            settled_prices,
+            datetime.now().astimezone().date(),
+            os.getenv('KULUTUSVAIKUTUS_STATE_FILE', 'state/kulutusvaikutus_state.json'),
+        )
+    import_prices, export_prices = build_tariff_prices(
+        market_prices,
+        is_inclusive,
+        export_base=export_prices_base,
+        spot_reference=spot_reference,
+    )
     print(f'Import price: {import_prices[0]:.4f} EUR/kWh | Export price: {export_prices[0]:.4f} EUR/kWh')
 
     # Determine opportunity-cost lookahead window based on spot price availability
-    from datetime import datetime, timedelta, time
+    from datetime import time
     now = datetime.now()
     if tomorrow_valid:
         end_of_price_horizon = datetime.combine(now.date() + timedelta(days=1), time.max)

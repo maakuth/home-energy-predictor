@@ -1,13 +1,14 @@
 from __future__ import annotations
 import os
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
 
 from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices, plan_gshp_dispatch, optimize, compute_effective_cost
+from utils.price_utils import fetch_settled_daily_spot_prices, update_monthly_spot_reference
 import sqlite3
 import os
 import json
@@ -244,6 +245,74 @@ def patched_env(overrides):
 
 
 class OptimizePlanTests(unittest.TestCase):
+    def test_monthly_spot_reference_accumulates_each_settled_day_once(self):
+        state_file = os.path.join(self._testMethodName + '_state.json')
+        self.addCleanup(lambda: os.path.exists(state_file) and os.remove(state_file))
+
+        first_reference = update_monthly_spot_reference(
+            np.array([0.10, 0.30]), date(2026, 5, 1), state_file
+        )
+        duplicate_reference = update_monthly_spot_reference(
+            np.array([0.90]), date(2026, 5, 1), state_file
+        )
+        reference = update_monthly_spot_reference(
+            np.array([0.40, 0.60]), date(2026, 5, 2), state_file
+        )
+
+        with open(state_file) as f:
+            state = json.load(f)
+
+        self.assertAlmostEqual(first_reference, 0.20)
+        self.assertAlmostEqual(duplicate_reference, 0.20)
+        self.assertAlmostEqual(reference, 0.35)
+        self.assertEqual(state['month'], '2026-05')
+        self.assertEqual(state['latest_included_day'], '2026-05-02')
+        self.assertEqual(state['spot_price_count'], 4)
+        self.assertAlmostEqual(state['spot_price_sum_eur_per_kwh'], 1.40)
+        self.assertAlmostEqual(state['spot_price_mean_eur_per_kwh'], 0.35)
+
+    def test_monthly_spot_reference_resets_on_new_month(self):
+        state_file = os.path.join(self._testMethodName + '_state.json')
+        self.addCleanup(lambda: os.path.exists(state_file) and os.remove(state_file))
+
+        update_monthly_spot_reference(np.array([0.10, 0.30]), date(2026, 5, 31), state_file)
+        reference = update_monthly_spot_reference(np.array([0.50]), date(2026, 6, 1), state_file)
+
+        with open(state_file) as f:
+            state = json.load(f)
+
+        self.assertAlmostEqual(reference, 0.50)
+        self.assertEqual(state['month'], '2026-06')
+        self.assertEqual(state['latest_included_day'], '2026-06-01')
+        self.assertEqual(state['spot_price_count'], 1)
+
+    @patch('utils.price_utils.get_ha_state')
+    def test_settled_daily_spot_prices_uses_raw_energy_sensor_for_inclusive_prices(self, mock_state):
+        mock_state.return_value = {
+            'attributes': {
+                'raw_today': [0.10, 0.30],
+            }
+        }
+
+        prices = fetch_settled_daily_spot_prices('sensor.nordpool_total')
+
+        self.assertEqual(mock_state.call_args.args[0], 'sensor.average_electricity_price_today')
+        np.testing.assert_allclose(prices, [0.10, 0.30])
+
+    def test_build_tariff_prices_uses_monthly_spot_reference(self):
+        with patched_env(
+            {
+                'GRID_FEES_EUR_PER_KWH': '0.06',
+                'PRICE_PEG_POINT_EUR_PER_KWH': '0.08',
+                'PEGGING_SHARE': '1.0',
+            }
+        ):
+            import_prices, _ = build_tariff_prices(
+                np.array([0.10, 0.30]), spot_reference=0.10
+            )
+
+        np.testing.assert_allclose(import_prices, [0.14, 0.34])
+
     def test_build_tariff_prices_uses_asymmetric_pricing(self):
         with patched_env(
             {
