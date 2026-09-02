@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from utils.battery_test_data import BatteryTestData
 from battery_planners.nemotron_linprog import NemotronLinprogPlanner
 from battery_planners.joint_linprog import JointLinprogPlanner
+from battery_planners.base import BatteryPlannerContext
 from optimize_plan import plan_gshp_dispatch
 
 
@@ -46,7 +47,7 @@ def run_decoupled_baseline(
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     gshp_plan = plan_gshp_dispatch(
         timestamps,
-        is_sauna_active,
+        is_sauna_active.tolist(),
         list(outside_temps),
         import_prices,
         export_prices,
@@ -91,7 +92,7 @@ def run_decoupled_baseline(
 
     # 4. Run Battery LP
     nemotron = NemotronLinprogPlanner()
-    context = {
+    context: BatteryPlannerContext = {
         'tomorrow_valid': True,
         'outside_temps': outside_temps,
         'is_sauna_active': is_sauna_active,
@@ -182,7 +183,7 @@ def run_joint_cooptimization(
     solar_kw = solar_kwh / interval_hours
 
     planner = JointLinprogPlanner()
-    context = {
+    context: BatteryPlannerContext = {
         'tomorrow_valid': True,
         'outside_temps': outside_temps,
         'is_sauna_active': is_sauna_active,
@@ -302,8 +303,8 @@ def evaluate_fixture(
     solar_kw = df_window.get('solar_forecast_kw', pd.Series(0.0, index=df_window.index)).fillna(0.0).values
     solar_kwh = np.asarray(solar_kw, dtype=float) * interval_hours
 
-    import_prices = df_window.get('import_price', pd.Series(0.15, index=df_window.index)).fillna(0.15).values
-    export_prices = df_window.get('export_price', pd.Series(0.05, index=df_window.index)).fillna(0.05).values
+    import_prices = df_window.get('import_price', pd.Series(0.15, index=df_window.index)).fillna(0.15).to_numpy(dtype=float)
+    export_prices = df_window.get('export_price', pd.Series(0.05, index=df_window.index)).fillna(0.05).to_numpy(dtype=float)
 
     month = timestamps[0].month
     base_temp = -5.0 if month in [12, 1, 2] else (5.0 if month in [3, 4, 10, 11] else 18.0)

@@ -42,6 +42,7 @@ def isolated_test_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TEST_PLAN_FILE", str(test_dir / "optimization_plan.json"))
     monkeypatch.setenv("TEST_SARIMA_FILE", str(test_dir / "sarimax_predictions.json"))
     monkeypatch.setenv("TEST_SARIMA_PARAMS", str(test_dir / "sarima_model_params.pkl"))
+    monkeypatch.setenv("GSHP_HEALTH_STATE_FILE", str(test_dir / "gshp_health.json"))
     
     # Also set for backward compatibility with code that might check these
     monkeypatch.setenv("DB_PATH", str(test_dir / "test_hepo.db"))

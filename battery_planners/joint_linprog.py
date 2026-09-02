@@ -432,6 +432,7 @@ class JointLinprogPlanner(BatteryPlanner):
         priority_rows = [objective.copy()]
         priority_values = [result.fun + 1e-8]
         upper_result = None
+        upper_priority: np.ndarray | None = None
         if import_is_constrained:
             upper_priority = np.zeros(n_vars)
             for i in range(horizon):
@@ -443,7 +444,7 @@ class JointLinprogPlanner(BatteryPlanner):
                 A_eq=np.asarray(equal_rows), b_eq=np.asarray(equal_values), bounds=bounds,
                 method='highs', options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
             )
-        if upper_result is not None and upper_result.success:
+        if upper_result is not None and upper_result.success and upper_priority is not None:
             upper_row = -upper_priority
             priority_rows.append(upper_row)
             priority_values.append(float(upper_row @ upper_result.x) + 1e-8)
