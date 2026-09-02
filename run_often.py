@@ -259,7 +259,7 @@ def main():
         f'({os.getenv("BULK_HEATER_POWER_KW", "6.0")}kW), '
         f'deducted={element_kw:.2f}kW'
     )
-    health = update_gshp_health(current, gshp_kw, element_kw)
+    health = update_gshp_health(current, gshp_kw, element_kw, accumulator_temp=accumulator_temp)
     push_ha_state('sensor.hepo_gshp_health', health.get('status', 'normal'), health_attributes(health))
     if health.get('status') == 'failed':
         print(f"GSHP electrical fault latched: compressor={health.get('compressor_kw', 0.0):.2f}kW")

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 
-def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None):
+def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None, accumulator_temp=None):
     path = Path(path or os.getenv('GSHP_HEALTH_STATE_FILE', 'state/gshp_health.json'))
     try:
         with path.open() as f:
@@ -23,6 +23,16 @@ def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None):
                 pass
         return state
     compressor_kw = max(0.0, shared_power_kw - max(0.0, element_power_kw))
+    if accumulator_temp is not None and accumulator_temp >= float(os.getenv('GSHP_MAX_TEMP', '55.0')):
+        # The pump's thermostat normally stops it at the accumulator target.
+        state.update({'bad_samples': 0, 'good_samples': 0, 'compressor_kw': compressor_kw})
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('w') as f:
+                json.dump(state, f)
+        except OSError:
+            pass
+        return state
     if compressor_kw < minimum_kw:
         state['bad_samples'] += 1
         state['good_samples'] = 0
