@@ -12,11 +12,11 @@ tariffs without double-conversion losses, peak collisions, or fuse limit violati
 """
 
 import os
-from typing import Any, List, Optional, Tuple, Dict
+from typing import Any, List, Optional, Tuple, Dict, cast
 from datetime import datetime
 
 import numpy as np
-from scipy.optimize import linprog
+from scipy.optimize import Bounds, LinearConstraint, linprog, milp
 
 from .base import BatteryPlanEntry, BatteryPlanner, BatteryPlannerContext
 from utils.type_defs import BatteryAction
@@ -244,7 +244,8 @@ class JointLinprogPlanner(BatteryPlanner):
         # 13: grid_overflow
         # 14: temp_underflow
         # 15: bulk_heater_kwh (electric)
-        width = 16
+        # 16: gshp_on (binary; the compressor must run for a complete slot)
+        width = 17
         n_vars = width * horizon
 
         def index(i: int, offset: int) -> int:
@@ -254,8 +255,8 @@ class JointLinprogPlanner(BatteryPlanner):
             grid_house, grid_battery, solar_house, solar_battery,
             solar_export, solar_curtail, battery_house, battery_export,
             soc, gshp_kwh, resistive_kwh, acc_temp, leaf_kwh, overflow, temp_underflow,
-            bulk_heater_kwh
-        ) = range(16)
+            bulk_heater_kwh, gshp_on
+        ) = range(17)
 
         objective = np.zeros(n_vars)
         bounds = []
@@ -296,6 +297,7 @@ class JointLinprogPlanner(BatteryPlanner):
                 (0, None),  # overflow
                 (0, None),  # temp_underflow
                 (0, max_bulk_interval_kwh),  # bulk_heater_kwh
+                (0, 1),  # gshp_on
             ])
 
         # Terminal valuation
@@ -390,6 +392,23 @@ class JointLinprogPlanner(BatteryPlanner):
             upper_rows.append(row)
             upper_values.append(max_grid_import_kwh - committed[i])
 
+            # A compressor is either off, or runs for the whole planning slot
+            # within its physical modulation range. Unlike resistive heat, it
+            # cannot be delivered by runtime duty-cycling.
+            max_gshp_interval_kwh = p_max * interval_hours if gshp_enabled else 0.0
+            min_gshp_interval_kwh = p_min * interval_hours if gshp_enabled else 0.0
+            row = np.zeros(n_vars)
+            row[index(i, gshp_kwh)] = 1
+            row[index(i, gshp_on)] = -max_gshp_interval_kwh
+            upper_rows.append(row)
+            upper_values.append(0.0)
+
+            row = np.zeros(n_vars)
+            row[index(i, gshp_kwh)] = -1
+            row[index(i, gshp_on)] = min_gshp_interval_kwh
+            upper_rows.append(row)
+            upper_values.append(0.0)
+
         # 7. Leaf daily target constraint:
         # sum(leaf_kwh[i]) = leaf_target_kwh
         if leaf_enabled and leaf_target_kwh > 0:
@@ -399,17 +418,54 @@ class JointLinprogPlanner(BatteryPlanner):
             equal_rows.append(row)
             equal_values.append(leaf_target_kwh)
 
-        # Solve Joint LP
-        result = linprog(
-            objective,
-            A_ub=np.asarray(upper_rows),
-            b_ub=np.asarray(upper_values),
-            A_eq=np.asarray(equal_rows),
-            b_eq=np.asarray(equal_values),
-            bounds=bounds,
-            method='highs',
-            options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
-        )
+        lower_bounds = np.asarray([bound[0] for bound in bounds], dtype=float)
+        upper_bounds = np.asarray([
+            np.inf if bound[1] is None else bound[1] for bound in bounds
+        ], dtype=float)
+        use_gshp_binary = gshp_enabled and p_min > 0.0
+        integrality = np.zeros(n_vars, dtype=int)
+        if use_gshp_binary:
+            for i in range(horizon):
+                integrality[index(i, gshp_on)] = 1
+
+        def solve(objective_coefficients: np.ndarray, extra_upper_rows: list[np.ndarray] | None = None,
+                  extra_upper_values: list[float] | None = None):
+            rows = upper_rows + (extra_upper_rows or [])
+            values = upper_values + (extra_upper_values or [])
+            if not use_gshp_binary:
+                return linprog(
+                    objective_coefficients,
+                    A_ub=np.asarray(rows),
+                    b_ub=np.asarray(values),
+                    A_eq=np.asarray(equal_rows),
+                    b_eq=np.asarray(equal_values),
+                    bounds=bounds,
+                    method='highs',
+                    options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
+                )
+            constraints = [
+                LinearConstraint(
+                    cast(Any, np.asarray(rows)),
+                    cast(Any, -np.inf),
+                    cast(Any, np.asarray(values)),
+                ),
+                LinearConstraint(
+                    cast(Any, np.asarray(equal_rows)),
+                    cast(Any, np.asarray(equal_values)),
+                    cast(Any, np.asarray(equal_values)),
+                ),
+            ]
+            return milp(
+                objective_coefficients,
+                integrality=integrality,
+                bounds=Bounds(cast(Any, lower_bounds), cast(Any, upper_bounds)),
+                constraints=constraints,
+                options={'disp': False},
+            )
+
+        # Solve Joint MILP. The binary compressor variable prevents fractional
+        # starts while all battery and resistive-heater flows remain continuous.
+        result = solve(objective)
 
         if not result.success:
             print(f"⚠️ Joint LP solver failed: {result.message}. Falling back to idle baseline.")
@@ -437,13 +493,7 @@ class JointLinprogPlanner(BatteryPlanner):
             upper_priority = np.zeros(n_vars)
             for i in range(horizon):
                 upper_priority[index(i, resistive_kwh)] = -1.0
-            upper_result = linprog(
-                upper_priority,
-                A_ub=np.vstack([np.asarray(upper_rows), np.asarray(priority_rows)]),
-                b_ub=np.append(np.asarray(upper_values), priority_values),
-                A_eq=np.asarray(equal_rows), b_eq=np.asarray(equal_values), bounds=bounds,
-                method='highs', options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
-            )
+            upper_result = solve(upper_priority, priority_rows, priority_values)
         if upper_result is not None and upper_result.success and upper_priority is not None:
             upper_row = -upper_priority
             priority_rows.append(upper_row)
@@ -451,13 +501,7 @@ class JointLinprogPlanner(BatteryPlanner):
             battery_priority = np.zeros(n_vars)
             for i in range(horizon):
                 battery_priority[index(i, grid_battery)] = -1.0
-            battery_result = linprog(
-                battery_priority,
-                A_ub=np.vstack([np.asarray(upper_rows), np.asarray(priority_rows)]),
-                b_ub=np.append(np.asarray(upper_values), priority_values),
-                A_eq=np.asarray(equal_rows), b_eq=np.asarray(equal_values), bounds=bounds,
-                method='highs', options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
-            )
+            battery_result = solve(battery_priority, priority_rows, priority_values)
             result = battery_result if battery_result.success else upper_result
 
         # Headroom pass for interval 0 (real-time load-following flexibility)
@@ -466,15 +510,10 @@ class JointLinprogPlanner(BatteryPlanner):
         headroom_tolerance = max(
             0.0, get_env_float('BATTERY_LP_HEADROOM_COST_TOLERANCE_EUR', 0.001),
         )
-        headroom_result = linprog(
+        headroom_result = solve(
             headroom_objective,
-            A_ub=np.vstack([np.asarray(upper_rows), objective]),
-            b_ub=np.append(np.asarray(upper_values), result.fun + headroom_tolerance),
-            A_eq=np.asarray(equal_rows),
-            b_eq=np.asarray(equal_values),
-            bounds=bounds,
-            method='highs',
-            options={'parallel': True} if get_env_int('BATTERY_LP_PARALLEL', 0) else {},
+            [objective],
+            [float(result.fun + headroom_tolerance)],
         )
         lp_headroom_kwh = (
             max(0.0, headroom_result.x[index(0, battery_house)])
@@ -493,7 +532,9 @@ class JointLinprogPlanner(BatteryPlanner):
             planned_gshp_kw = max(0.0, x[index(i, gshp_kwh)]) / interval_hours
             planned_resistive_kw = max(0.0, x[index(i, resistive_kwh)]) / interval_hours
             planned_bulk_heater_kw = max(0.0, x[index(i, bulk_heater_kwh)]) / interval_hours
-            gshp_intent = 'START' if planned_gshp_kw > 0.05 else 'STOP'
+            gshp_intent = 'START' if (
+                x[index(i, gshp_on)] > 0.5 if use_gshp_binary else planned_gshp_kw > 0.05
+            ) else 'STOP'
             resistive_intent = 'ON' if planned_resistive_kw > 0.05 else 'OFF'
             bulk_heater_intent = 'ON' if planned_bulk_heater_kw > 0.05 else 'OFF'
             t_acc = float(x[index(i, acc_temp)])

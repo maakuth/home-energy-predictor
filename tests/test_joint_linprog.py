@@ -149,6 +149,20 @@ class JointLinprogTests(unittest.TestCase):
         self.assertGreater(plan[0].planned_gshp_kw or 0.0, 2.0, "GSHP should run heavily during cheap interval 0")
         self.assertGreater(plan[0].gshp_temp_sim or 0.0, 45.0, "Accumulator temperature should rise in interval 0")
 
+    def test_gshp_runs_at_least_minimum_power_for_a_full_slot(self):
+        """A compressor start must not be represented as a fractional 15-minute run."""
+        plan = self._plan(
+            [0.0], [0.0], [0.20],
+            outside_temps=[20.0], current_acc_temp=42.0,
+            PLAN_INTERVAL_MINUTES='15',
+            GSHP_POWER_MIN_KW='3.4',
+            GSHP_POWER_MAX_KW='4.2',
+        )
+
+        planned_kw = plan[0].planned_gshp_kw or 0.0
+        self.assertGreaterEqual(planned_kw, 3.4 - 1e-6)
+        self.assertEqual(plan[0].gshp_intent, 'START')
+
     def test_direct_solar_consumed_by_loads_without_battery_loss(self):
         """When solar surplus is available, it should directly supply GSHP with 100% efficiency."""
         preds = [0.5, 0.5]

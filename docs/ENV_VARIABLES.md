@@ -104,7 +104,7 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 | `GSHP_COP` | Coefficient of Performance. | `3.5` | —. `thermal_kw = electric_kw * COP`. |
 | `GSHP_HEAT_LOSS_K` | House heat-loss coefficient. | `0.1` | kW/°C. Used in the demand formula: `max(0, (20.0 - outside_temp) * heat_loss_k)`. Code default is `0.135`. |
 | `GSHP_BASELINE_DEMAND_KW` | Baseline thermal demand. | `1.0` | kW. Represents DHW, circulation and standby heat loss. Added to the weather-driven demand. |
-| `GSHP_POWER_MIN_KW` | Minimum compressor / inverter power. | `3.4` | kW. Used at `min_temp` in a linear power ramp. |
+| `GSHP_POWER_MIN_KW` | Minimum compressor / inverter power. | `3.4` | kW. Used at `min_temp` in a linear power ramp. In the joint planner, a GSHP start occupies the full planning slot, so allocation is either zero or at least this power. |
 | `GSHP_POWER_MAX_KW` | Maximum compressor / inverter power. | `4.2` | kW. Used at `max_temp` in a linear power ramp. |
 | `GSHP_STRATEGIC_STOP_DIFF_EUR` | Spot-price difference that triggers a strategic stop. | `0.05` | €/kWh. If the current effective price is `>=` (cheapest price in the safe lookahead window + this value), the pump stops to wait for cheaper hours. |
 | `GSHP_OPTIMIZE_ENABLED` | Enable the compressor heat source. | `false` | Keep disabled while the GSHP is unreliable. Re-enable after replacement while disabling resistive optimization. |
