@@ -71,26 +71,33 @@ def update_monthly_spot_reference(
 
 def fetch_settled_daily_spot_prices(entity_id: str) -> Optional[np.ndarray]:
     """Return the selected sensor's complete settled raw-energy price day."""
+    sources = [(entity_id, False)]
     if entity_id == 'sensor.nordpool_total':
-        entity_id = 'sensor.average_electricity_price_today'
-    state_data = get_ha_state(entity_id)
-    if not state_data:
-        return None
+        sources = [
+            ('sensor.average_electricity_price_today', False),
+            ('sensor.nordpool_total', True),
+        ]
 
-    attrs = state_data.get('attributes', {})
-    raw_today = attrs.get('raw_today') or attrs.get('today') or attrs.get('prices_today') or attrs.get('prices')
-    if not isinstance(raw_today, list) or not raw_today:
-        return None
-    if isinstance(raw_today[0], dict):
-        values = [entry.get('value', entry.get('price')) for entry in raw_today]
-    else:
-        values = raw_today
-    try:
-        prices = np.asarray(values, dtype=float)
-    except (TypeError, ValueError):
-        return None
-    prices = prices[np.isfinite(prices)]
-    return prices if len(prices) else None
+    for source, is_inclusive in sources:
+        state_data = get_ha_state(source)
+        if not state_data:
+            continue
+        attrs = state_data.get('attributes', {})
+        raw_today = attrs.get('raw_today') or attrs.get('today') or attrs.get('prices_today') or attrs.get('prices')
+        if not isinstance(raw_today, list) or not raw_today:
+            continue
+        if isinstance(raw_today[0], dict):
+            values = [entry.get('value', entry.get('price')) for entry in raw_today]
+        else:
+            values = raw_today
+        try:
+            prices = np.asarray(values, dtype=float)
+        except (TypeError, ValueError):
+            continue
+        prices = prices[np.isfinite(prices)]
+        if len(prices):
+            return np.maximum(0.0, prices - get_grid_fees()) if is_inclusive else prices
+    return None
 
 
 def align_interval_prices(

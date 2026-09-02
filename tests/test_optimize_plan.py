@@ -299,6 +299,19 @@ class OptimizePlanTests(unittest.TestCase):
         self.assertEqual(mock_state.call_args.args[0], 'sensor.average_electricity_price_today')
         np.testing.assert_allclose(prices, [0.10, 0.30])
 
+    @patch('utils.price_utils.get_ha_state')
+    def test_settled_daily_spot_prices_falls_back_to_fee_stripped_inclusive_prices(self, mock_state):
+        def state_for(entity_id):
+            if entity_id == 'sensor.nordpool_total':
+                return {'attributes': {'raw_today': [0.10, 0.30]}}
+            return None
+
+        mock_state.side_effect = state_for
+        with patched_env({'GRID_FEES_EUR_PER_KWH': '0.06'}):
+            prices = fetch_settled_daily_spot_prices('sensor.nordpool_total')
+
+        np.testing.assert_allclose(prices, [0.04, 0.24])
+
     def test_build_tariff_prices_uses_monthly_spot_reference(self):
         with patched_env(
             {
