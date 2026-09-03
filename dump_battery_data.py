@@ -605,6 +605,27 @@ def fetch_sqlite_predictions(
     return predictions
 
 
+def build_measurement_records(df_merged: pd.DataFrame) -> list[dict[str, Any]]:
+    """Convert resampled HA measurements into the portable fixture format."""
+    measurements = []
+    for ts, row in df_merged.iterrows():
+        record = {
+            'timestamp': ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
+        }
+        for source, target in [
+            ('gshp_power_w', 'gshp_power_kw'),
+            ('leaf_power_w', 'leaf_power_kw'),
+            ('battery_power_w', 'battery_power_kw'),
+        ]:
+            if source in row.index and pd.notna(row[source]):
+                record[target] = float(row[source]) / 1000.0
+        for column in ['total_power_kw', 'solar_actual_kw', 'outside_temp_c']:
+            if column in row.index and pd.notna(row[column]):
+                record[column] = float(row[column])
+        measurements.append(record)
+    return measurements
+
+
 def fetch_ha_measurements(
     start_time: datetime,
     end_time: datetime,
@@ -612,8 +633,8 @@ def fetch_ha_measurements(
 ) -> list[dict[str, Any]]:
     """Fetch actual measurements from Home Assistant PostgreSQL database.
     
-    Returns list of measurement records for grid power, solar, GSHP, Leaf, and other
-    actual sensor readings for the given time range.
+    Returns list of measurement records for grid power, solar, battery, GSHP, Leaf,
+    and other actual sensor readings for the given time range.
     """
     measurements = []
     
@@ -637,6 +658,7 @@ def fetch_ha_measurements(
             'sensor.mlp_teho',                              # GSHP power (W)
             os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'),
             'sensor.tasmota_energy_power_3',                # Leaf power (W)
+            'sensor.be_stat_batt_power',                    # Battery power (W; positive=charging)
             'sensor.ulkona_temperature_2',                  # Outside temp (°C)
         ]
         
@@ -655,6 +677,7 @@ def fetch_ha_measurements(
             (os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 'solar_actual_kw'),
             ('sensor.mlp_teho', 'gshp_power_w'),
             ('sensor.tasmota_energy_power_3', 'leaf_power_w'),
+            ('sensor.be_stat_batt_power', 'battery_power_w'),
             ('sensor.ulkona_temperature_2', 'outside_temp_c'),
         ]:
             df = hist_data.get(entity_id)
@@ -686,23 +709,7 @@ def fetch_ha_measurements(
             df_merged = pd.concat(all_dfs, axis=1)
             df_merged = df_merged.resample('15min').mean()
             
-            # Convert back to list of dicts
-            for ts, row in df_merged.iterrows():
-                record = {
-                    'timestamp': ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
-                }
-                # Convert W to kW where needed
-                if 'gshp_power_w' in row.index and pd.notna(row['gshp_power_w']):
-                    record['gshp_power_kw'] = row['gshp_power_w'] / 1000.0
-                if 'leaf_power_w' in row.index and pd.notna(row['leaf_power_w']):
-                    record['leaf_power_kw'] = row['leaf_power_w'] / 1000.0
-                
-                # Add other measurements as-is
-                for col in ['total_power_kw', 'solar_actual_kw', 'outside_temp_c']:
-                    if col in row.index and pd.notna(row[col]):
-                        record[col] = float(row[col])
-                
-                measurements.append(record)
+            measurements = build_measurement_records(df_merged)
             
             if verbose:
                 print(f"  ✓ Fetched {len(measurements)} measurement records")

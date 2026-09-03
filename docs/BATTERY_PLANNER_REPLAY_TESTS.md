@@ -69,6 +69,7 @@ Fixtures are pickle files in `tests/fixtures/` containing a dictionary:
                 'timestamp': ISO timestamp,
                 'total_power_kw': float,      # Grid power (kW, positive=import)
                 'solar_actual_kw': float,     # Solar actual power (kW)
+                'battery_power_kw': float,    # Battery power (kW, positive=charging)
                 'gshp_power_kw': float,       # GSHP power (kW)
                 'leaf_power_kw': float,       # Leaf power (kW)
                 'outside_temp_c': float,      # Outside temperature (°C)
@@ -193,6 +194,30 @@ the August fixture (August 12-23) included. All runs had zero SoC violations.
 These results establish a battery-only regression baseline; they do not rank
 joint heating strategies. Use full-length fixtures, not the 24-hour quick
 tests, for planner-tuning decisions.
+
+### Oracle Audit Data Requirements
+
+A perfect-forecast battery audit needs the underlying household load, not just
+the net grid meter. Reconstruct it per interval as:
+
+```text
+household_load_kw = net_grid_kw + solar_actual_kw - battery_power_kw
+```
+
+where positive `battery_power_kw` means charging. `dump_battery_data.py` stores
+all three measurements for new fixtures. A valid audit fixture must have those
+signals aligned to each 15-minute interval; do not replace absent PV or battery
+readings with zero.
+
+The existing January, May, July, and October fixtures predate the battery, but
+have gaps in `solar_actual_kw`. The August fixture contains real battery-era
+net-meter readings but lacks historical `battery_power_kw`. Neither set can
+support a full-length perfect-forecast oracle comparison. They remain useful
+for regression and constraint tests, but not for selecting economic tunables.
+
+One to two continuous weeks of complete measurements after the updated dumper
+is deployed is sufficient for a battery-only oracle and tuning audit; no
+multi-season wait is required.
 
 ## Test Assertions
 
