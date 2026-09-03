@@ -481,8 +481,24 @@ def main():
         guard_msg = f"soc guard: discharge blocked at SoC {soc_pct:.1f}% (floor {floor_pct:.0f}%)"
         fuse_msg = f"{fuse_msg}; {guard_msg}" if fuse_msg else guard_msg
 
-    # Priority under an unresolvable phase overload: preserve the upper element,
-    # use the battery first, then shed the lower whole-reservoir element.
+    # Last-resort fuse protection: after exhausting safe battery discharge, shed
+    # planned heating loads rather than leave a phase above its fuse rating.
+    if (
+        os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+        and current is not None
+        and current.get('resistive_heater_intent') == 'ON'
+        and _fuse_still_overloaded(
+            adjusted_battery_kw, battery_w, [i_p1, i_p2, i_p3],
+        )
+    ):
+        call_ha_service(
+            'switch', 'turn_off',
+            {'entity_id': os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')},
+            return_response=False,
+        )
+        priority_msg = 'resistive heater shed after battery fuse response'
+        fuse_msg = f"{fuse_msg}; {priority_msg}" if fuse_msg else priority_msg
+
     if (
         os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}
         and current is not None

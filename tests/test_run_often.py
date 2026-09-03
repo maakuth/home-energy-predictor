@@ -903,6 +903,38 @@ class TestRunOften(unittest.TestCase):
     @patch('run_often.call_ha_service')
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')
+    def test_fuse_overload_sheds_resistive_heater_after_battery_is_exhausted(
+        self, mock_get_ha, mock_push, mock_service,
+    ):
+        """The resistive heater is shed if the SoC floor prevents fuse relief."""
+        self._make_net_metering_plan(battery_kw=10.0, action='charge_grid')
+        plan_path = os.path.join(self.test_dir, 'state', 'optimization_plan.json')
+        with open(plan_path) as f:
+            plan = json.load(f)
+        plan[0].update({'resistive_heater_intent': 'ON', 'planned_resistive_kw': 6.0})
+        with open(plan_path, 'w') as f:
+            json.dump(plan, f)
+        mock_get_ha.side_effect = self._phase_side_effect([30.0, 10.0, 10.0], battery_w='0.0', soc='10.0')
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '0',
+            'MAIN_FUSE_SIZE_A': '25',
+            'BATTERY_MIN_SOC_PCT': '10.0',
+            'RESISTIVE_HEATER_OPTIMIZE_ENABLED': '1',
+        }):
+            from run_often import main
+            main()
+
+        resistive_calls = [
+            call for call in mock_service.call_args_list
+            if call.args[2]['entity_id'] == 'switch.mlp_vastus_output_0'
+        ]
+        self.assertEqual(resistive_calls[-1].args[1], 'turn_off')
+
+    @patch('run_often.call_ha_service')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
     def test_fuse_overload_sheds_bulk_after_battery_is_exhausted(
         self, mock_get_ha, mock_push, mock_service,
     ):
