@@ -12,6 +12,7 @@ Tests each planner against all available fixtures, verifying:
 import unittest
 import os
 from pathlib import Path
+from unittest.mock import patch
 import pytest
 import numpy as np
 import pandas as pd
@@ -344,12 +345,20 @@ class TestSolarP10Passthrough(unittest.TestCase):
         def __init__(self):
             self.seen_context = None
             self.seen_solar = None
+            self.seen_flexible_loads = None
 
         def plan(self, predictions_kwh, solar_kwh, import_prices, export_prices,
                  prediction_timestamps, committed_load_kwh=None, allow_export=True,
                  initial_soc_pct=None, context=None):
             self.seen_context = dict(context) if context else {}
             self.seen_solar = np.asarray(solar_kwh, dtype=float).copy()
+            self.seen_flexible_loads = {
+                name: os.environ.get(name)
+                for name in (
+                    'GSHP_OPTIMIZE_ENABLED', 'RESISTIVE_HEATER_OPTIMIZE_ENABLED',
+                    'BULK_HEATER_OPTIMIZE_ENABLED', 'LEAF_OPTIMIZE_ENABLED',
+                )
+            }
             return [
                 BatteryPlanEntry(
                     timestamp=str(ts), battery_action='idle', battery_power_kw=0.0,
@@ -392,6 +401,22 @@ class TestSolarP10Passthrough(unittest.TestCase):
         spy = self._run(self._make_simulator(with_p10=True),
                         context={'solar_p10_kwh': override})
         np.testing.assert_allclose(spy.seen_context['solar_p10_kwh'], override)
+
+    def test_replay_disables_flexible_loads_for_battery_comparison(self):
+        with patch.dict(os.environ, {
+            'GSHP_OPTIMIZE_ENABLED': 'true',
+            'RESISTIVE_HEATER_OPTIMIZE_ENABLED': 'true',
+            'BULK_HEATER_OPTIMIZE_ENABLED': 'true',
+            'LEAF_OPTIMIZE_ENABLED': 'true',
+        }, clear=False):
+            spy = self._run(self._make_simulator(with_p10=False))
+
+        assert spy.seen_flexible_loads == {
+            'GSHP_OPTIMIZE_ENABLED': 'false',
+            'RESISTIVE_HEATER_OPTIMIZE_ENABLED': 'false',
+            'BULK_HEATER_OPTIMIZE_ENABLED': 'false',
+            'LEAF_OPTIMIZE_ENABLED': 'false',
+        }
 
 
 class TestPriceWindowRobustness(unittest.TestCase):

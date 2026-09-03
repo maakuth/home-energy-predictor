@@ -163,6 +163,37 @@ the main checkout. Do not use replay duration as a production cadence estimate:
 production generates one receding-horizon plan per scheduled run, whereas a
 replay generates one plan for every historical interval.
 
+### Battery-Only Comparison Mode
+
+`simulate_battery_control()` disables GSHP, both resistive heaters, and Leaf
+optimization before every replay. This makes heuristic, Nemotron-LP, and joint
+planner results comparable: each planner decides only battery dispatch against
+the same forecast, price, and actual-load data. Flexible-load co-optimization
+must be evaluated separately with a scenario that schedules those loads for
+every planner or deliberately measures their combined household cost.
+
+With all flexible loads disabled, `JointLinprogPlanner` delegates to
+`NemotronLinprogPlanner`. The two therefore produce identical battery dispatch,
+which avoids an irrelevant thermal-model tie-break changing battery-only
+results. The joint solver is used whenever any flexible load is enabled.
+
+### Full-Length Baseline
+
+The full-length no-violation replay matrix was run on September 3, 2026 with
+the August fixture (August 12-23) included. All runs had zero SoC violations.
+
+| Fixture | Heuristic cost | Joint/Nemotron cost | Baseline cost |
+|---------|---------------:|--------------------:|--------------:|
+| Aug | -€21.606 | -€99.064 | €1.871 |
+| Jan | -€0.895 | -€22.146 | €6.268 |
+| Jul | -€3.667 | -€32.077 | €7.914 |
+| May | -€0.347 | -€20.158 | €11.220 |
+| Oct | €9.190 | -€7.261 | €26.565 |
+
+These results establish a battery-only regression baseline; they do not rank
+joint heating strategies. Use full-length fixtures, not the 24-hour quick
+tests, for planner-tuning decisions.
+
 ## Test Assertions
 
 The parametrized tests validate:

@@ -80,6 +80,26 @@ class JointLinprogTests(unittest.TestCase):
         planner = BatteryPlannerFactory.create('joint-linprog')
         self.assertIsInstance(planner, JointLinprogPlanner)
 
+    def test_delegates_battery_only_problem_to_nemotron(self):
+        sentinel = [object()]
+        with patch(
+            'battery_planners.joint_linprog.NemotronLinprogPlanner.plan',
+            return_value=sentinel,
+        ) as plan:
+            with patch.dict(os.environ, {
+                'GSHP_OPTIMIZE_ENABLED': '0',
+                'RESISTIVE_HEATER_OPTIMIZE_ENABLED': '0',
+                'BULK_HEATER_OPTIMIZE_ENABLED': '0',
+                'LEAF_OPTIMIZE_ENABLED': '0',
+            }, clear=False):
+                result = JointLinprogPlanner().plan(
+                    np.array([1.0]), np.array([0.0]),
+                    np.array([0.20]), np.array([0.05]), ['t0'],
+                )
+
+        self.assertIs(result, sentinel)
+        plan.assert_called_once()
+
     def test_house_and_thermal_energy_balances(self):
         """Verify electric and thermal energy conservation across all intervals."""
         n = 4

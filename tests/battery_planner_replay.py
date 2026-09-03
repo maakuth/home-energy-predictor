@@ -307,6 +307,12 @@ class BatteryReplaySimulator:
         os.environ['BATTERY_MIN_SOC_PCT'] = str(battery_min_soc_pct)
         os.environ['BATTERY_MAX_SOC_PCT'] = str(battery_max_soc_pct)
         os.environ['PLAN_INTERVAL_MINUTES'] = '15'
+        # Battery replays compare dispatch strategies. Flexible heat and EV
+        # loads would otherwise be scheduled only by the joint planner.
+        os.environ['GSHP_OPTIMIZE_ENABLED'] = 'false'
+        os.environ['RESISTIVE_HEATER_OPTIMIZE_ENABLED'] = 'false'
+        os.environ['BULK_HEATER_OPTIMIZE_ENABLED'] = 'false'
+        os.environ['LEAF_OPTIMIZE_ENABLED'] = 'false'
         
         if self.measurements_df is None or self.measurements_df.empty:
             return {

@@ -19,6 +19,7 @@ import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, linprog, milp
 
 from .base import BatteryPlanEntry, BatteryPlanner, BatteryPlannerContext
+from .nemotron_linprog import NemotronLinprogPlanner
 from utils.type_defs import BatteryAction
 from utils.gshp_health import gshp_is_failed
 
@@ -225,6 +226,14 @@ class JointLinprogPlanner(BatteryPlanner):
         leaf_daily_target_kwh = get_env_float('LEAF_DAILY_TARGET_KWH', 10.0)
         leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 3.0)
         leaf_target_kwh = leaf_daily_target_kwh * (horizon * interval_hours / 24.0) if leaf_enabled else 0.0
+
+        if not any((gshp_enabled, resistive_enabled, bulk_enabled, leaf_enabled)):
+            # Keep the battery-only problem identical to the dedicated LP.
+            return NemotronLinprogPlanner().plan(
+                predictions_kwh, solar_kwh, import_prices, export_prices,
+                prediction_timestamps, committed_load_kwh, allow_export,
+                initial_soc_pct, context,
+            )
 
         # Build decision variables
         # Variables per interval:
