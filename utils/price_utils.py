@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import time
 import pandas as pd
 import numpy as np
 import requests
@@ -12,6 +13,8 @@ from utils.ha_utils import get_ha_state
 
 
 NORDPOOL_PREDICTION_URL = 'https://raw.githubusercontent.com/vividfog/nordpool-predict-fi/main/deploy/prediction.json'
+NORDPOOL_PREDICTION_CACHE_FILE = 'state/nordpool_prediction.json'
+NORDPOOL_PREDICTION_CACHE_MAX_AGE_SECONDS = 3600
 
 
 def get_grid_fees() -> float:
@@ -194,13 +197,40 @@ def _fetch_sensor_prices(
 def _fetch_predicted_spot_prices() -> Optional[pd.Series]:
     """Fetch raw spot-price predictions in EUR/kWh from nordpool-predict-fi."""
     url = os.getenv('NORDPOOL_PREDICTION_URL', NORDPOOL_PREDICTION_URL)
+    cache_path = Path(os.getenv('NORDPOOL_PREDICTION_CACHE_FILE', NORDPOOL_PREDICTION_CACHE_FILE))
+    cached_payload: Optional[list[Any]] = None
+    cache_is_fresh = False
     try:
-        timeout = float(os.getenv('NORDPOOL_PREDICTION_TIMEOUT_SECONDS', '10'))
-        response = requests.get(url, timeout=timeout)
-        response.raise_for_status()
-        payload = response.json()
+        with cache_path.open() as f:
+            payload = json.load(f)
+        if isinstance(payload, list) and payload:
+            cached_payload = payload
+            cache_is_fresh = time.time() - cache_path.stat().st_mtime <= NORDPOOL_PREDICTION_CACHE_MAX_AGE_SECONDS
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+
+    if cache_is_fresh:
+        payload = cached_payload
+    else:
+        payload = None
+    try:
+        if payload is None:
+            timeout = float(os.getenv('NORDPOOL_PREDICTION_TIMEOUT_SECONDS', '10'))
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, list) and payload:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_path = cache_path.with_suffix(cache_path.suffix + '.tmp')
+                with temp_path.open('w') as f:
+                    json.dump(payload, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, cache_path)
     except (requests.RequestException, TypeError, ValueError):
-        return None
+        payload = cached_payload
+    except OSError:
+        pass
 
     if not isinstance(payload, list):
         return None

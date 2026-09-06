@@ -1,14 +1,49 @@
 from __future__ import annotations
 
+import json
+import os
+import time
 from unittest.mock import Mock, patch
 
 import numpy as np
 
 from optimize_plan import build_tariff_prices
-from utils.price_utils import fetch_market_prices
+from utils.price_utils import _fetch_predicted_spot_prices, fetch_market_prices
 
 
-def test_external_prediction_fills_missing_tomorrow_as_raw_export_price() -> None:
+def test_external_prediction_uses_fresh_state_cache(tmp_path) -> None:
+    cache_file = tmp_path / 'nordpool_prediction.json'
+    cache_file.write_text(json.dumps([[1780275600000, 7.0]]))
+
+    with patch.dict(os.environ, {'NORDPOOL_PREDICTION_CACHE_FILE': str(cache_file)}), \
+            patch('utils.price_utils.requests.get') as get:
+        prices = _fetch_predicted_spot_prices()
+
+    assert prices is not None
+    assert prices.iloc[0] == 0.07
+    get.assert_not_called()
+
+
+def test_external_prediction_refreshes_state_cache_after_one_hour(tmp_path) -> None:
+    cache_file = tmp_path / 'nordpool_prediction.json'
+    cache_file.write_text(json.dumps([[1780275600000, 7.0]]))
+    old = time.time() - 3601
+    os.utime(cache_file, (old, old))
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = [[1780279200000, 8.0]]
+
+    with patch.dict(os.environ, {'NORDPOOL_PREDICTION_CACHE_FILE': str(cache_file)}), \
+            patch('utils.price_utils.requests.get', return_value=response) as get:
+        prices = _fetch_predicted_spot_prices()
+
+    assert prices is not None
+    assert prices.iloc[0] == 0.08
+    assert json.loads(cache_file.read_text()) == [[1780279200000, 8.0]]
+    get.assert_called_once()
+
+
+def test_external_prediction_fills_missing_tomorrow_as_raw_export_price(tmp_path) -> None:
     timestamps = [
         '2026-06-01T00:00:00+00:00',
         '2026-06-01T00:15:00+00:00',
@@ -30,7 +65,9 @@ def test_external_prediction_fills_missing_tomorrow_as_raw_export_price() -> Non
         [1780275600000, 7.0],  # 2026-06-01T01:00:00Z, cents/kWh
     ]
 
-    with patch('utils.price_utils.get_ha_state', return_value=ha_state), \
+    cache_file = tmp_path / 'nordpool_prediction.json'
+    with patch.dict(os.environ, {'NORDPOOL_PREDICTION_CACHE_FILE': str(cache_file)}), \
+            patch('utils.price_utils.get_ha_state', return_value=ha_state), \
             patch('utils.price_utils.requests.get', return_value=response) as get:
         prices, is_fallback, source, is_inclusive, tomorrow_valid, export_base = fetch_market_prices(
             timestamps,
