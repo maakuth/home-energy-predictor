@@ -9,9 +9,11 @@ from utils.gshp_health import health_attributes, update_gshp_health
 def test_latches_failure_and_recovers_from_electrical_response(tmp_path):
     path = tmp_path / 'health.json'
     plan = {'gshp_intent': 'START', 'planned_gshp_kw': 3.0}
+    state = {}
 
-    for _ in range(3):
-        state = update_gshp_health(plan, shared_power_kw=0.2, element_power_kw=0.0, path=path)
+    with patch.dict(os.environ, {'GSHP_FAILURE_REQUIRED_BAD_SAMPLES': '3'}):
+        for _ in range(3):
+            state = update_gshp_health(plan, shared_power_kw=0.2, element_power_kw=0.0, path=path)
     assert state['status'] == 'failed'
 
     for _ in range(2):
@@ -48,6 +50,7 @@ def test_target_temperature_stop_does_not_latch_failure(tmp_path):
     path = tmp_path / 'health.json'
     path.write_text('{"status": "normal", "bad_samples": 2, "good_samples": 0}')
     plan = {'gshp_intent': 'START', 'planned_gshp_kw': 3.0}
+    state = {}
 
     with patch.dict(os.environ, {'GSHP_MAX_TEMP': '55.0'}):
         for _ in range(3):
@@ -61,3 +64,31 @@ def test_target_temperature_stop_does_not_latch_failure(tmp_path):
 
     assert state['status'] == 'normal'
     assert state['bad_samples'] == 0
+
+
+def test_thermostat_stop_below_target_does_not_latch_failure(tmp_path):
+    plan = {'gshp_intent': 'START', 'planned_gshp_kw': 3.0}
+
+    state = update_gshp_health(
+        plan,
+        shared_power_kw=0.0,
+        element_power_kw=0.0,
+        accumulator_temp=54.0,
+        path=tmp_path / 'health.json',
+    )
+
+    assert state['status'] == 'normal'
+    assert state['bad_samples'] == 0
+
+
+def test_default_startup_delay_requires_nine_bad_samples(tmp_path):
+    path = tmp_path / 'health.json'
+    plan = {'gshp_intent': 'START', 'planned_gshp_kw': 3.0}
+    state = {}
+
+    for _ in range(8):
+        state = update_gshp_health(plan, shared_power_kw=0.0, element_power_kw=0.0, path=path)
+    assert state['status'] == 'normal'
+
+    state = update_gshp_health(plan, shared_power_kw=0.0, element_power_kw=0.0, path=path)
+    assert state['status'] == 'failed'

@@ -23,8 +23,12 @@ def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None, accum
                 pass
         return state
     compressor_kw = max(0.0, shared_power_kw - max(0.0, element_power_kw))
-    if accumulator_temp is not None and accumulator_temp >= float(os.getenv('GSHP_MAX_TEMP', '55.0')):
-        # The pump's thermostat normally stops it at the accumulator target.
+    target_stop_temp = (
+        float(os.getenv('GSHP_MAX_TEMP', '55.0'))
+        - float(os.getenv('GSHP_FAILURE_TARGET_TEMP_MARGIN_C', '2.0'))
+    )
+    if accumulator_temp is not None and accumulator_temp >= target_stop_temp:
+        # The pump thermostat and temperature sensor can stop short of the configured target.
         state.update({'bad_samples': 0, 'good_samples': 0, 'compressor_kw': compressor_kw})
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,7 +40,7 @@ def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None, accum
     if compressor_kw < minimum_kw:
         state['bad_samples'] += 1
         state['good_samples'] = 0
-        if state['bad_samples'] >= int(os.getenv('GSHP_FAILURE_REQUIRED_BAD_SAMPLES', '3')):
+        if state['bad_samples'] >= int(os.getenv('GSHP_FAILURE_REQUIRED_BAD_SAMPLES', '9')):
             state['status'] = 'failed'
     else:
         state['good_samples'] += 1
