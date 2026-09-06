@@ -4,10 +4,14 @@ import os
 import json
 import pandas as pd
 import numpy as np
+import requests
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from utils.ha_utils import get_ha_state
+
+
+NORDPOOL_PREDICTION_URL = 'https://raw.githubusercontent.com/vividfog/nordpool-predict-fi/main/deploy/prediction.json'
 
 
 def get_grid_fees() -> float:
@@ -187,6 +191,66 @@ def _fetch_sensor_prices(
     return None
 
 
+def _fetch_predicted_spot_prices() -> Optional[pd.Series]:
+    """Fetch raw spot-price predictions in EUR/kWh from nordpool-predict-fi."""
+    url = os.getenv('NORDPOOL_PREDICTION_URL', NORDPOOL_PREDICTION_URL)
+    try:
+        timeout = float(os.getenv('NORDPOOL_PREDICTION_TIMEOUT_SECONDS', '10'))
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, TypeError, ValueError):
+        return None
+
+    if not isinstance(payload, list):
+        return None
+
+    timestamps: list[Any] = []
+    prices: list[float] = []
+    for entry in payload:
+        if not isinstance(entry, list) or len(entry) != 2:
+            continue
+        try:
+            timestamp_ms = float(entry[0])
+            price_eur_per_kwh = float(entry[1]) / 100.0
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(timestamp_ms) and np.isfinite(price_eur_per_kwh):
+            timestamps.append(timestamp_ms)
+            prices.append(price_eur_per_kwh)
+
+    if not timestamps:
+        return None
+
+    series = pd.Series(prices, index=pd.to_datetime(timestamps, unit='ms', utc=True))
+    return series[~series.index.duplicated(keep='last')].sort_index()
+
+
+def _align_predicted_spot_prices(
+    prices: pd.Series,
+    prediction_timestamps: list[str],
+    interval_minutes: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Align hourly predictions without extending values beyond their horizon."""
+    target_index = pd.to_datetime(prediction_timestamps, utc=True)
+    interval = pd.Timedelta(minutes=interval_minutes)
+    aligned = prices.resample(f'{interval_minutes}min').ffill().reindex(target_index, method='ffill')
+
+    if len(prices) > 1:
+        source_interval = pd.Timedelta(prices.index.to_series().diff().dropna().median())
+    else:
+        source_interval = pd.Timedelta(hours=1)
+    if pd.isna(source_interval) or source_interval <= pd.Timedelta(0):
+        source_interval = pd.Timedelta(hours=1)
+
+    covered = (
+        (target_index >= prices.index.min())
+        & (target_index < prices.index.max() + source_interval)
+        & aligned.notna().to_numpy()
+    )
+    return aligned.to_numpy(dtype=float), np.asarray(covered, dtype=bool)
+
+
 def fetch_market_prices(
     prediction_timestamps: list[str],
     interval_minutes: int = 15,
@@ -199,6 +263,7 @@ def fetch_market_prices(
     ]
 
     for sensor in candidate_sensors:
+        source = sensor
         state_data = get_ha_state(sensor)
         if not state_data:
             continue
@@ -235,6 +300,30 @@ def fetch_market_prices(
                 export_prices_base = None
                 if sensor == "sensor.nordpool_total":
                     export_prices_base = _fetch_sensor_prices("sensor.average_electricity_price_today", prediction_timestamps, interval_minutes)
-                return aligned, is_fallback, sensor, is_inclusive, tomorrow_valid, export_prices_base
+
+                if not tomorrow_valid:
+                    predicted_prices = _fetch_predicted_spot_prices()
+                    if predicted_prices is not None:
+                        external_aligned, external_covered = _align_predicted_spot_prices(
+                            predicted_prices, prediction_timestamps, interval_minutes,
+                        )
+                        use_external = np.asarray(is_fallback, dtype=bool) & external_covered
+                        if np.any(use_external):
+                            aligned = np.array(aligned, dtype=float, copy=True)
+                            aligned[use_external] = external_aligned[use_external]
+                            is_fallback = np.array(is_fallback, dtype=bool, copy=True)
+                            is_fallback[use_external] = False
+
+                            # The feed is a raw energy price, matching export.
+                            # Normalize the inclusive source before mixing it.
+                            if is_inclusive:
+                                aligned = np.maximum(aligned - get_grid_fees(), 0.0)
+                                aligned[use_external] = external_aligned[use_external]
+                                is_inclusive = False
+                                export_prices_base = None
+
+                            source = f'{sensor} + nordpool-predict-fi'
+                            tomorrow_valid = not bool(np.any(is_fallback))
+                return aligned, is_fallback, source, is_inclusive, tomorrow_valid, export_prices_base
 
     return None, None, None, False, False, None
