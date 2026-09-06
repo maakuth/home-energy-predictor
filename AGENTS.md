@@ -6,7 +6,7 @@
 - Fix Pyright errors rather than suppressing them.
 - Before changing model behavior, check `.env.template` and `docs/ENV_VARIABLES.md` for a suitable configuration option.
 - Pytest isolates runtime files automatically. Do not bypass that isolation or run operational scripts against live state.
-- Do not access or change Home Assistant, PostgreSQL, or `hepo.db` without explicit permission.
+- Do not change Home Assistant, PostgreSQL, or `hepo.db` without explicit permission. Do not make live Home Assistant or PostgreSQL calls without permission.
 - `pull-from-murrikka.sh` copies runtime artifacts into `state/`; run it only with authorization.
 
 ## Runtime
