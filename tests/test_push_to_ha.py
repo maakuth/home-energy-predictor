@@ -1504,6 +1504,39 @@ class TestSetpointSmoothing(unittest.TestCase):
         )
         self.assertAlmostEqual(result, 7.0)
 
+    def test_override_mode_change_resets_cached_setpoint(self):
+        """Changing override modes applies the new mode's setpoint immediately."""
+        plan = self._make_plan([0.0, 10.0, -10.0, 0.0])
+
+        self.assertAlmostEqual(
+            smooth_planned_setpoint(
+                planned_battery_kw=0.0, planned_action='idle',
+                actual_battery_w=0, plan=plan, override_mode='auto',
+            ),
+            0.0,
+        )
+        self.assertAlmostEqual(
+            smooth_planned_setpoint(
+                planned_battery_kw=10.0, planned_action='charge_grid',
+                actual_battery_w=0, plan=plan, override_mode='charge_grid',
+            ),
+            10.0,
+        )
+        self.assertAlmostEqual(
+            smooth_planned_setpoint(
+                planned_battery_kw=-10.0, planned_action='discharge_mixed',
+                actual_battery_w=0, plan=plan, override_mode='discharge_mixed',
+            ),
+            -10.0,
+        )
+        self.assertAlmostEqual(
+            smooth_planned_setpoint(
+                planned_battery_kw=0.0, planned_action='idle',
+                actual_battery_w=0, plan=plan, override_mode='auto',
+            ),
+            0.0,
+        )
+
 
 class TestRampRateLimiter(unittest.TestCase):
     """Tests for apply_ramp_rate battery power smoothing."""

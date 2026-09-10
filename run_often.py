@@ -292,6 +292,7 @@ def main():
         'discharge_load', 'discharge_export', 'discharge_mixed',
     }
     manual_override = False
+    override_mode = 'auto'
     battery_action_state = get_ha_state(
         os.getenv('BATTERY_ACTION_SELECT_ENTITY', 'input_select.hepo_battery_action')
     )
@@ -299,6 +300,7 @@ def main():
         action_state = battery_action_state.get('state', 'auto')
         if action_state not in ('unknown', 'unavailable', 'auto') and action_state in _MANUAL_ACTIONS:
             manual_override = True
+            override_mode = action_state
             planned_action = action_state
             if planned_action == 'idle':
                 planned_battery_kw = 0.0
@@ -318,6 +320,7 @@ def main():
         plan=plan,
         max_battery_kw=max_battery_kw,
         plan_mtime=plan_mtime,
+        override_mode=override_mode,
     )
 
     planned_battery_kw, planned_action = adjust_charge_solar_for_real_time(

@@ -669,6 +669,7 @@ def smooth_planned_setpoint(
     interval_minutes: int = 15,
     max_battery_kw: float = 10.0,
     plan_mtime: float | None = None,
+    override_mode: str | None = None,
 ) -> float:
     """
     Smooth battery setpoint across 15-min interval boundaries.
@@ -700,16 +701,24 @@ def smooth_planned_setpoint(
             smoothed setpoint is discarded and the fresh plan's value is
             used, so a mid-interval plan change takes effect immediately
             instead of being held for the rest of the interval.
+        override_mode: Effective manual override mode, or ``auto`` when the
+            planner controls the battery. A mode change discards any cached
+            setpoint so manual commands cannot persist after switching modes.
 
     Returns:
         Smoothed battery setpoint in kW, clamped to [-max_battery_kw, max_battery_kw]
     """
     state = _load_setpoint_smooth_state(state_file)
 
+    if override_mode is not None and state.get('override_mode') != override_mode:
+        state = {}
+
     if plan_mtime is not None and state.get('plan_mtime') is not None and plan_mtime != state.get('plan_mtime'):
         state = {}
 
     state['plan_mtime'] = plan_mtime if plan_mtime is not None else state.get('plan_mtime')
+    if override_mode is not None:
+        state['override_mode'] = override_mode
 
     now = datetime.now().astimezone()
     interval_index = int(now.timestamp()) // (interval_minutes * 60)
