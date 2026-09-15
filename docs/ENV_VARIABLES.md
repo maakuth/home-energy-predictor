@@ -149,6 +149,19 @@ Consumed by `optimize()` in `optimize_plan.py`.
 
 ---
 
+## Leaf Charger Control
+
+Consumed by `run_often.py` every 20 seconds. The charger follows the current
+plan entry directly; Home Assistant automations do not need to act on the
+published Leaf intent.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `LEAF_CHARGING_ENTITY` | Leaf charger switch controlled by HEPO. | `switch.tasmota_3` |
+| `LEAF_MANUAL_CHARGING_ENTITY` | Manual-charge boolean. When on, HEPO never turns the Leaf charger off. | `input_boolean.leaf_manuaalinen_lataus` |
+
+---
+
 ## Knobs Used in Code but Missing from `.env.template`
 
 The following variables are read by `optimize_plan.py` (and other modules) but are **not present** in the current `.env.template`. You can add them manually if your deployment needs them.

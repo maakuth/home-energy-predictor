@@ -36,6 +36,8 @@ This document lists the actual entity IDs used by the home-energy-predictor syst
 |-----------|-------------|------|---------|
 | `sensor.xpz_491_battery_level` | Nissan Leaf battery SOC | % | EV charging optimization |
 | `sensor.tasmota_energy_power_3` | EV charger power | W | Load calculations |
+| `switch.tasmota_3` | Leaf charger switch | on/off | Direct control by `run_often.py` |
+| `input_boolean.leaf_manuaalinen_lataus` | Preserve manually-started Leaf charging | on/off | Prevents HEPO from turning the charger off |
 | `device_tracker.xpz_491_position` | Leaf location (Home/Away) | enum | EV charging logic |
 
 ### Other Loads

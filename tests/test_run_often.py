@@ -100,6 +100,73 @@ class TestRunOften(unittest.TestCase):
         )
 
     @patch('run_often.call_ha_service')
+    def test_leaf_charger_follows_current_on_intent(self, mock_service):
+        from run_often import control_leaf_charger
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        control_leaf_charger(
+            {'timestamp': slot.isoformat(), 'leaf_intent': 'ON'},
+            now=slot,
+            plan_mtime=slot.timestamp(),
+        )
+
+        mock_service.assert_called_once_with(
+            'switch', 'turn_on',
+            {'entity_id': 'switch.tasmota_3'},
+            return_response=False,
+        )
+
+    @patch('run_often.call_ha_service')
+    def test_leaf_charger_turns_off_for_current_off_intent(self, mock_service):
+        from run_often import control_leaf_charger
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        control_leaf_charger(
+            {'timestamp': slot.isoformat(), 'leaf_intent': 'OFF'},
+            now=slot,
+            plan_mtime=slot.timestamp(),
+        )
+
+        mock_service.assert_called_once_with(
+            'switch', 'turn_off',
+            {'entity_id': 'switch.tasmota_3'},
+            return_response=False,
+        )
+
+    @patch('run_often.call_ha_service')
+    def test_leaf_charger_preserves_manual_charge_when_plan_is_off(self, mock_service):
+        from run_often import control_leaf_charger
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        control_leaf_charger(
+            {'timestamp': slot.isoformat(), 'leaf_intent': 'OFF'},
+            manual_charging=True,
+            now=slot,
+            plan_mtime=slot.timestamp(),
+        )
+
+        mock_service.assert_not_called()
+
+    @patch('run_often.call_ha_service')
+    def test_leaf_charger_turns_off_for_stale_plan(self, mock_service):
+        from run_often import control_leaf_charger
+        stale = datetime.now().astimezone() - timedelta(hours=1)
+
+        control_leaf_charger(
+            {'timestamp': stale.isoformat(), 'leaf_intent': 'ON'},
+            plan_mtime=stale.timestamp(),
+        )
+
+        mock_service.assert_called_once_with(
+            'switch', 'turn_off',
+            {'entity_id': 'switch.tasmota_3'},
+            return_response=False,
+        )
+
+    @patch('run_often.call_ha_service')
     def test_resistive_heater_heats_when_starting_at_planned_end_temperature(self, mock_service):
         from run_often import control_resistive_heater
         now = datetime.now().astimezone()

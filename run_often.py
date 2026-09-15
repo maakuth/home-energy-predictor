@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
-from utils.ha_utils import call_ha_service, get_ha_state, push_ha_state
+from utils.ha_utils import call_ha_service, get_ha_state, parse_ha_bool, push_ha_state
 from typing import cast
 from utils.type_defs import BatteryAction
 from utils.gshp_health import health_attributes, update_gshp_health
@@ -182,6 +182,43 @@ def control_bulk_heater(
     call_ha_service('switch', 'turn_on' if should_heat else 'turn_off', {'entity_id': entity_id}, return_response=False)
 
 
+def control_leaf_charger(
+    current_plan: dict | None,
+    manual_charging: bool = False,
+    now: datetime | None = None,
+    plan_mtime: float | None = None,
+) -> None:
+    """Apply the current Leaf plan entry without interrupting manual charging."""
+    entity_id = os.getenv('LEAF_CHARGING_ENTITY', 'switch.tasmota_3')
+    now = now or datetime.now().astimezone()
+    plan_is_current = False
+    plan_is_fresh = False
+    if current_plan is not None:
+        try:
+            timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
+            interval_minutes = _get_interval_minutes()
+            current_slot = now.replace(
+                minute=(now.minute // interval_minutes) * interval_minutes,
+                second=0,
+                microsecond=0,
+            )
+            plan_is_current = timestamp.replace(second=0, microsecond=0) == current_slot
+            plan_is_fresh = plan_mtime is None or plan_mtime >= current_slot.timestamp()
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    should_charge = (
+        plan_is_current
+        and plan_is_fresh
+        and current_plan is not None
+        and current_plan.get('leaf_intent') == 'ON'
+    )
+    if should_charge:
+        call_ha_service('switch', 'turn_on', {'entity_id': entity_id}, return_response=False)
+    elif not manual_charging:
+        call_ha_service('switch', 'turn_off', {'entity_id': entity_id}, return_response=False)
+
+
 def main():
     soc = get_ha_state('sensor.be_soc')
     battery_power = get_ha_state('sensor.be_stat_batt_power')
@@ -233,11 +270,17 @@ def main():
         print('No readable optimization_plan.json found')
         plan = None
 
+    manual_leaf_state = get_ha_state(
+        os.getenv('LEAF_MANUAL_CHARGING_ENTITY', 'input_boolean.leaf_manuaalinen_lataus')
+    )
+    manual_leaf_charging = parse_ha_bool(manual_leaf_state, default=False)
+
     if not plan:
         if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
             control_resistive_heater(None, accumulator_temp)
         if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
             control_bulk_heater(None, accumulator_temp)
+        control_leaf_charger(None, manual_charging=manual_leaf_charging)
         return
 
     current = get_current_plan_entry(plan)
@@ -268,6 +311,11 @@ def main():
         control_resistive_heater(current, accumulator_temp, plan_mtime=plan_mtime)
     if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
         control_bulk_heater(current, accumulator_temp, plan_mtime=plan_mtime)
+    control_leaf_charger(
+        current,
+        manual_charging=manual_leaf_charging,
+        plan_mtime=plan_mtime,
+    )
 
     planned_battery_kw = current.get('battery_power_kw', 0.0) if current else 0.0
     planned_action = current.get('battery_action', 'idle') if current else 'idle'
