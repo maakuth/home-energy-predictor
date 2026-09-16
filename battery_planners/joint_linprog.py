@@ -186,6 +186,7 @@ class JointLinprogPlanner(BatteryPlanner):
         kwh_per_degree = (reservoir_l * 4.18) / 3600.0  # ~0.580556 kWh / °C
         min_temp = get_env_float('GSHP_MIN_TEMP', 42.0)
         max_temp = get_env_float('GSHP_MAX_TEMP', 55.0)
+        target_temp = get_env_float('THERMAL_TARGET_TEMP', 55.0)
         heat_loss_k = get_env_float('GSHP_HEAT_LOSS_K', 0.135)
         baseline_demand_kw = get_env_float('GSHP_BASELINE_DEMAND_KW', 1.0)
         sauna_demand_kw = get_env_float('SAUNA_HOT_WATER_DEMAND_KW', 6.0)
@@ -201,6 +202,7 @@ class JointLinprogPlanner(BatteryPlanner):
             max_temp = max(max_temp, get_env_float('BULK_HEATER_MAX_TEMP', 60.0))
         if resistive_enabled:
             max_temp = max(max_temp, get_env_float('RESISTIVE_HEATER_MAX_TEMP', 60.0))
+        target_temp = float(np.clip(target_temp, min_temp, max_temp))
 
         initial_acc_temp = float((context or {}).get('current_acc_temp', get_env_float('GSHP_INITIAL_TEMP', 50.0)))
         initial_acc_temp = np.clip(initial_acc_temp, min_temp, max_temp)
@@ -254,7 +256,8 @@ class JointLinprogPlanner(BatteryPlanner):
         # 14: temp_underflow
         # 15: bulk_heater_kwh (electric)
         # 16: gshp_on (binary; the compressor must run for a complete slot)
-        width = 17
+        # 17: target_thermal_kwh (useful heat stored above the hard minimum)
+        width = 18
         n_vars = width * horizon
 
         def index(i: int, offset: int) -> int:
@@ -264,8 +267,8 @@ class JointLinprogPlanner(BatteryPlanner):
             grid_house, grid_battery, solar_house, solar_battery,
             solar_export, solar_curtail, battery_house, battery_export,
             soc, gshp_kwh, resistive_kwh, acc_temp, leaf_kwh, overflow, temp_underflow,
-            bulk_heater_kwh, gshp_on
-        ) = range(17)
+            bulk_heater_kwh, gshp_on, target_thermal_kwh
+        ) = range(18)
 
         objective = np.zeros(n_vars)
         bounds = []
@@ -307,6 +310,7 @@ class JointLinprogPlanner(BatteryPlanner):
                 (0, None),  # temp_underflow
                 (0, max_bulk_interval_kwh),  # bulk_heater_kwh
                 (0, 1),  # gshp_on
+                (0, (target_temp - min_temp) * kwh_per_degree),  # target_thermal_kwh
             ])
 
         # Terminal valuation
@@ -315,9 +319,13 @@ class JointLinprogPlanner(BatteryPlanner):
             terminal_price = float(np.percentile(import_prices[:horizon], terminal_percentile))
             objective[index(horizon - 1, soc)] = -terminal_price * discharge_eff * (discount ** (horizon - 1))
 
-        # Terminal heat valuation (incentivize leaving tank warm if heated cheaply)
-        avg_price = float(np.mean(import_prices[:horizon]))
-        objective[index(horizon - 1, acc_temp)] = -(avg_price / cop) * (kwh_per_degree * 0.25) * (discount ** (horizon - 1))
+        # Value useful stored heat only up to the operating target. The highest
+        # forecast replacement price makes cheap preheating worthwhile without
+        # paying more now than the heat can displace later.
+        target_heat_value = float(np.max(import_prices[:horizon]))
+        objective[index(horizon - 1, target_thermal_kwh)] = (
+            -target_heat_value * (discount ** (horizon - 1))
+        )
 
         equal_rows: list[np.ndarray] = []
         equal_values: list[float] = []
@@ -417,6 +425,14 @@ class JointLinprogPlanner(BatteryPlanner):
             row[index(i, gshp_on)] = min_gshp_interval_kwh
             upper_rows.append(row)
             upper_values.append(0.0)
+
+        # Stored heat is represented in kWh above the minimum temperature and
+        # capped by its bound at the configured soft target.
+        row = np.zeros(n_vars)
+        row[index(horizon - 1, target_thermal_kwh)] = 1
+        row[index(horizon - 1, acc_temp)] = -kwh_per_degree
+        upper_rows.append(row)
+        upper_values.append(-min_temp * kwh_per_degree)
 
         # 7. Leaf daily target constraint:
         # sum(leaf_kwh[i]) = leaf_target_kwh
