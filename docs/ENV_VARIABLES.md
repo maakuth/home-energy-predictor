@@ -98,6 +98,7 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 |----------|-------------|---------|--------------|
 | `GSHP_INITIAL_TEMP` | Starting accumulator / buffer temperature. | `50.0` | °C. Fallback when `sensor.mlp_varaajan_lampotila` is unavailable in HA. |
 | `GSHP_MIN_TEMP` | Hard minimum accumulator temperature. | `42.0` | °C. If the temperature drops to or below this, the heat pump **must** start regardless of price. |
+| `THERMAL_MIN_TEMP_MARGIN_C` | Thermal safety margin above the hard minimum. | `0.5` | °C. The joint thermal planner holds each planned interval end at or above `GSHP_MIN_TEMP + margin`, compensating for model and control timing error. |
 | `GSHP_MAX_TEMP` | Hard maximum accumulator temperature. | `55.0` | °C. If the temperature reaches this, the heat pump **must** stop. |
 | `GSHP_IS_RUNNING` | Initial on/off state of the heat pump. | `false` | bool. Fallback when `sensor.mlp_teho` is unavailable in HA. |
 | `GSHP_ELECTRIC_POWER_KW` | Fallback nominal electrical power. | `4.0` | kW. **Only used when both `GSHP_POWER_MIN_KW` and `GSHP_POWER_MAX_KW` are absent.** In that case both min and max are set to this value. |

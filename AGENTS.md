@@ -28,4 +28,8 @@
 - Compare plans with observed behavior using `venv/bin/python3 utils/compare_plan_logs.py --summary`. Use `--help` for focused views.
 
 ## Temporary Workspace
-- Run all test-driven development cycles in `/tmp/tmp-workspace`. Symlink `/workspace/venv` and `/workspace/.pruner`, then return changes through a named Git branch. Never copy changes between workspaces manually.
+- Run all test-driven development cycles in `/tmp/tmp-workspace`; never edit application code in `/workspace` directly.
+- Before using it, run `git worktree list` from `/workspace` and `git -C /tmp/tmp-workspace status --short`. If the temporary worktree is dirty or belongs to an active task, stop and ask rather than deleting or overwriting it.
+- From a clean temporary worktree, create the task branch from the intended base with `git switch -c <branch-name> <base-branch>`. This preserves any prior temporary branch while making the new work explicit.
+- Ensure `/tmp/tmp-workspace/venv` and `/tmp/tmp-workspace/.pruner` are symlinks to `/workspace/venv` and `/workspace/.pruner`. These are local workspace aids: do not stage them.
+- Run tests from `/tmp/tmp-workspace` using its `venv` symlink. Return work through the named Git branch; never copy changed files between workspaces manually.

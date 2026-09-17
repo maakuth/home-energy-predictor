@@ -285,6 +285,23 @@ class JointLinprogTests(unittest.TestCase):
         self.assertGreaterEqual(plan[-1].gshp_temp_sim or 0.0, 55.0 - 1e-4)
         self.assertLessEqual(plan[-1].gshp_temp_sim or 0.0, 55.0 + 1e-4)
 
+    def test_resistive_recovers_below_minimum_to_safety_margin(self):
+        plan = self._plan(
+            [0.0], [0.0], [0.50],
+            outside_temps=[20.0], current_acc_temp=44.0,
+            GSHP_OPTIMIZE_ENABLED='0',
+            RESISTIVE_HEATER_OPTIMIZE_ENABLED='1',
+            RESISTIVE_HEATER_POWER_KW='6.0',
+            RESISTIVE_HEATER_EFFECTIVE_LITERS='150',
+            GSHP_MIN_TEMP='45.0',
+            THERMAL_TARGET_TEMP='45.0',
+            GSHP_BASELINE_DEMAND_KW='1.0', GSHP_HEAT_LOSS_K='0.0',
+            BATTERY_MAX_CHARGE_KW='0.0', BATTERY_MAX_DISCHARGE_KW='0.0',
+        )
+
+        self.assertGreater(plan[0].planned_resistive_kw or 0.0, 0.0)
+        self.assertGreaterEqual(plan[0].gshp_temp_sim or 0.0, 45.5 - 1e-4)
+
     def test_upper_element_complements_running_gshp_to_reach_target(self):
         plan = self._plan(
             [0.0, 0.0], [0.0, 0.0], [0.01, 0.50],

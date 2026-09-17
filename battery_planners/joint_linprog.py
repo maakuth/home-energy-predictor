@@ -202,10 +202,13 @@ class JointLinprogPlanner(BatteryPlanner):
             max_temp = max(max_temp, get_env_float('BULK_HEATER_MAX_TEMP', 60.0))
         if resistive_enabled:
             max_temp = max(max_temp, get_env_float('RESISTIVE_HEATER_MAX_TEMP', 60.0))
+        min_temp_margin = max(0.0, get_env_float('THERMAL_MIN_TEMP_MARGIN_C', 0.5))
+        thermal_floor_temp = min(max_temp, min_temp + min_temp_margin)
         target_temp = float(np.clip(target_temp, min_temp, max_temp))
+        target_temp = max(target_temp, thermal_floor_temp)
 
         initial_acc_temp = float((context or {}).get('current_acc_temp', get_env_float('GSHP_INITIAL_TEMP', 50.0)))
-        initial_acc_temp = np.clip(initial_acc_temp, min_temp, max_temp)
+        initial_acc_temp = min(initial_acc_temp, max_temp)
 
         outside_temps = (context or {}).get('outside_temps')
         if outside_temps is None or len(outside_temps) < horizon:
@@ -304,13 +307,13 @@ class JointLinprogPlanner(BatteryPlanner):
                 (min_soc_kwh, max_soc_kwh),  # soc
                 (0, max_gshp_interval_kwh),  # gshp_kwh
                 (0, max_resistive_interval_kwh),  # resistive_kwh
-                (min_temp, max_temp),  # acc_temp
+                (thermal_floor_temp, max_temp),  # acc_temp
                 (0, max_leaf_interval_kwh),  # leaf_kwh
                 (0, None),  # overflow
                 (0, None),  # temp_underflow
                 (0, max_bulk_interval_kwh),  # bulk_heater_kwh
                 (0, 1),  # gshp_on
-                (0, (target_temp - min_temp) * kwh_per_degree),  # target_thermal_kwh
+                (0, (target_temp - thermal_floor_temp) * kwh_per_degree),  # target_thermal_kwh
             ])
 
         # Terminal valuation
@@ -426,13 +429,13 @@ class JointLinprogPlanner(BatteryPlanner):
             upper_rows.append(row)
             upper_values.append(0.0)
 
-        # Stored heat is represented in kWh above the minimum temperature and
+        # Stored heat is represented in kWh above the safety floor and
         # capped by its bound at the configured soft target.
         row = np.zeros(n_vars)
         row[index(horizon - 1, target_thermal_kwh)] = 1
         row[index(horizon - 1, acc_temp)] = -kwh_per_degree
         upper_rows.append(row)
-        upper_values.append(-min_temp * kwh_per_degree)
+        upper_values.append(-thermal_floor_temp * kwh_per_degree)
 
         # 7. Leaf daily target constraint:
         # sum(leaf_kwh[i]) = leaf_target_kwh
