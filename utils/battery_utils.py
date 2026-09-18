@@ -16,6 +16,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import call_ha_service, get_ha_state
 from utils.type_defs import BatteryAction
+from utils.plan_time import current_plan_entry
 
 load_dotenv(override=True)
 
@@ -29,24 +30,13 @@ BATTERY_CONTROL_ENTITY_ID: str = os.getenv(
 def get_current_plan_entry(
     plan: list[dict[str, Any]],
     interval_minutes: int = 15,
+    now: datetime | None = None,
 ) -> Optional[dict[str, Any]]:
-    if not plan:
-        return None
-
-    now = datetime.now().astimezone()
-    current_slot = now.replace(
-        minute=(now.minute // interval_minutes) * interval_minutes,
-        second=0,
-        microsecond=0
+    return current_plan_entry(
+        plan,
+        now or datetime.now().astimezone(),
+        interval_minutes,
     )
-    for entry in plan:
-        if 'timestamp' not in entry:
-            continue
-        ts = datetime.fromisoformat(entry['timestamp'])
-        if ts.replace(second=0, microsecond=0) == current_slot:
-            return entry
-
-    return plan[0]
 
 
 def is_battery_available() -> bool:

@@ -109,6 +109,75 @@ class OptimizeArchivingTests(unittest.TestCase):
             self.assertEqual(json.load(f), plan)
         self.assertFalse(os.path.exists(f'{self.plan_file}.tmp'))
 
+    def test_current_discrete_loads_are_latched_from_previous_plan(self):
+        from optimize_plan import latch_current_discrete_loads
+
+        now = datetime(2026, 9, 18, 7, 1, tzinfo=timezone.utc)
+        current = '2026-09-18T07:00:00+00:00'
+        future = '2026-09-18T07:15:00+00:00'
+        previous = [{
+            'timestamp': current,
+            'leaf_intent': 'OFF',
+            'planned_leaf_kw': 0.0,
+            'resistive_heater_intent': 'ON',
+            'planned_resistive_kw': 3.0,
+            'bulk_heater_intent': 'OFF',
+            'planned_bulk_heater_kw': 0.0,
+        }]
+        candidate = [
+            {
+                'timestamp': current,
+                'leaf_intent': 'ON',
+                'planned_leaf_kw': 3.0,
+                'resistive_heater_intent': 'OFF',
+                'planned_resistive_kw': 0.0,
+                'bulk_heater_intent': 'ON',
+                'planned_bulk_heater_kw': 6.0,
+            },
+            {
+                'timestamp': future,
+                'leaf_intent': 'ON',
+                'planned_leaf_kw': 3.0,
+                'resistive_heater_intent': 'OFF',
+                'planned_resistive_kw': 0.0,
+                'bulk_heater_intent': 'ON',
+                'planned_bulk_heater_kw': 6.0,
+            },
+        ]
+
+        latch_current_discrete_loads(candidate, previous, now, interval_minutes=15)
+
+        self.assertEqual(candidate[0]['leaf_intent'], 'OFF')
+        self.assertEqual(candidate[0]['planned_leaf_kw'], 0.0)
+        self.assertEqual(candidate[0]['resistive_heater_intent'], 'ON')
+        self.assertEqual(candidate[0]['planned_resistive_kw'], 3.0)
+        self.assertEqual(candidate[0]['bulk_heater_intent'], 'OFF')
+        self.assertEqual(candidate[1]['leaf_intent'], 'ON')
+        self.assertEqual(candidate[1]['bulk_heater_intent'], 'ON')
+
+    def test_current_discrete_loads_fail_closed_without_previous_slot(self):
+        from optimize_plan import latch_current_discrete_loads
+
+        now = datetime(2026, 9, 18, 7, 1, tzinfo=timezone.utc)
+        candidate = [{
+            'timestamp': '2026-09-18T07:00:00+00:00',
+            'leaf_intent': 'ON',
+            'planned_leaf_kw': 3.0,
+            'resistive_heater_intent': 'ON',
+            'planned_resistive_kw': 6.0,
+            'bulk_heater_intent': 'ON',
+            'planned_bulk_heater_kw': 6.0,
+        }]
+
+        latch_current_discrete_loads(candidate, [], now, interval_minutes=15)
+
+        self.assertEqual(candidate[0]['leaf_intent'], 'OFF')
+        self.assertEqual(candidate[0]['planned_leaf_kw'], 0.0)
+        self.assertEqual(candidate[0]['resistive_heater_intent'], 'OFF')
+        self.assertEqual(candidate[0]['planned_resistive_kw'], 0.0)
+        self.assertEqual(candidate[0]['bulk_heater_intent'], 'OFF')
+        self.assertEqual(candidate[0]['planned_bulk_heater_kw'], 0.0)
+
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')
     @patch('optimize_plan.get_db_connection')

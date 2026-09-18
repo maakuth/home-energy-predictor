@@ -126,6 +126,7 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 | `BULK_HEATER_POWER_KW` | Fixed electrical and thermal output while on. | `6.0` | kW. Included in shared-meter, grid, and fuse calculations. |
 | `BULK_HEATER_EFFICIENCY` | Electrical-to-thermal conversion efficiency. | `1.0` | Dimensionless. |
 | `BULK_HEATER_MAX_TEMP` | Bulk-element safety ceiling. | `60.0` | °C. Upper accumulator temperature is used as the runtime cutoff. |
+| `DISCRETE_LOAD_CONTROL_STATE_FILE` | Persistent per-slot runtime accounting for both heater relays. | `state/discrete_load_control.json` | `run_often.py` records observed ON time atomically so delayed starts and safety interruptions do not consume the planned duty-cycle budget. |
 
 ---
 
@@ -153,9 +154,11 @@ Consumed by `optimize()` in `optimize_plan.py`.
 
 ## Leaf Charger Control
 
-Consumed by `run_often.py` every 20 seconds. The charger follows the current
-plan entry directly; Home Assistant automations do not need to act on the
-published Leaf intent.
+Consumed by `run_often.py` every 20 seconds. Leaf and heater allocations are
+latched when a planning interval starts; replanning only changes later slots.
+The charger follows the exact current plan entry directly, and missing current
+entries fail closed rather than falling back to the first available entry.
+Home Assistant automations do not need to act on the published Leaf intent.
 
 | Variable | Description | Example |
 |----------|-------------|---------|

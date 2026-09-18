@@ -264,8 +264,8 @@ class TestGetCurrentPlanEntry(unittest.TestCase):
             result = get_current_plan_entry(plan)
             self.assertEqual(result['battery_action'], 'discharge_export')
 
-    def test_fallback_to_first(self):
-        """If no entry matches current time, fallback to plan[0]."""
+    def test_does_not_fallback_to_future_entry(self):
+        """A future entry must not be treated as the current control intent."""
         from datetime import datetime, timezone
         now = datetime(2026, 6, 10, 9, 46, 30, tzinfo=timezone.utc)
         plan = [
@@ -276,7 +276,7 @@ class TestGetCurrentPlanEntry(unittest.TestCase):
             mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
             mock_dt.fromisoformat.side_effect = lambda s: datetime.fromisoformat(s)
             result = get_current_plan_entry(plan)
-            self.assertEqual(result['battery_action'], 'follow')
+            self.assertIsNone(result)
 
     def test_empty_plan(self):
         """Empty plan should return None."""
