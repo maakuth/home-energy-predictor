@@ -7,6 +7,7 @@ from utils.ha_utils import call_ha_service, get_ha_state, parse_ha_bool, push_ha
 from typing import cast
 from utils.type_defs import BatteryAction
 from utils.gshp_health import health_attributes, update_gshp_health
+from utils.plan_time import slot_start
 from utils.battery_utils import (
     push_battery_control,
     compute_load_following_setpoint,
@@ -40,6 +41,72 @@ def _get_interval_minutes() -> int:
         return 15
 
 
+def _load_discrete_control_state(path: str, slot_id: str) -> dict:
+    try:
+        with open(path) as f:
+            state = json.load(f)
+        if not isinstance(state, dict) or state.get('slot_id') != slot_id:
+            return {'slot_id': slot_id, 'loads': {}}
+        if not isinstance(state.get('loads'), dict):
+            state['loads'] = {}
+        return state
+    except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+        return {'slot_id': slot_id, 'loads': {}}
+
+
+def _save_discrete_control_state(path: str, state: dict) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    temp_path = f'{path}.tmp'
+    with open(temp_path, 'w') as f:
+        json.dump(state, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temp_path, path)
+
+
+def _heater_runtime_remaining(
+    load_name: str,
+    slot_id: str,
+    now: datetime,
+    target_runtime_seconds: float,
+    observed_on: bool | None,
+    completed: bool = False,
+) -> tuple[bool, dict]:
+    """Account delivered relay-on time and return whether more is required."""
+    state_file = os.getenv(
+        'DISCRETE_LOAD_CONTROL_STATE_FILE',
+        'state/discrete_load_control.json',
+    )
+    state = _load_discrete_control_state(state_file, slot_id)
+    load_state = state['loads'].get(load_name, {})
+    delivered_seconds = max(0.0, float(load_state.get('delivered_seconds', 0.0)))
+    last_updated_raw = load_state.get('last_updated')
+    if last_updated_raw:
+        try:
+            last_updated = datetime.fromisoformat(str(last_updated_raw))
+            was_on = observed_on if observed_on is not None else bool(load_state.get('last_command_on', False))
+            if was_on:
+                delivered_seconds += max(0.0, (now - last_updated).total_seconds())
+        except (TypeError, ValueError):
+            pass
+    is_completed = completed or bool(load_state.get('completed', False))
+    should_run = not is_completed and delivered_seconds + 1e-6 < target_runtime_seconds
+    state['loads'][load_name] = {
+        'delivered_seconds': delivered_seconds,
+        'last_updated': now.isoformat(),
+        'last_command_on': should_run,
+        'completed': is_completed,
+        'target_runtime_seconds': target_runtime_seconds,
+    }
+    try:
+        _save_discrete_control_state(state_file, state)
+    except OSError as exc:
+        print(f'Could not persist {load_name} runtime: {exc}')
+    return should_run, state['loads'][load_name]
+
+
 def _fuse_still_overloaded(
     battery_kw: float,
     battery_w: float,
@@ -60,29 +127,22 @@ def control_resistive_heater(
     accumulator_temp: float | None,
     now: datetime | None = None,
     plan_mtime: float | None = None,
+    observed_on: bool | None = None,
 ) -> None:
     """Deliver the planned resistive energy while failing closed on unsafe state."""
     entity_id = os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')
     max_temp = float(os.getenv('RESISTIVE_HEATER_MAX_TEMP', '60.0'))
     heater_kw = max(0.0, float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')))
     plan_is_current = False
-    plan_is_fresh = False
     slot_id = None
-    elapsed_seconds = 0.0
     now = now or datetime.now().astimezone()
     if current_plan is not None:
         try:
             timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
             interval_minutes = _get_interval_minutes()
-            current_slot = now.replace(
-                minute=(now.minute // interval_minutes) * interval_minutes,
-                second=0,
-                microsecond=0,
-            )
+            current_slot = slot_start(now, interval_minutes)
             plan_is_current = timestamp.replace(second=0, microsecond=0) == current_slot
-            plan_is_fresh = plan_mtime is None or plan_mtime >= current_slot.timestamp()
             slot_id = current_slot.isoformat()
-            elapsed_seconds = max(0.0, (now - current_slot).total_seconds())
         except (KeyError, TypeError, ValueError):
             plan_is_current = False
     state_file = os.getenv(
@@ -99,7 +159,6 @@ def control_resistive_heater(
     reached_cutoff = (
         current_plan is not None
         and plan_is_current
-        and plan_is_fresh
         and current_plan.get('resistive_heater_intent') == 'ON'
         and accumulator_temp is not None
         and accumulator_temp >= max_temp
@@ -121,23 +180,27 @@ def control_resistive_heater(
             planned_kw = max(0.0, min(heater_kw, float(current_plan.get('planned_resistive_kw', 0.0))))
         except (TypeError, ValueError):
             pass
-    planned_runtime_seconds = (
+    target_runtime_seconds = (
         _get_interval_minutes() * 60.0 * planned_kw / heater_kw
         if heater_kw > 0 else 0.0
     )
 
+    runtime_remaining = False
+    if slot_id is not None:
+        runtime_remaining, _ = _heater_runtime_remaining(
+            'resistive', slot_id, now, target_runtime_seconds, observed_on,
+            completed=reached_cutoff or completed_slot == slot_id,
+        )
+
     should_heat = (
         current_plan is not None
         and plan_is_current
-        and plan_is_fresh
         and completed_slot != slot_id
         and current_plan.get('resistive_heater_intent') == 'ON'
         and accumulator_temp is not None
         and accumulator_temp < max_temp
-        and elapsed_seconds < planned_runtime_seconds
+        and runtime_remaining
     )
-    if current_plan is not None and plan_is_current and not plan_is_fresh:
-        print('Resistive heater held off: plan predates current interval')
     call_ha_service(
         'switch', 'turn_on' if should_heat else 'turn_off',
         {'entity_id': entity_id}, return_response=False,
@@ -149,6 +212,7 @@ def control_bulk_heater(
     accumulator_temp: float | None,
     now: datetime | None = None,
     plan_mtime: float | None = None,
+    observed_on: bool | None = None,
 ) -> None:
     """Deliver the whole-reservoir element plan with the same fail-closed rules."""
     entity_id = os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1')
@@ -156,28 +220,37 @@ def control_bulk_heater(
     heater_kw = max(0.0, float(os.getenv('BULK_HEATER_POWER_KW', '6.0')))
     now = now or datetime.now().astimezone()
     is_current = False
-    is_fresh = False
-    elapsed_seconds = 0.0
+    slot_id = None
     if current_plan is not None:
         try:
             timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
             interval_minutes = _get_interval_minutes()
-            slot = now.replace(minute=(now.minute // interval_minutes) * interval_minutes, second=0, microsecond=0)
+            slot = slot_start(now, interval_minutes)
             is_current = timestamp.replace(second=0, microsecond=0) == slot
-            is_fresh = plan_mtime is None or plan_mtime >= slot.timestamp()
-            elapsed_seconds = max(0.0, (now - slot).total_seconds())
+            slot_id = slot.isoformat()
         except (KeyError, TypeError, ValueError):
             pass
     try:
         planned_kw = max(0.0, min(heater_kw, float((current_plan or {}).get('planned_bulk_heater_kw', 0.0))))
     except (TypeError, ValueError):
         planned_kw = 0.0
+    target_runtime_seconds = (
+        _get_interval_minutes() * 60.0 * planned_kw / heater_kw
+        if heater_kw > 0 else 0.0
+    )
+    reached_cutoff = accumulator_temp is not None and accumulator_temp >= max_temp
+    runtime_remaining = False
+    if slot_id is not None:
+        runtime_remaining, _ = _heater_runtime_remaining(
+            'bulk', slot_id, now, target_runtime_seconds, observed_on,
+            completed=reached_cutoff,
+        )
     should_heat = (
-        current_plan is not None and is_current and is_fresh
+        current_plan is not None and is_current
         and current_plan.get('bulk_heater_intent') == 'ON'
         and accumulator_temp is not None and accumulator_temp < max_temp
         and heater_kw > 0
-        and elapsed_seconds < _get_interval_minutes() * 60.0 * planned_kw / heater_kw
+        and runtime_remaining
     )
     call_ha_service('switch', 'turn_on' if should_heat else 'turn_off', {'entity_id': entity_id}, return_response=False)
 
@@ -192,24 +265,17 @@ def control_leaf_charger(
     entity_id = os.getenv('LEAF_CHARGING_ENTITY', 'switch.tasmota_3')
     now = now or datetime.now().astimezone()
     plan_is_current = False
-    plan_is_fresh = False
     if current_plan is not None:
         try:
             timestamp = datetime.fromisoformat(str(current_plan['timestamp'])).astimezone()
             interval_minutes = _get_interval_minutes()
-            current_slot = now.replace(
-                minute=(now.minute // interval_minutes) * interval_minutes,
-                second=0,
-                microsecond=0,
-            )
+            current_slot = slot_start(now, interval_minutes)
             plan_is_current = timestamp.replace(second=0, microsecond=0) == current_slot
-            plan_is_fresh = plan_mtime is None or plan_mtime >= current_slot.timestamp()
         except (KeyError, TypeError, ValueError):
             pass
 
     should_charge = (
         plan_is_current
-        and plan_is_fresh
         and current_plan is not None
         and current_plan.get('leaf_intent') == 'ON'
     )
@@ -220,6 +286,7 @@ def control_leaf_charger(
 
 
 def main():
+    now = datetime.now().astimezone()
     soc = get_ha_state('sensor.be_soc')
     battery_power = get_ha_state('sensor.be_stat_batt_power')
     grid_power = get_ha_state('sensor.sahkokauppa_20s')
@@ -283,9 +350,17 @@ def main():
         control_leaf_charger(None, manual_charging=manual_leaf_charging)
         return
 
-    current = get_current_plan_entry(plan)
+    interval_minutes = _get_interval_minutes()
+    current = get_current_plan_entry(plan, interval_minutes=interval_minutes, now=now)
     if current is None:
-        print('No current plan entry found')
+        print('No exact current plan entry found; applying safe outputs')
+        if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+            control_resistive_heater(None, accumulator_temp, now=now)
+        if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+            control_bulk_heater(None, accumulator_temp, now=now)
+        control_leaf_charger(None, manual_charging=manual_leaf_charging, now=now)
+        push_battery_control(battery_power_w=0, battery_action='idle', battery_soc_pct=soc_pct)
+        return
 
     upper = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
     bulk = get_ha_state(os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'))
@@ -308,12 +383,19 @@ def main():
         print(f"GSHP electrical fault latched: compressor={health.get('compressor_kw', 0.0):.2f}kW")
 
     if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
-        control_resistive_heater(current, accumulator_temp, plan_mtime=plan_mtime)
+        control_resistive_heater(
+            current, accumulator_temp, now=now, plan_mtime=plan_mtime,
+            observed_on=str((upper or {}).get('state', '')).lower() == 'on',
+        )
     if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
-        control_bulk_heater(current, accumulator_temp, plan_mtime=plan_mtime)
+        control_bulk_heater(
+            current, accumulator_temp, now=now, plan_mtime=plan_mtime,
+            observed_on=str((bulk or {}).get('state', '')).lower() == 'on',
+        )
     control_leaf_charger(
         current,
         manual_charging=manual_leaf_charging,
+        now=now,
         plan_mtime=plan_mtime,
     )
 

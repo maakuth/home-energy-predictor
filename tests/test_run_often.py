@@ -27,10 +27,19 @@ class TestRunOften(unittest.TestCase):
         os.chdir(self.orig_cwd)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
-    def _make_plan_file(self, state_dir: str, extra_fields: dict | None = None):
+    def _make_plan_file(
+        self,
+        state_dir: str,
+        extra_fields: dict | None = None,
+        interval_minutes: int = 15,
+    ):
         """Create a minimal optimization_plan.json."""
         now = datetime.now(timezone.utc)
-        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        slot = now.replace(
+            minute=(now.minute // interval_minutes) * interval_minutes,
+            second=0,
+            microsecond=0,
+        )
         plan_entry = {
             'timestamp': slot.isoformat(),
             'battery_power_kw': 1.5,
@@ -167,6 +176,46 @@ class TestRunOften(unittest.TestCase):
         )
 
     @patch('run_often.call_ha_service')
+    def test_leaf_charger_accepts_current_entry_from_plan_created_before_slot(self, mock_service):
+        from run_often import control_leaf_charger
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        control_leaf_charger(
+            {'timestamp': slot.isoformat(), 'leaf_intent': 'ON'},
+            now=slot,
+            plan_mtime=(slot - timedelta(minutes=15)).timestamp(),
+        )
+
+        self.assertEqual(mock_service.call_args.args[1], 'turn_on')
+
+    @patch('run_often.call_ha_service')
+    def test_resistive_heater_tracks_delivered_runtime_after_delayed_start(self, mock_service):
+        from run_often import control_resistive_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        plan = {
+            'timestamp': slot.isoformat(),
+            'resistive_heater_intent': 'ON',
+            'planned_resistive_kw': 3.0,
+        }
+        state_file = os.path.join(self.test_dir, 'state', 'discrete_load_control.json')
+
+        with patch.dict(os.environ, {'DISCRETE_LOAD_CONTROL_STATE_FILE': state_file}):
+            control_resistive_heater(plan, accumulator_temp=45.0, now=slot + timedelta(minutes=5))
+            control_resistive_heater(
+                plan, accumulator_temp=45.0, now=slot + timedelta(minutes=10), observed_on=True,
+            )
+            control_resistive_heater(
+                plan, accumulator_temp=45.0, now=slot + timedelta(minutes=13), observed_on=True,
+            )
+
+        self.assertEqual(
+            [item.args[1] for item in mock_service.call_args_list],
+            ['turn_on', 'turn_on', 'turn_off'],
+        )
+
+    @patch('run_often.call_ha_service')
     def test_resistive_heater_heats_when_starting_at_planned_end_temperature(self, mock_service):
         from run_often import control_resistive_heater
         now = datetime.now().astimezone()
@@ -186,7 +235,7 @@ class TestRunOften(unittest.TestCase):
         self.assertEqual(mock_service.call_args.args[1], 'turn_on')
 
     @patch('run_often.call_ha_service')
-    def test_resistive_heater_rejects_plan_from_previous_slot(self, mock_service):
+    def test_resistive_heater_accepts_current_entry_from_plan_created_before_slot(self, mock_service):
         from run_often import control_resistive_heater
         now = datetime.now().astimezone()
         slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
@@ -202,7 +251,7 @@ class TestRunOften(unittest.TestCase):
             plan_mtime=(slot - timedelta(seconds=1)).timestamp(),
         )
 
-        self.assertEqual(mock_service.call_args.args[1], 'turn_off')
+        self.assertEqual(mock_service.call_args.args[1], 'turn_on')
 
     @patch('run_often.call_ha_service')
     def test_resistive_heater_control_fails_closed(self, mock_service):
@@ -409,7 +458,7 @@ class TestRunOften(unittest.TestCase):
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')
     def test_no_current_plan_entry(self, mock_get_ha, mock_push):
-        """When no entry matches current time, first entry is used (fallback)."""
+        """When no entry matches current time, the battery is neutralized."""
         # Create plan with only future timestamps
         now = datetime.now(timezone.utc)
         far_future = now.replace(hour=(now.hour + 3) % 24)
@@ -429,6 +478,8 @@ class TestRunOften(unittest.TestCase):
             main()
 
         mock_push.assert_called_once()
+        self.assertEqual(mock_push.call_args.kwargs['battery_power_w'], 0)
+        self.assertEqual(mock_push.call_args.kwargs['battery_action'], 'idle')
 
     @patch('run_often.push_battery_control')
     @patch('run_often.get_ha_state')
@@ -517,7 +568,7 @@ class TestRunOften(unittest.TestCase):
             'battery_power_kw': -1.0,
             'battery_action': 'discharge_load',
             'discharge_budget_kwh': 1.0,
-        })
+        }, interval_minutes=60)
         mock_get_ha.side_effect = lambda eid: {'state': '50.0'}
 
         with patch.dict(os.environ, {

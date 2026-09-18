@@ -21,6 +21,7 @@ from utils.gshp_health import gshp_is_failed
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.db_utils import fetch_states_history
 from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPlannerContext
+from utils.plan_time import current_plan_entry
 
 load_dotenv(override=True)
 
@@ -40,6 +41,31 @@ def write_plan_atomically(plan_file: str, plan: list[dict[str, Any]]) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+_DISCRETE_LOAD_FIELDS = {
+    'leaf_intent': 'OFF',
+    'planned_leaf_kw': 0.0,
+    'resistive_heater_intent': 'OFF',
+    'planned_resistive_kw': 0.0,
+    'bulk_heater_intent': 'OFF',
+    'planned_bulk_heater_kw': 0.0,
+}
+
+
+def latch_current_discrete_loads(
+    candidate_plan: list[dict[str, Any]],
+    previous_plan: list[dict[str, Any]],
+    now: datetime,
+    interval_minutes: int,
+) -> None:
+    """Keep Leaf and heater allocation immutable after an interval starts."""
+    candidate = current_plan_entry(candidate_plan, now, interval_minutes)
+    if candidate is None:
+        return
+    previous = current_plan_entry(previous_plan, now, interval_minutes)
+    for field, safe_value in _DISCRETE_LOAD_FIELDS.items():
+        candidate[field] = previous.get(field, safe_value) if previous else safe_value
 
 
 # Backward compatibility wrapper for tests
@@ -910,8 +936,24 @@ def optimize() -> None:
         entry['effective_cost'] = compute_effective_cost(entry)
         final_plan.append(entry)
         
-    # Support environment variable override for testing
+    # A plan completed after the interval boundary must not revise discrete
+    # loads already committed for that interval. Future intervals remain free
+    # to use the newly optimized allocation.
     plan_file = os.getenv('TEST_PLAN_FILE', 'state/optimization_plan.json')
+    previous_plan: list[dict[str, Any]] = []
+    try:
+        with open(plan_file) as f:
+            loaded_plan = json.load(f)
+        if isinstance(loaded_plan, list):
+            previous_plan = loaded_plan
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    latch_current_discrete_loads(
+        final_plan,
+        previous_plan,
+        datetime.now().astimezone(),
+        get_plan_interval_minutes(),
+    )
     write_plan_atomically(plan_file, final_plan)
     print(f'\n✅ Plan saved to {plan_file}')
 
