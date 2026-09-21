@@ -302,6 +302,50 @@ class JointLinprogTests(unittest.TestCase):
         self.assertGreater(plan[0].planned_resistive_kw or 0.0, 0.0)
         self.assertGreaterEqual(plan[0].gshp_temp_sim or 0.0, 45.5 - 1e-4)
 
+    def test_temperature_deficit_does_not_create_phantom_heat(self):
+        plan = self._plan(
+            [0.0], [0.0], [0.50],
+            outside_temps=[20.0], current_acc_temp=30.0,
+            GSHP_OPTIMIZE_ENABLED='0',
+            RESISTIVE_HEATER_OPTIMIZE_ENABLED='0',
+            BULK_HEATER_OPTIMIZE_ENABLED='0',
+            LEAF_OPTIMIZE_ENABLED='1', LEAF_DAILY_TARGET_KWH='0',
+            GSHP_MIN_TEMP='45.0',
+            GSHP_BASELINE_DEMAND_KW='0.0', GSHP_HEAT_LOSS_K='0.0',
+        )
+
+        self.assertAlmostEqual(plan[0].gshp_temp_sim or 0.0, 30.0, places=4)
+
+    def test_bulk_heater_maximizes_recovery_when_floor_is_unreachable(self):
+        plan = self._plan(
+            [0.0], [0.0], [0.50],
+            outside_temps=[20.0], current_acc_temp=30.0,
+            GSHP_OPTIMIZE_ENABLED='0',
+            RESISTIVE_HEATER_OPTIMIZE_ENABLED='0',
+            BULK_HEATER_OPTIMIZE_ENABLED='1', BULK_HEATER_POWER_KW='6.0',
+            GSHP_MIN_TEMP='45.0',
+            GSHP_BASELINE_DEMAND_KW='0.0', GSHP_HEAT_LOSS_K='0.0',
+            BATTERY_MAX_CHARGE_KW='0.0', BATTERY_MAX_DISCHARGE_KW='0.0',
+        )
+
+        self.assertAlmostEqual(plan[0].planned_bulk_heater_kw or 0.0, 6.0, places=4)
+        expected_temp = 30.0 + 6.0 / ((500.0 * 4.18) / 3600.0)
+        self.assertAlmostEqual(plan[0].gshp_temp_sim or 0.0, expected_temp, places=4)
+
+    def test_negative_prices_do_not_make_terminal_heat_unbounded(self):
+        plan = self._plan(
+            [0.0], [0.0], [-0.50],
+            outside_temps=[20.0], current_acc_temp=30.0,
+            GSHP_OPTIMIZE_ENABLED='0',
+            RESISTIVE_HEATER_OPTIMIZE_ENABLED='0',
+            BULK_HEATER_OPTIMIZE_ENABLED='1', BULK_HEATER_POWER_KW='6.0',
+            GSHP_MIN_TEMP='45.0',
+            GSHP_BASELINE_DEMAND_KW='0.0', GSHP_HEAT_LOSS_K='0.0',
+            BATTERY_MAX_CHARGE_KW='0.0', BATTERY_MAX_DISCHARGE_KW='0.0',
+        )
+
+        self.assertAlmostEqual(plan[0].planned_bulk_heater_kw or 0.0, 6.0, places=4)
+
     def test_upper_element_complements_running_gshp_to_reach_target(self):
         plan = self._plan(
             [0.0, 0.0], [0.0, 0.0], [0.01, 0.50],

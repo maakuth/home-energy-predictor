@@ -307,13 +307,13 @@ class JointLinprogPlanner(BatteryPlanner):
                 (min_soc_kwh, max_soc_kwh),  # soc
                 (0, max_gshp_interval_kwh),  # gshp_kwh
                 (0, max_resistive_interval_kwh),  # resistive_kwh
-                (thermal_floor_temp, max_temp),  # acc_temp
+                (None, max_temp),  # acc_temp; floor violations are tracked explicitly
                 (0, max_leaf_interval_kwh),  # leaf_kwh
                 (0, None),  # overflow
                 (0, None),  # temp_underflow
                 (0, max_bulk_interval_kwh),  # bulk_heater_kwh
                 (0, 1),  # gshp_on
-                (0, (target_temp - thermal_floor_temp) * kwh_per_degree),  # target_thermal_kwh
+                (None, (target_temp - thermal_floor_temp) * kwh_per_degree),  # target_thermal_kwh
             ])
 
         # Terminal valuation
@@ -322,10 +322,10 @@ class JointLinprogPlanner(BatteryPlanner):
             terminal_price = float(np.percentile(import_prices[:horizon], terminal_percentile))
             objective[index(horizon - 1, soc)] = -terminal_price * discharge_eff * (discount ** (horizon - 1))
 
-        # Value useful stored heat only up to the operating target. The highest
-        # forecast replacement price makes cheap preheating worthwhile without
-        # paying more now than the heat can displace later.
-        target_heat_value = float(np.max(import_prices[:horizon]))
+        # Value terminal heat relative to the safety floor up to the operating
+        # target. A below-floor terminal state therefore carries both its safety
+        # penalty and the replacement value of its missing heat.
+        target_heat_value = max(0.0, float(np.max(import_prices[:horizon])))
         objective[index(horizon - 1, target_thermal_kwh)] = (
             -target_heat_value * (discount ** (horizon - 1))
         )
@@ -372,14 +372,13 @@ class JointLinprogPlanner(BatteryPlanner):
                 equal_values.append(0.0)
             equal_rows.append(row)
 
-            # 4. Thermal accumulator dynamics:
-            # acc_temp[i] - acc_temp[i-1] - (cop * heating_eff / kwh_per_degree)*gshp_kwh[i] - temp_underflow[i] = - (demand * dt / kwh_per_degree)
+            # 4. Thermal accumulator dynamics. temp_underflow is deliberately
+            # excluded: it measures a safety deficit and must never create heat.
             row = np.zeros(n_vars)
             row[index(i, acc_temp)] = 1
             row[index(i, gshp_kwh)] = -(cop * heating_eff) / kwh_per_degree
             row[index(i, resistive_kwh)] = -resistive_eff / resistive_kwh_per_degree
             row[index(i, bulk_heater_kwh)] = -bulk_eff / kwh_per_degree
-            row[index(i, temp_underflow)] = -1.0
             thermal_loss_deg = (thermal_demand_kw[i] * interval_hours) / kwh_per_degree
             if i == 0:
                 equal_values.append(initial_acc_temp - thermal_loss_deg)
@@ -387,6 +386,13 @@ class JointLinprogPlanner(BatteryPlanner):
                 row[index(i - 1, acc_temp)] = -1
                 equal_values.append(-thermal_loss_deg)
             equal_rows.append(row)
+
+            # temp_underflow[i] >= thermal_floor_temp - acc_temp[i]
+            row = np.zeros(n_vars)
+            row[index(i, acc_temp)] = -1.0
+            row[index(i, temp_underflow)] = -1.0
+            upper_rows.append(row)
+            upper_values.append(-thermal_floor_temp)
 
             # 5. Battery power limits
             # Charging: grid_battery + solar_battery <= max_charge
@@ -429,8 +435,9 @@ class JointLinprogPlanner(BatteryPlanner):
             upper_rows.append(row)
             upper_values.append(0.0)
 
-        # Stored heat is represented in kWh above the safety floor and
-        # capped by its bound at the configured soft target.
+        # Terminal thermal energy is signed relative to the safety floor and
+        # capped by its bound at the configured soft target. Keeping deficits
+        # negative avoids using the floor slack to claim nonexistent heat.
         row = np.zeros(n_vars)
         row[index(horizon - 1, target_thermal_kwh)] = 1
         row[index(horizon - 1, acc_temp)] = -kwh_per_degree
@@ -446,7 +453,9 @@ class JointLinprogPlanner(BatteryPlanner):
             equal_rows.append(row)
             equal_values.append(leaf_target_kwh)
 
-        lower_bounds = np.asarray([bound[0] for bound in bounds], dtype=float)
+        lower_bounds = np.asarray([
+            -np.inf if bound[0] is None else bound[0] for bound in bounds
+        ], dtype=float)
         upper_bounds = np.asarray([
             np.inf if bound[1] is None else bound[1] for bound in bounds
         ], dtype=float)

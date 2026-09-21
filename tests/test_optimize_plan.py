@@ -7,12 +7,43 @@ from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 
-from optimize_plan import build_tariff_prices, plan_battery_dispatch, align_interval_prices, plan_gshp_dispatch, optimize, compute_effective_cost
+from optimize_plan import (
+    _is_gshp_compressor_running,
+    align_interval_prices,
+    build_tariff_prices,
+    compute_effective_cost,
+    optimize,
+    plan_battery_dispatch,
+    plan_gshp_dispatch,
+)
 from utils.price_utils import fetch_settled_daily_spot_prices, update_monthly_spot_reference
 import sqlite3
 import os
 import json
 from unittest.mock import patch, MagicMock
+
+
+class GshpPowerStateTests(unittest.TestCase):
+    def test_active_element_is_removed_from_shared_power(self):
+        with patch.dict(os.environ, {
+            'RESISTIVE_HEATER_POWER_KW': '6.0',
+            'BULK_HEATER_POWER_KW': '6.0',
+        }):
+            self.assertFalse(_is_gshp_compressor_running(
+                {'state': '6020'}, {'state': 'on'}, {'state': 'off'},
+            ))
+            self.assertFalse(_is_gshp_compressor_running(
+                {'state': '6200'}, {'state': 'on'}, {'state': 'off'},
+            ))
+            self.assertTrue(_is_gshp_compressor_running(
+                {'state': '9200'}, {'state': 'on'}, {'state': 'off'},
+            ))
+            self.assertTrue(_is_gshp_compressor_running(
+                {'state': '3200'}, {'state': 'on'}, {'state': 'off'},
+            ))
+            self.assertFalse(_is_gshp_compressor_running(
+                {'state': '6000'}, {'state': 'on'}, {'state': 'on'},
+            ))
 
 class OptimizeArchivingTests(unittest.TestCase):
     def setUp(self):

@@ -98,7 +98,7 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 |----------|-------------|---------|--------------|
 | `GSHP_INITIAL_TEMP` | Starting accumulator / buffer temperature. | `50.0` | °C. Fallback when `sensor.mlp_varaajan_lampotila` is unavailable in HA. |
 | `GSHP_MIN_TEMP` | Hard minimum accumulator temperature. | `42.0` | °C. If the temperature drops to or below this, the heat pump **must** start regardless of price. |
-| `THERMAL_MIN_TEMP_MARGIN_C` | Thermal safety margin above the hard minimum. | `0.5` | °C. The joint thermal planner holds each planned interval end at or above `GSHP_MIN_TEMP + margin`, compensating for model and control timing error. |
+| `THERMAL_MIN_TEMP_MARGIN_C` | Thermal safety margin above the hard minimum. | `0.5` | °C. The joint planner penalizes any physical shortfall below `GSHP_MIN_TEMP + margin`. When bulk heating is enabled, real-time control runs the bulk element continuously below this floor. |
 | `GSHP_MAX_TEMP` | Hard maximum accumulator temperature. | `55.0` | °C. If the temperature reaches this, the heat pump **must** stop. |
 | `GSHP_IS_RUNNING` | Initial on/off state of the heat pump. | `false` | bool. Fallback when `sensor.mlp_teho` is unavailable in HA. |
 | `GSHP_ELECTRIC_POWER_KW` | Fallback nominal electrical power. | `4.0` | kW. **Only used when both `GSHP_POWER_MIN_KW` and `GSHP_POWER_MAX_KW` are absent.** In that case both min and max are set to this value. |
@@ -116,12 +116,12 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 | `GSHP_RECOVERY_REQUIRED_GOOD_SAMPLES` | Consecutive responsive samples required to clear a latched failure. | `2` | The target-temperature stop does not itself clear an already latched fault. |
 | `GSHP_FAILURE_TARGET_TEMP_MARGIN_C` | Temperature margin below `GSHP_MAX_TEMP` treated as a normal thermostat stop. | `2.0` | °C. The health check resets pending bad samples within this margin to account for thermostat hysteresis and sensor lag. |
 | `RESISTIVE_HEATER_OPTIMIZE_ENABLED` | Co-optimize the top-mounted resistive element as an independent heat source. | `true` | The joint LP may run it together with the GSHP; their combined electrical load is included in grid and fuse constraints. |
-| `RESISTIVE_HEATER_ENTITY` | Home Assistant switch controlled by `run_often.py`. | `switch.mlp_vastus_output_0` | The controller turns it off when the plan is OFF, temperature is unavailable, the scheduled duty-cycle runtime ends, or the absolute ceiling is reached. |
+| `RESISTIVE_HEATER_ENTITY` | Home Assistant switch controlled by `run_often.py`. | `switch.mlp_vastus_output_0` | The controller turns it off when the plan is OFF, temperature is unavailable, the scheduled duty-cycle runtime ends, the absolute ceiling is reached, or bulk safety recovery is active. |
 | `RESISTIVE_HEATER_POWER_KW` | Fixed electrical and thermal output while on. | `6.0` | kW. Also used to remove heater consumption from ML baseload history. |
 | `RESISTIVE_HEATER_EFFICIENCY` | Electrical-to-thermal conversion efficiency. | `1.0` | Dimensionless. |
 | `RESISTIVE_HEATER_EFFECTIVE_LITERS` | Effective heated top volume. | `150` | L. Only heating gain uses this value; passive decay keeps the existing reservoir model. |
 | `RESISTIVE_HEATER_MAX_TEMP` | Resistive heating ceiling. | `60.0` | °C. |
-| `BULK_HEATER_OPTIMIZE_ENABLED` | Co-optimize the lower whole-reservoir element. | `false` | May run together with the upper element and GSHP. |
+| `BULK_HEATER_OPTIMIZE_ENABLED` | Co-optimize the lower whole-reservoir element and enable measured-temperature safety recovery. | `false` | May run together with the upper element and GSHP according to the plan. Below `GSHP_MIN_TEMP + THERMAL_MIN_TEMP_MARGIN_C`, real-time control runs only this element until the floor is recovered, provided all phase-current sensors confirm sufficient fuse headroom. |
 | `BULK_HEATER_ENTITY` | Home Assistant switch for the lower element. | `switch.mlp_vastus_output_1` | Controlled independently by `run_often.py`. |
 | `BULK_HEATER_POWER_KW` | Fixed electrical and thermal output while on. | `6.0` | kW. Included in shared-meter, grid, and fuse calculations. |
 | `BULK_HEATER_EFFICIENCY` | Electrical-to-thermal conversion efficiency. | `1.0` | Dimensionless. |
