@@ -123,6 +123,34 @@ def get_env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def _is_gshp_compressor_running(
+    shared_power_state: dict | None,
+    resistive_state: dict | None,
+    bulk_state: dict | None,
+) -> bool:
+    """Infer compressor draw after removing elements on the shared power meter."""
+    try:
+        shared_power_w = float((shared_power_state or {}).get('state', 0) or 0)
+    except (TypeError, ValueError):
+        shared_power_w = 0.0
+    element_powers_kw = []
+    if parse_ha_bool(resistive_state, default=False):
+        element_powers_kw.append(get_env_float('RESISTIVE_HEATER_POWER_KW', 6.0))
+    if parse_ha_bool(bulk_state, default=False):
+        element_powers_kw.append(get_env_float('BULK_HEATER_POWER_KW', 6.0))
+    minimum_kw = get_env_float('GSHP_FAILURE_MIN_COMPRESSOR_KW', 1.0)
+    shared_power_kw = max(0.0, shared_power_w / 1000.0)
+    possible_element_kw = [0.0]
+    for power_kw in element_powers_kw:
+        possible_element_kw += [total + power_kw for total in possible_element_kw]
+    element_power_kw = max(
+        total for total in possible_element_kw
+        if total <= shared_power_kw + minimum_kw
+    )
+    compressor_power_kw = max(0.0, shared_power_kw - element_power_kw)
+    return compressor_power_kw >= minimum_kw
+
+
 def get_env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -615,12 +643,11 @@ def optimize() -> None:
             pass
     
     gshp_power_state = get_ha_state('sensor.mlp_teho')
-    is_hp_currently_running = False
-    if gshp_power_state is not None:
-        try:
-            is_hp_currently_running = float(gshp_power_state.get('state', 0)) > 100
-        except (TypeError, ValueError):
-            pass
+    resistive_state = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
+    bulk_state = get_ha_state(os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'))
+    is_hp_currently_running = _is_gshp_compressor_running(
+        gshp_power_state, resistive_state, bulk_state,
+    )
 
     # Fireplace detection: check if accumulator temp is rising while GSHP is off
     is_fireplace_currently_on = False
@@ -648,7 +675,6 @@ def optimize() -> None:
 
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
-    resistive_state = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
     os.environ['RESISTIVE_HEATER_IS_RUNNING'] = (
         '1' if parse_ha_bool(resistive_state, default=False) else '0'
     )

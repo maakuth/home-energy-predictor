@@ -41,6 +41,18 @@ def _get_interval_minutes() -> int:
         return 15
 
 
+def _bulk_recovery_required(accumulator_temp: float | None) -> bool:
+    """Use whole-reservoir heat when measured temperature is below the safety floor."""
+    bulk_enabled = os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+    if not bulk_enabled or accumulator_temp is None:
+        return False
+    min_temp = float(os.getenv('GSHP_MIN_TEMP', '42.0'))
+    margin = max(0.0, float(os.getenv('THERMAL_MIN_TEMP_MARGIN_C', '0.5')))
+    return accumulator_temp < min_temp + margin
+
+
 def _load_discrete_control_state(path: str, slot_id: str) -> dict:
     try:
         with open(path) as f:
@@ -116,6 +128,21 @@ def _fuse_still_overloaded(
     fuse_a = float(os.getenv('MAIN_FUSE_SIZE_A', '25.0'))
     battery_delta_w = battery_kw * 1000.0 - battery_w
     phase_delta_a = battery_delta_w / (3.0 * 230.0)
+    return any(
+        current is not None and abs(current + phase_delta_a) > fuse_a + 0.01
+        for current in phase_currents
+    )
+
+
+def _additional_load_would_overload(
+    load_kw: float,
+    phase_currents: list[float | None],
+) -> bool:
+    """Check fuse headroom before starting a balanced three-phase load."""
+    if any(current is None for current in phase_currents):
+        return True
+    fuse_a = float(os.getenv('MAIN_FUSE_SIZE_A', '25.0'))
+    phase_delta_a = max(0.0, load_kw) * 1000.0 / (3.0 * 230.0)
     return any(
         current is not None and abs(current + phase_delta_a) > fuse_a + 0.01
         for current in phase_currents
@@ -200,6 +227,7 @@ def control_resistive_heater(
         and accumulator_temp is not None
         and accumulator_temp < max_temp
         and runtime_remaining
+        and not _bulk_recovery_required(accumulator_temp)
     )
     call_ha_service(
         'switch', 'turn_on' if should_heat else 'turn_off',
@@ -213,6 +241,7 @@ def control_bulk_heater(
     now: datetime | None = None,
     plan_mtime: float | None = None,
     observed_on: bool | None = None,
+    allow_heating: bool = True,
 ) -> None:
     """Deliver the whole-reservoir element plan with the same fail-closed rules."""
     entity_id = os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1')
@@ -245,12 +274,14 @@ def control_bulk_heater(
             'bulk', slot_id, now, target_runtime_seconds, observed_on,
             completed=reached_cutoff,
         )
-    should_heat = (
-        current_plan is not None and is_current
-        and current_plan.get('bulk_heater_intent') == 'ON'
-        and accumulator_temp is not None and accumulator_temp < max_temp
-        and heater_kw > 0
-        and runtime_remaining
+    emergency_recovery = _bulk_recovery_required(accumulator_temp)
+    should_heat = allow_heating and accumulator_temp is not None and accumulator_temp < max_temp and heater_kw > 0 and (
+        emergency_recovery
+        or (
+            current_plan is not None and is_current
+            and current_plan.get('bulk_heater_intent') == 'ON'
+            and runtime_remaining
+        )
     )
     call_ha_service('switch', 'turn_on' if should_heat else 'turn_off', {'entity_id': entity_id}, return_response=False)
 
@@ -297,6 +328,8 @@ def main():
     p1 = get_ha_state('sensor.current_phase_1')
     p2 = get_ha_state('sensor.current_phase_2')
     p3 = get_ha_state('sensor.current_phase_3')
+    upper = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
+    bulk = get_ha_state(os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'))
 
     import_meter = get_ha_state('sensor.cumulative_active_import')
     export_meter = get_ha_state('sensor.cumulative_active_export')
@@ -312,6 +345,10 @@ def main():
     i_p1 = _get_float(p1)
     i_p2 = _get_float(p2)
     i_p3 = _get_float(p3)
+    bulk_observed_on = str((bulk or {}).get('state', '')).lower() == 'on'
+    bulk_start_allowed = bulk_observed_on or not _additional_load_would_overload(
+        float(os.getenv('BULK_HEATER_POWER_KW', '6.0')), [i_p1, i_p2, i_p3],
+    )
 
     import_kwh = _get_float(import_meter)
     export_kwh = _get_float(export_meter)
@@ -343,10 +380,26 @@ def main():
     manual_leaf_charging = parse_ha_bool(manual_leaf_state, default=False)
 
     if not plan:
+        bulk_recovery = _bulk_recovery_required(accumulator_temp)
+        if bulk_recovery:
+            call_ha_service(
+                'switch', 'turn_off',
+                {'entity_id': os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')},
+                return_response=False,
+            )
         if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
             control_resistive_heater(None, accumulator_temp)
         if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
-            control_bulk_heater(None, accumulator_temp)
+            control_bulk_heater(
+                None, accumulator_temp, observed_on=bulk_observed_on,
+                allow_heating=bulk_start_allowed,
+            )
+        if bulk_recovery and _fuse_still_overloaded(0.0, battery_w, [i_p1, i_p2, i_p3]):
+            call_ha_service(
+                'switch', 'turn_off',
+                {'entity_id': os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1')},
+                return_response=False,
+            )
         control_leaf_charger(None, manual_charging=manual_leaf_charging)
         return
 
@@ -354,16 +407,30 @@ def main():
     current = get_current_plan_entry(plan, interval_minutes=interval_minutes, now=now)
     if current is None:
         print('No exact current plan entry found; applying safe outputs')
+        bulk_recovery = _bulk_recovery_required(accumulator_temp)
+        if bulk_recovery:
+            call_ha_service(
+                'switch', 'turn_off',
+                {'entity_id': os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')},
+                return_response=False,
+            )
         if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
             control_resistive_heater(None, accumulator_temp, now=now)
         if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
-            control_bulk_heater(None, accumulator_temp, now=now)
+            control_bulk_heater(
+                None, accumulator_temp, now=now, observed_on=bulk_observed_on,
+                allow_heating=bulk_start_allowed,
+            )
+        if bulk_recovery and _fuse_still_overloaded(0.0, battery_w, [i_p1, i_p2, i_p3]):
+            call_ha_service(
+                'switch', 'turn_off',
+                {'entity_id': os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1')},
+                return_response=False,
+            )
         control_leaf_charger(None, manual_charging=manual_leaf_charging, now=now)
         push_battery_control(battery_power_w=0, battery_action='idle', battery_soc_pct=soc_pct)
         return
 
-    upper = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
-    bulk = get_ha_state(os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'))
     element_kw = (
         (float(os.getenv('RESISTIVE_HEATER_POWER_KW', '6.0')) if str((upper or {}).get('state', '')).lower() == 'on' else 0.0)
         + (float(os.getenv('BULK_HEATER_POWER_KW', '6.0')) if str((bulk or {}).get('state', '')).lower() == 'on' else 0.0)
@@ -382,7 +449,14 @@ def main():
     if health.get('status') == 'failed':
         print(f"GSHP electrical fault latched: compressor={health.get('compressor_kw', 0.0):.2f}kW")
 
-    if os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+    bulk_recovery = _bulk_recovery_required(accumulator_temp)
+    if bulk_recovery:
+        call_ha_service(
+            'switch', 'turn_off',
+            {'entity_id': os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0')},
+            return_response=False,
+        )
+    elif os.getenv('RESISTIVE_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
         control_resistive_heater(
             current, accumulator_temp, now=now, plan_mtime=plan_mtime,
             observed_on=str((upper or {}).get('state', '')).lower() == 'on',
@@ -390,7 +464,8 @@ def main():
     if os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
         control_bulk_heater(
             current, accumulator_temp, now=now, plan_mtime=plan_mtime,
-            observed_on=str((bulk or {}).get('state', '')).lower() == 'on',
+            observed_on=bulk_observed_on,
+            allow_heating=bulk_start_allowed,
         )
     control_leaf_charger(
         current,
@@ -634,8 +709,11 @@ def main():
 
     if (
         os.getenv('BULK_HEATER_OPTIMIZE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}
-        and current is not None
-        and current.get('bulk_heater_intent') == 'ON'
+        and (
+            bulk_recovery
+            or str((bulk or {}).get('state', '')).lower() == 'on'
+            or (current is not None and current.get('bulk_heater_intent') == 'ON')
+        )
         and _fuse_still_overloaded(
             adjusted_battery_kw, battery_w, [i_p1, i_p2, i_p3],
         )

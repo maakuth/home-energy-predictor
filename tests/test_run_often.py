@@ -109,6 +109,51 @@ class TestRunOften(unittest.TestCase):
         )
 
     @patch('run_often.call_ha_service')
+    def test_bulk_heater_recovers_below_thermal_floor_without_plan(self, mock_service):
+        from run_often import control_bulk_heater
+
+        with patch.dict(os.environ, {
+            'BULK_HEATER_OPTIMIZE_ENABLED': 'true',
+            'GSHP_MIN_TEMP': '45.0',
+            'THERMAL_MIN_TEMP_MARGIN_C': '0.5',
+        }):
+            control_bulk_heater(None, accumulator_temp=30.0)
+
+        mock_service.assert_called_once_with(
+            'switch', 'turn_on',
+            {'entity_id': 'switch.mlp_vastus_output_1'},
+            return_response=False,
+        )
+
+    def test_unplanned_load_start_requires_all_phase_currents(self):
+        from run_often import _additional_load_would_overload
+
+        self.assertTrue(_additional_load_would_overload(6.0, [10.0, None, 10.0]))
+
+    @patch('run_often.call_ha_service')
+    def test_resistive_heater_stays_off_during_bulk_recovery(self, mock_service):
+        from run_often import control_resistive_heater
+        now = datetime.now().astimezone()
+        slot = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+
+        with patch.dict(os.environ, {
+            'BULK_HEATER_OPTIMIZE_ENABLED': 'true',
+            'GSHP_MIN_TEMP': '45.0',
+            'THERMAL_MIN_TEMP_MARGIN_C': '0.5',
+        }):
+            control_resistive_heater(
+                {
+                    'timestamp': slot.isoformat(),
+                    'resistive_heater_intent': 'ON',
+                    'planned_resistive_kw': 6.0,
+                },
+                accumulator_temp=30.0,
+                now=slot,
+            )
+
+        self.assertEqual(mock_service.call_args.args[1], 'turn_off')
+
+    @patch('run_often.call_ha_service')
     def test_leaf_charger_follows_current_on_intent(self, mock_service):
         from run_often import control_leaf_charger
         now = datetime.now().astimezone()
@@ -453,6 +498,34 @@ class TestRunOften(unittest.TestCase):
             from run_often import main
             main()
 
+        mock_push.assert_not_called()
+
+    @patch('run_often.call_ha_service')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_missing_plan_does_not_bypass_bulk_recovery_fuse_shed(
+        self, mock_get_ha, mock_push, mock_service,
+    ):
+        os.remove(os.path.join(self.test_dir, 'state', 'optimization_plan.json'))
+        mock_get_ha.side_effect = self._phase_side_effect(
+            [30.0, 10.0, 10.0], battery_w='0.0', soc='10.0',
+        )
+
+        with patch.dict(os.environ, {
+            'MAIN_FUSE_SIZE_A': '25',
+            'BULK_HEATER_OPTIMIZE_ENABLED': '1',
+            'RESISTIVE_HEATER_OPTIMIZE_ENABLED': '0',
+            'GSHP_MIN_TEMP': '45.0',
+        }):
+            from run_often import main
+            main()
+
+        bulk_calls = [
+            service_call for service_call in mock_service.call_args_list
+            if service_call.args[2]['entity_id'] == 'switch.mlp_vastus_output_1'
+        ]
+        self.assertNotIn('turn_on', [service_call.args[1] for service_call in bulk_calls])
+        self.assertEqual(bulk_calls[-1].args[1], 'turn_off')
         mock_push.assert_not_called()
 
     @patch('run_often.push_battery_control')
@@ -1081,6 +1154,63 @@ class TestRunOften(unittest.TestCase):
             if call.args[2]['entity_id'] == 'switch.mlp_vastus_output_1'
         ]
         self.assertEqual(bulk_calls[-1].args[1], 'turn_off')
+
+    @patch('run_often.call_ha_service')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_fuse_overload_sheds_emergency_bulk_when_plan_is_off(
+        self, mock_get_ha, mock_push, mock_service,
+    ):
+        """Emergency recovery remains subordinate to the physical fuse limit."""
+        self._make_net_metering_plan(battery_kw=10.0, action='charge_grid')
+        mock_get_ha.side_effect = self._phase_side_effect(
+            [30.0, 10.0, 10.0], battery_w='0.0', soc='10.0',
+        )
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BATTERY_RAMP_RATE_KW_PER_MIN': '0',
+            'MAIN_FUSE_SIZE_A': '25',
+            'BATTERY_MIN_SOC_PCT': '10.0',
+            'BULK_HEATER_OPTIMIZE_ENABLED': '1',
+            'RESISTIVE_HEATER_OPTIMIZE_ENABLED': '0',
+            'GSHP_MIN_TEMP': '45.0',
+        }):
+            from run_often import main
+            main()
+
+        bulk_calls = [
+            service_call for service_call in mock_service.call_args_list
+            if service_call.args[2]['entity_id'] == 'switch.mlp_vastus_output_1'
+        ]
+        self.assertNotIn('turn_on', [service_call.args[1] for service_call in bulk_calls])
+        self.assertEqual(bulk_calls[-1].args[1], 'turn_off')
+
+    @patch('run_often.call_ha_service')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_emergency_bulk_turns_off_upper_when_upper_optimization_is_disabled(
+        self, mock_get_ha, mock_push, mock_service,
+    ):
+        self._make_net_metering_plan(battery_kw=0.0, action='idle')
+        mock_get_ha.side_effect = self._phase_side_effect(
+            [10.0, 10.0, 10.0], battery_w='0.0', soc='50.0',
+        )
+
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '1',
+            'BULK_HEATER_OPTIMIZE_ENABLED': '1',
+            'RESISTIVE_HEATER_OPTIMIZE_ENABLED': '0',
+            'GSHP_MIN_TEMP': '45.0',
+        }):
+            from run_often import main
+            main()
+
+        upper_calls = [
+            service_call for service_call in mock_service.call_args_list
+            if service_call.args[2]['entity_id'] == 'switch.mlp_vastus_output_0'
+        ]
+        self.assertEqual(upper_calls[-1].args[1], 'turn_off')
 
 
 if __name__ == '__main__':
