@@ -117,7 +117,7 @@ class OptimizeArchivingTests(unittest.TestCase):
         """)
         row = cur.fetchone()
         conn.close()
-        
+
         self.assertIsNotNone(row)
         # Predicted usage should be at least baseload (2.0)
         # GSHP might be 0 or more depending on prices/temp
@@ -129,6 +129,26 @@ class OptimizeArchivingTests(unittest.TestCase):
         self.assertIsNotNone(row[5]) # import_price
         self.assertIsNotNone(row[6]) # export_price
         self.assertIsNotNone(row[7]) # grid_import_kwh
+
+    @patch('builtins.print')
+    @patch('optimize_plan.get_ha_state')
+    @patch('optimize_plan.fetch_market_prices')
+    @patch('optimize_plan.get_db_connection')
+    def test_non_joint_leaf_plan_uses_configured_max_power(self, mock_db, mock_prices, mock_ha, mock_print):
+        mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
+        mock_prices.return_value = ([0.1], [0], 'Nordpool', False, False, None)
+        mock_ha.side_effect = lambda entity_id: {'state': '0'} if entity_id == 'sensor.mlp_teho' else {'state': '50.0'}
+
+        with patch.dict(os.environ, {
+            'HEPO_DISABLE_BATTERY': 'true',
+            'LEAF_DAILY_TARGET_KWH': '1000.0',
+            'LEAF_MAX_POWER_KW': '1.8',
+        }, clear=False):
+            optimize()
+
+        with open(self.plan_file) as f:
+            plan = json.load(f)
+        self.assertAlmostEqual(plan[0]['planned_leaf_kw'], 1.8)
 
     def test_plan_write_is_atomic(self):
         from optimize_plan import write_plan_atomically

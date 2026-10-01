@@ -397,6 +397,15 @@ class JointLinprogTests(unittest.TestCase):
         # The cheapest interval (index 1) should receive maximum possible Leaf charging (3.0 kW)
         self.assertAlmostEqual(plan[1].planned_leaf_kw or 0.0, 3.0, delta=0.1)
 
+    def test_leaf_default_max_power_matches_charger(self):
+        plan = self._plan(
+            [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.01, 0.02, 0.03, 0.04],
+            LEAF_OPTIMIZE_ENABLED='1',
+            LEAF_DAILY_TARGET_KWH='24.0',
+        )
+
+        self.assertLessEqual(max(entry.planned_leaf_kw or 0.0 for entry in plan), 1.8)
+
     def test_fuse_limit_prevents_simultaneous_overload(self):
         """Battery charging, GSHP, and Leaf combined must respect main fuse limit."""
         # 1 interval with very cheap price (0.01 €/kWh). Everything wants to charge.

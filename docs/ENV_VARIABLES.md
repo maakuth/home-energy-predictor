@@ -164,6 +164,7 @@ Home Assistant automations do not need to act on the published Leaf intent.
 |----------|-------------|---------|
 | `LEAF_CHARGING_ENTITY` | Leaf charger switch controlled by HEPO. | `switch.tasmota_3` |
 | `LEAF_MANUAL_CHARGING_ENTITY` | Manual-charge boolean. When on, HEPO never turns the Leaf charger off. | `input_boolean.leaf_manuaalinen_lataus` |
+| `LEAF_MAX_POWER_KW` | Maximum Leaf charging power used by both planners. | `1.8` |
 
 ---
 

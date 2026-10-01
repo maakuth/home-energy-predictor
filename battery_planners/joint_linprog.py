@@ -229,7 +229,7 @@ class JointLinprogPlanner(BatteryPlanner):
         # Leaf EV configuration
         leaf_enabled = get_env_bool('LEAF_OPTIMIZE_ENABLED', True)
         leaf_daily_target_kwh = get_env_float('LEAF_DAILY_TARGET_KWH', 10.0)
-        leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 3.0)
+        leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 1.8)
         leaf_target_kwh = leaf_daily_target_kwh * (horizon * interval_hours / 24.0) if leaf_enabled else 0.0
 
         if not any((gshp_enabled, resistive_enabled, bulk_enabled, leaf_enabled)):

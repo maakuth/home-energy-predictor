@@ -774,7 +774,7 @@ def optimize() -> None:
     target_kwh = leaf_daily_target * (plan_hours / 24.0)
     
     leaf_avg_power = (target_kwh / (num_on * get_plan_interval_hours())) if num_on > 0 else 0.0
-    leaf_avg_power = min(leaf_avg_power, 3.0) # Don't exceed nominal 3kW
+    leaf_avg_power = min(leaf_avg_power, get_env_float('LEAF_MAX_POWER_KW', 1.8))
     
     planned_leaf_kw = np.array([leaf_avg_power if intent == 'ON' else 0.0 for intent in leaf_intents])
     
