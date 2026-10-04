@@ -4,7 +4,7 @@ from __future__ import annotations
 Simultaneously optimizes:
 - Electrical flows: grid, solar, and battery to house loads, battery storage, and export
 - Thermal storage: Ground Source Heat Pump (GSHP) power and accumulator tank temperature
-- Flexible EV loads: Nissan Leaf daily charging requirements
+- Fixed Nissan Leaf charging schedule
 
 By solving a single unified linear program, the planner ensures loads consume
 direct solar, utilize stored battery energy when advantageous, and avoid peak grid
@@ -50,11 +50,9 @@ def get_env_bool(name: str, default: bool) -> bool:
 def leaf_charging_allowed(
     timestamp: Any,
     import_price: float,
-    solar_kw: float,
     peak_price: float,
-    solar_min_kw: float,
 ) -> bool:
-    """Charge overnight or when plentiful solar is forecast."""
+    """Charge from midnight until 07:00, otherwise only below the price peak."""
     try:
         hour = timestamp.hour
     except AttributeError:
@@ -62,7 +60,7 @@ def leaf_charging_allowed(
             hour = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00')).hour
         except ValueError:
             return False
-    return (hour >= 22 or hour < 7) and import_price <= peak_price or solar_kw >= solar_min_kw
+    return hour < 7 or import_price <= peak_price
 
 
 def compute_gshp_thermal_demand(
@@ -247,7 +245,6 @@ class JointLinprogPlanner(BatteryPlanner):
         # Leaf EV configuration
         leaf_enabled = get_env_bool('LEAF_OPTIMIZE_ENABLED', True)
         leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 1.8)
-        leaf_solar_min_kw = get_env_float('LEAF_SOLAR_MIN_KW', 2.0)
         leaf_peak_price = float(np.percentile(
             import_prices, np.clip(get_env_float('LEAF_PEAK_PRICE_PERCENTILE', 75.0), 0.0, 100.0),
         ))
@@ -316,8 +313,7 @@ class JointLinprogPlanner(BatteryPlanner):
             leaf_interval_kwh = (
                 leaf_max_power_kw * interval_hours
                 if leaf_enabled and leaf_charging_allowed(
-                    prediction_timestamps[i], import_prices[i], solar[i] / interval_hours,
-                    leaf_peak_price, leaf_solar_min_kw,
+                    prediction_timestamps[i], import_prices[i], leaf_peak_price,
                 ) else 0.0
             )
 
