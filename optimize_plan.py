@@ -739,12 +739,16 @@ def optimize() -> None:
     planned_ev_kw = np.array([ev_power_kw if ev else 0.0 for ev in ev_plan])
 
     # Leaf charges overnight by default. It only pauses for prices above the
-    # configured peak percentile of the full available price horizon.
+    # configured peak percentile, but daytime solar above the threshold also charges.
     leaf_peak_price = np.percentile(
         import_prices, np.clip(get_env_float('LEAF_PEAK_PRICE_PERCENTILE', 75.0), 0.0, 100.0),
     )
+    leaf_solar_min_kw = get_env_float('LEAF_SOLAR_MIN_KW', 2.0)
     leaf_intents = [
-        'ON' if (ts.hour >= 22 or ts.hour < 7) and import_prices[i] <= leaf_peak_price else 'OFF'
+        'ON' if (
+            ((ts.hour >= 22 or ts.hour < 7) and import_prices[i] <= leaf_peak_price)
+            or solar_array[i] >= leaf_solar_min_kw
+        ) else 'OFF'
         for i, ts in enumerate(prediction_timestamps)
     ]
     leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 1.8)

@@ -166,6 +166,7 @@ Home Assistant automations do not need to act on the published Leaf intent.
 | `LEAF_MANUAL_CHARGING_ENTITY` | Manual-charge boolean. When on, HEPO never turns the Leaf charger off. | `input_boolean.leaf_manuaalinen_lataus` |
 | `LEAF_MAX_POWER_KW` | Maximum Leaf charging power used by both planners. | `1.8` |
 | `LEAF_PEAK_PRICE_PERCENTILE` | Price percentile above which overnight Leaf charging pauses. The Leaf otherwise charges from 22:00 to 07:00. | `75.0` |
+| `LEAF_SOLAR_MIN_KW` | Forecast solar threshold that enables daytime Leaf charging. | `2.0` |
 
 ---
 

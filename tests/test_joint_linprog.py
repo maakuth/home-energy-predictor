@@ -380,19 +380,19 @@ class JointLinprogTests(unittest.TestCase):
         self.assertAlmostEqual(plan[0].planned_resistive_kw or 0.0, 0.0, places=4)
         self.assertGreater(plan[1].planned_resistive_kw or 0.0, 0.0)
 
-    def test_leaf_charges_overnight_except_price_peaks(self):
+    def test_leaf_charges_overnight_and_with_plentiful_solar(self):
         timestamps = [
             datetime(2026, 1, 1, hour, tzinfo=timezone.utc)
-            for hour in (21, 22, 23, 0)
+            for hour in (21, 22, 23, 12, 0)
         ]
         plan = self._plan(
-            [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.10, 0.10, 0.30, 0.10],
+            [0.0] * 5, [0.0, 0.0, 0.0, 2.0, 0.0], [0.10, 0.10, 0.50, 0.40, 0.10],
             timestamps=timestamps,
             LEAF_OPTIMIZE_ENABLED='1',
         )
 
-        self.assertEqual([entry.leaf_intent for entry in plan], ['OFF', 'ON', 'OFF', 'ON'])
-        self.assertEqual([entry.planned_leaf_kw for entry in plan], [0.0, 1.8, 0.0, 1.8])
+        self.assertEqual([entry.leaf_intent for entry in plan], ['OFF', 'ON', 'OFF', 'ON', 'ON'])
+        self.assertEqual([entry.planned_leaf_kw for entry in plan], [0.0, 1.8, 0.0, 1.8, 1.8])
 
     def test_fuse_limit_prevents_simultaneous_overload(self):
         """Battery charging, GSHP, and Leaf combined must respect main fuse limit."""
