@@ -135,20 +135,38 @@ class OptimizeArchivingTests(unittest.TestCase):
     @patch('optimize_plan.fetch_market_prices')
     @patch('optimize_plan.get_db_connection')
     def test_non_joint_leaf_plan_uses_configured_max_power(self, mock_db, mock_prices, mock_ha, mock_print):
+        timestamps = [
+            datetime(2026, 4, 5, hour, 15, tzinfo=timezone.utc)
+            for hour in (21, 22, 23, 0)
+        ]
+        self.predictions_data = [
+            {
+                'timestamp': timestamp.isoformat(),
+                'predicted_baseload': 2.0,
+                'solar_forecast': 0.0,
+                'outside_temp': 5.0,
+                'is_sauna_active': 0,
+                'is_fallback_price': 0,
+            }
+            for timestamp in timestamps
+        ]
+        with open(self.predictions_file, 'w') as f:
+            json.dump(self.predictions_data, f)
+
         mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
-        mock_prices.return_value = ([0.1], [0], 'Nordpool', False, False, None)
+        mock_prices.return_value = ([0.10, 0.10, 0.30, 0.10], [0, 0, 0, 0], 'Nordpool', False, False, None)
         mock_ha.side_effect = lambda entity_id: {'state': '0'} if entity_id == 'sensor.mlp_teho' else {'state': '50.0'}
 
         with patch.dict(os.environ, {
             'HEPO_DISABLE_BATTERY': 'true',
-            'LEAF_DAILY_TARGET_KWH': '1000.0',
             'LEAF_MAX_POWER_KW': '1.8',
         }, clear=False):
             optimize()
 
         with open(self.plan_file) as f:
             plan = json.load(f)
-        self.assertAlmostEqual(plan[0]['planned_leaf_kw'], 1.8)
+        self.assertEqual([entry['leaf_intent'] for entry in plan], ['OFF', 'ON', 'OFF', 'ON'])
+        self.assertEqual([entry['planned_leaf_kw'] for entry in plan], [0.0, 1.8, 0.0, 1.8])
 
     def test_plan_write_is_atomic(self):
         from optimize_plan import write_plan_atomically

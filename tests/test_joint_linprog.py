@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from datetime import datetime, timezone
 from typing import cast
 from unittest.mock import patch
 import numpy as np
@@ -25,6 +26,7 @@ class JointLinprogTests(unittest.TestCase):
         current_acc_temp: float = 50.0,
         committed: list[float] | None = None,
         allow_export: bool = True,
+        timestamps: list[datetime] | None = None,
         **overrides: str,
     ):
         n = len(predictions)
@@ -68,7 +70,7 @@ class JointLinprogTests(unittest.TestCase):
                 np.asarray(solar, dtype=float),
                 np.asarray(prices, dtype=float),
                 np.asarray(prices, dtype=float),
-                [f'i{i}' for i in range(n)],
+                timestamps if timestamps is not None else [f'i{i}' for i in range(n)],
                 committed_load_kwh=(
                     np.asarray(committed, dtype=float) if committed is not None else None
                 ),
@@ -378,33 +380,19 @@ class JointLinprogTests(unittest.TestCase):
         self.assertAlmostEqual(plan[0].planned_resistive_kw or 0.0, 0.0, places=4)
         self.assertGreater(plan[1].planned_resistive_kw or 0.0, 0.0)
 
-    def test_leaf_ev_charging_cooptimization(self):
-        """Leaf EV target energy should be allocated to the cheapest intervals."""
-        preds = [1.0, 1.0, 1.0, 1.0]
-        solar = [0.0, 0.0, 0.0, 0.0]
-        prices = [0.25, 0.02, 0.30, 0.05]  # Index 1 is cheapest, then index 3
-
+    def test_leaf_charges_overnight_except_price_peaks(self):
+        timestamps = [
+            datetime(2026, 1, 1, hour, tzinfo=timezone.utc)
+            for hour in (21, 22, 23, 0)
+        ]
         plan = self._plan(
-            preds, solar, prices,
+            [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.10, 0.10, 0.30, 0.10],
+            timestamps=timestamps,
             LEAF_OPTIMIZE_ENABLED='1',
-            LEAF_DAILY_TARGET_KWH='24.0',  # 24 kWh/day -> 4 kWh over 4 hours
-            LEAF_MAX_POWER_KW='3.0',
         )
 
-        total_leaf_kwh = sum((entry.planned_leaf_kw or 0.0) * 1.0 for entry in plan)
-        self.assertAlmostEqual(total_leaf_kwh, 4.0, delta=1e-3)
-
-        # The cheapest interval (index 1) should receive maximum possible Leaf charging (3.0 kW)
-        self.assertAlmostEqual(plan[1].planned_leaf_kw or 0.0, 3.0, delta=0.1)
-
-    def test_leaf_default_max_power_matches_charger(self):
-        plan = self._plan(
-            [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.01, 0.02, 0.03, 0.04],
-            LEAF_OPTIMIZE_ENABLED='1',
-            LEAF_DAILY_TARGET_KWH='24.0',
-        )
-
-        self.assertLessEqual(max(entry.planned_leaf_kw or 0.0 for entry in plan), 1.8)
+        self.assertEqual([entry.leaf_intent for entry in plan], ['OFF', 'ON', 'OFF', 'ON'])
+        self.assertEqual([entry.planned_leaf_kw for entry in plan], [0.0, 1.8, 0.0, 1.8])
 
     def test_fuse_limit_prevents_simultaneous_overload(self):
         """Battery charging, GSHP, and Leaf combined must respect main fuse limit."""

@@ -165,6 +165,7 @@ Home Assistant automations do not need to act on the published Leaf intent.
 | `LEAF_CHARGING_ENTITY` | Leaf charger switch controlled by HEPO. | `switch.tasmota_3` |
 | `LEAF_MANUAL_CHARGING_ENTITY` | Manual-charge boolean. When on, HEPO never turns the Leaf charger off. | `input_boolean.leaf_manuaalinen_lataus` |
 | `LEAF_MAX_POWER_KW` | Maximum Leaf charging power used by both planners. | `1.8` |
+| `LEAF_PEAK_PRICE_PERCENTILE` | Price percentile above which overnight Leaf charging pauses. The Leaf otherwise charges from 22:00 to 07:00. | `75.0` |
 
 ---
 
@@ -179,8 +180,6 @@ The following variables are read by `optimize_plan.py` (and other modules) but a
 | `GSHP_HEATING_EFFICIENCY` | `1.0` | Efficiency multiplier applied to thermal output. |
 | `GSHP_INITIAL_TEMP_DROP` | `3.0` | Temperature drop (°C) applied to the accumulator when the heat pump starts. Simulates thermal layering (mixing of cold return water). |
 | `SAUNA_HOT_WATER_DEMAND_KW` | `6.0` | Extra thermal demand added when the sauna is predicted to be active. |
-| `LEAF_BACKUP_HOURS` | `4.0` | Night backup duration for the Leaf EV strategy. |
-| `LEAF_DAILY_TARGET_KWH` | `10.0` | Daily energy target for the Leaf EV strategy. |
 | `HEPO_DISABLE_BATTERY` | `false` | Set to `true` to force-disable battery optimization at runtime (testing / degradation mode). |
 
 ---

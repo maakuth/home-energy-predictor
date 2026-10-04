@@ -738,45 +738,17 @@ def optimize() -> None:
 
     planned_ev_kw = np.array([ev_power_kw if ev else 0.0 for ev in ev_plan])
 
-    # Leaf Strategy:
-    # Keep the frequent dispatch behavior (Solar/Night/Cheap) but fix the predicted power.
-    # User reports ~10kWh/day total usage, so we scale power to match that.
-    leaf_backup_hours = get_env_float('LEAF_BACKUP_HOURS', 4.0)
-    leaf_intervals_backup = max(1, int(round(leaf_backup_hours / get_plan_interval_hours())))
-    
-    night_window_indices = [
-        i for i, ts in enumerate(prediction_timestamps) 
-        if ts.hour >= 22 or ts.hour < 7
+    # Leaf charges overnight by default. It only pauses for prices above the
+    # configured peak percentile of the full available price horizon.
+    leaf_peak_price = np.percentile(
+        import_prices, np.clip(get_env_float('LEAF_PEAK_PRICE_PERCENTILE', 75.0), 0.0, 100.0),
+    )
+    leaf_intents = [
+        'ON' if (ts.hour >= 22 or ts.hour < 7) and import_prices[i] <= leaf_peak_price else 'OFF'
+        for i, ts in enumerate(prediction_timestamps)
     ]
-    night_prices = [(import_prices[i], i) for i in night_window_indices]
-    night_prices.sort()
-    leaf_backup_indices = [idx for price, idx in night_prices[:leaf_intervals_backup]]
-    
-    leaf_price_threshold_day = np.percentile(import_prices, 35)
-    
-    leaf_intents = []
-    for i, ts in enumerate(prediction_timestamps):
-        price = import_prices[i]
-        solar = solar_array[i]
-        is_day = 7 <= ts.hour < 22
-        
-        intent = 'OFF'
-        if i in leaf_backup_indices:
-            intent = 'ON' # Night Backup
-        elif is_day and (price <= leaf_price_threshold_day or solar >= 2.0):
-            intent = 'ON' # Day Opportunity
-        leaf_intents.append(intent)
-
-    # Calculate realistic average power to hit daily target (default 10kWh/day)
-    num_on = sum(1 for x in leaf_intents if x == 'ON')
-    leaf_daily_target = get_env_float('LEAF_DAILY_TARGET_KWH', 10.0)
-    plan_hours = len(prediction_timestamps) * get_plan_interval_hours()
-    target_kwh = leaf_daily_target * (plan_hours / 24.0)
-    
-    leaf_avg_power = (target_kwh / (num_on * get_plan_interval_hours())) if num_on > 0 else 0.0
-    leaf_avg_power = min(leaf_avg_power, get_env_float('LEAF_MAX_POWER_KW', 1.8))
-    
-    planned_leaf_kw = np.array([leaf_avg_power if intent == 'ON' else 0.0 for intent in leaf_intents])
+    leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 1.8)
+    planned_leaf_kw = np.array([leaf_max_power_kw if intent == 'ON' else 0.0 for intent in leaf_intents])
     
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.

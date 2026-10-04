@@ -47,6 +47,18 @@ def get_env_bool(name: str, default: bool) -> bool:
     return val.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def leaf_charging_allowed(timestamp: Any, import_price: float, peak_price: float) -> bool:
+    """Charge overnight except when the price exceeds the configured peak."""
+    try:
+        hour = timestamp.hour
+    except AttributeError:
+        try:
+            hour = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00')).hour
+        except ValueError:
+            return False
+    return (hour >= 22 or hour < 7) and import_price <= peak_price
+
+
 def compute_gshp_thermal_demand(
     outside_temps: np.ndarray,
     is_sauna_active: np.ndarray,
@@ -228,9 +240,10 @@ class JointLinprogPlanner(BatteryPlanner):
 
         # Leaf EV configuration
         leaf_enabled = get_env_bool('LEAF_OPTIMIZE_ENABLED', True)
-        leaf_daily_target_kwh = get_env_float('LEAF_DAILY_TARGET_KWH', 10.0)
         leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 1.8)
-        leaf_target_kwh = leaf_daily_target_kwh * (horizon * interval_hours / 24.0) if leaf_enabled else 0.0
+        leaf_peak_price = float(np.percentile(
+            import_prices, np.clip(get_env_float('LEAF_PEAK_PRICE_PERCENTILE', 75.0), 0.0, 100.0),
+        ))
 
         if not any((gshp_enabled, resistive_enabled, bulk_enabled, leaf_enabled)):
             # Keep the battery-only problem identical to the dedicated LP.
@@ -293,7 +306,12 @@ class JointLinprogPlanner(BatteryPlanner):
                 resistive_power_kw * interval_hours if resistive_enabled else 0.0
             )
             max_bulk_interval_kwh = bulk_power_kw * interval_hours if bulk_enabled else 0.0
-            max_leaf_interval_kwh = (leaf_max_power_kw * interval_hours) if leaf_enabled else 0.0
+            leaf_interval_kwh = (
+                leaf_max_power_kw * interval_hours
+                if leaf_enabled and leaf_charging_allowed(
+                    prediction_timestamps[i], import_prices[i], leaf_peak_price,
+                ) else 0.0
+            )
 
             bounds.extend([
                 (0, None),  # grid_house
@@ -308,7 +326,7 @@ class JointLinprogPlanner(BatteryPlanner):
                 (0, max_gshp_interval_kwh),  # gshp_kwh
                 (0, max_resistive_interval_kwh),  # resistive_kwh
                 (None, max_temp),  # acc_temp; floor violations are tracked explicitly
-                (0, max_leaf_interval_kwh),  # leaf_kwh
+                (leaf_interval_kwh, leaf_interval_kwh),  # leaf_kwh
                 (0, None),  # overflow
                 (0, None),  # temp_underflow
                 (0, max_bulk_interval_kwh),  # bulk_heater_kwh
@@ -443,15 +461,6 @@ class JointLinprogPlanner(BatteryPlanner):
         row[index(horizon - 1, acc_temp)] = -kwh_per_degree
         upper_rows.append(row)
         upper_values.append(-thermal_floor_temp * kwh_per_degree)
-
-        # 7. Leaf daily target constraint:
-        # sum(leaf_kwh[i]) = leaf_target_kwh
-        if leaf_enabled and leaf_target_kwh > 0:
-            row = np.zeros(n_vars)
-            for i in range(horizon):
-                row[index(i, leaf_kwh)] = 1
-            equal_rows.append(row)
-            equal_values.append(leaf_target_kwh)
 
         lower_bounds = np.asarray([
             -np.inf if bound[0] is None else bound[0] for bound in bounds
