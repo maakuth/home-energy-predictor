@@ -134,16 +134,16 @@ class OptimizeArchivingTests(unittest.TestCase):
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')
     @patch('optimize_plan.get_db_connection')
-    def test_non_joint_leaf_plan_uses_configured_max_power(self, mock_db, mock_prices, mock_ha, mock_print):
+    def test_non_joint_leaf_plan_charges_overnight_and_during_daytime_non_peaks(self, mock_db, mock_prices, mock_ha, mock_print):
         timestamps = [
             datetime(2026, 4, 5, hour, 15, tzinfo=timezone.utc)
-            for hour in (21, 22, 23, 12, 0)
+            for hour in (0, 7, 8, 9, 10, 11, 12, 13, 14, 18)
         ]
         self.predictions_data = [
             {
                 'timestamp': timestamp.isoformat(),
                 'predicted_baseload': 2.0,
-                'solar_forecast': 2.0 if timestamp.hour == 12 else 0.0,
+                'solar_forecast': 0.0,
                 'outside_temp': 5.0,
                 'is_sauna_active': 0,
                 'is_fallback_price': 0,
@@ -154,19 +154,20 @@ class OptimizeArchivingTests(unittest.TestCase):
             json.dump(self.predictions_data, f)
 
         mock_db.side_effect = lambda: sqlite3.connect(self.db_file)
-        mock_prices.return_value = ([0.10, 0.10, 0.50, 0.40, 0.10], [0, 0, 0, 0, 0], 'Nordpool', False, False, None)
+        mock_prices.return_value = ([0.50] + [0.10] * 8 + [0.50], [0] * 10, 'Nordpool', False, False, None)
         mock_ha.side_effect = lambda entity_id: {'state': '0'} if entity_id == 'sensor.mlp_teho' else {'state': '50.0'}
 
         with patch.dict(os.environ, {
             'HEPO_DISABLE_BATTERY': 'true',
             'LEAF_MAX_POWER_KW': '1.8',
+            'LEAF_PEAK_PRICE_PERCENTILE': '75.0',
         }, clear=False):
             optimize()
 
         with open(self.plan_file) as f:
             plan = json.load(f)
-        self.assertEqual([entry['leaf_intent'] for entry in plan], ['OFF', 'ON', 'OFF', 'ON', 'ON'])
-        self.assertEqual([entry['planned_leaf_kw'] for entry in plan], [0.0, 1.8, 0.0, 1.8, 1.8])
+        self.assertEqual([entry['leaf_intent'] for entry in plan], ['ON'] * 9 + ['OFF'])
+        self.assertEqual([entry['planned_leaf_kw'] for entry in plan], [1.8] * 9 + [0.0])
 
     def test_plan_write_is_atomic(self):
         from optimize_plan import write_plan_atomically

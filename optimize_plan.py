@@ -21,6 +21,7 @@ from utils.gshp_health import gshp_is_failed
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.db_utils import fetch_states_history
 from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPlannerContext
+from battery_planners.joint_linprog import JointLinprogPlanner, leaf_charging_allowed
 from utils.plan_time import current_plan_entry
 
 load_dotenv(override=True)
@@ -738,17 +739,13 @@ def optimize() -> None:
 
     planned_ev_kw = np.array([ev_power_kw if ev else 0.0 for ev in ev_plan])
 
-    # Leaf charges overnight by default. It only pauses for prices above the
-    # configured peak percentile, but daytime solar above the threshold also charges.
+    # Leaf follows the fixed schedule that the joint LP accounts for: always on
+    # overnight and on during daytime non-peak prices.
     leaf_peak_price = np.percentile(
         import_prices, np.clip(get_env_float('LEAF_PEAK_PRICE_PERCENTILE', 75.0), 0.0, 100.0),
     )
-    leaf_solar_min_kw = get_env_float('LEAF_SOLAR_MIN_KW', 2.0)
     leaf_intents = [
-        'ON' if (
-            ((ts.hour >= 22 or ts.hour < 7) and import_prices[i] <= leaf_peak_price)
-            or solar_array[i] >= leaf_solar_min_kw
-        ) else 'OFF'
+        'ON' if leaf_charging_allowed(ts, import_prices[i], leaf_peak_price) else 'OFF'
         for i, ts in enumerate(prediction_timestamps)
     ]
     leaf_max_power_kw = get_env_float('LEAF_MAX_POWER_KW', 1.8)
@@ -819,7 +816,6 @@ def optimize() -> None:
     # Use battery optimization if available, otherwise fall back to no-battery plan
     if is_battery_enabled():
         planner = BatteryPlannerFactory.create()
-        from battery_planners.joint_linprog import JointLinprogPlanner
         is_joint = isinstance(planner, JointLinprogPlanner)
         if is_joint:
             planner_load_kwh = predictions * get_plan_interval_hours()

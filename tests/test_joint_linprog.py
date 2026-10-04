@@ -55,7 +55,6 @@ class JointLinprogTests(unittest.TestCase):
             'GSHP_MAX_TEMP': '55.0',
             'GSHP_INITIAL_TEMP': str(current_acc_temp),
             'LEAF_OPTIMIZE_ENABLED': '0',  # disabled by default unless tested
-            'LEAF_DAILY_TARGET_KWH': '0',
         }
         env.update(overrides)
         context = {
@@ -311,7 +310,7 @@ class JointLinprogTests(unittest.TestCase):
             GSHP_OPTIMIZE_ENABLED='0',
             RESISTIVE_HEATER_OPTIMIZE_ENABLED='0',
             BULK_HEATER_OPTIMIZE_ENABLED='0',
-            LEAF_OPTIMIZE_ENABLED='1', LEAF_DAILY_TARGET_KWH='0',
+            LEAF_OPTIMIZE_ENABLED='1',
             GSHP_MIN_TEMP='45.0',
             GSHP_BASELINE_DEMAND_KW='0.0', GSHP_HEAT_LOSS_K='0.0',
         )
@@ -380,19 +379,20 @@ class JointLinprogTests(unittest.TestCase):
         self.assertAlmostEqual(plan[0].planned_resistive_kw or 0.0, 0.0, places=4)
         self.assertGreater(plan[1].planned_resistive_kw or 0.0, 0.0)
 
-    def test_leaf_charges_overnight_and_with_plentiful_solar(self):
+    def test_leaf_charges_overnight_and_during_daytime_non_peaks(self):
         timestamps = [
             datetime(2026, 1, 1, hour, tzinfo=timezone.utc)
-            for hour in (21, 22, 23, 12, 0)
+            for hour in (0, 7, 8, 9, 10, 11, 12, 13, 14, 18)
         ]
         plan = self._plan(
-            [0.0] * 5, [0.0, 0.0, 0.0, 2.0, 0.0], [0.10, 0.10, 0.50, 0.40, 0.10],
+            [0.0] * 10, [0.0] * 10, [0.50] + [0.10] * 8 + [0.50],
             timestamps=timestamps,
             LEAF_OPTIMIZE_ENABLED='1',
+            LEAF_PEAK_PRICE_PERCENTILE='75.0',
         )
 
-        self.assertEqual([entry.leaf_intent for entry in plan], ['OFF', 'ON', 'OFF', 'ON', 'ON'])
-        self.assertEqual([entry.planned_leaf_kw for entry in plan], [0.0, 1.8, 0.0, 1.8, 1.8])
+        self.assertEqual([entry.leaf_intent for entry in plan], ['ON'] * 9 + ['OFF'])
+        self.assertEqual([entry.planned_leaf_kw for entry in plan], [1.8] * 9 + [0.0])
 
     def test_fuse_limit_prevents_simultaneous_overload(self):
         """Battery charging, GSHP, and Leaf combined must respect main fuse limit."""
@@ -411,7 +411,6 @@ class JointLinprogTests(unittest.TestCase):
             BATTERY_MAX_CHARGE_KW='10.0',
             GSHP_POWER_MAX_KW='4.0',
             LEAF_OPTIMIZE_ENABLED='1',
-            LEAF_DAILY_TARGET_KWH='6.0',
             LEAF_MAX_POWER_KW='3.0',
         )
 

@@ -192,7 +192,6 @@ def run_joint_cooptimization(
 
     os.environ['GSHP_OPTIMIZE_ENABLED'] = '1'
     os.environ['LEAF_OPTIMIZE_ENABLED'] = '1'
-    os.environ['LEAF_DAILY_TARGET_KWH'] = str(leaf_target_kwh)
 
     plan = planner.plan(
         predictions_kwh=predictions_kwh,
