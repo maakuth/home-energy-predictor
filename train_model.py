@@ -27,6 +27,14 @@ def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv') ->
         'hour_sin', 'hour_cos', 'day_sin', 'day_cos', 'month_sin', 'month_cos'
     ]
 
+    # A partial/corrupt extract cannot provide a usable model.  Check columns
+    # before dropna so this path fails gracefully instead of raising KeyError.
+    required_columns = [target, *features]
+    missing_columns = [column for column in required_columns if column not in df.columns]
+    if missing_columns:
+        print(f"❌ Error: Missing required columns: {', '.join(missing_columns)}")
+        return
+
     # Drop rows where critical new features are missing
     df = df.dropna(subset=['baseload_lag_1h', 'baseload_lag_24h'])
     print(f"  - Rows after dropna: {len(df)}")

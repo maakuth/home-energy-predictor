@@ -1,159 +1,107 @@
 from __future__ import annotations
-import unittest
-import pytest
-import pandas as pd
-import numpy as np
+
 import os
-import json
-from sarimax_predictor import load_historical_data, predict_sarimax, save_benchmark_results
+import pickle
+from unittest.mock import MagicMock, call, patch
 
-class TestSARIMAPredictor(unittest.TestCase):
-    def setUp(self):
-        # Use test-specific paths from environment (set by conftest.py)
-        self.test_csv = os.getenv('TEST_SARIMA_CSV', 'test_processed_data.csv')
-        self.test_json = os.getenv('TEST_SARIMA_FILE', 'test_sarimax_predictions.json')
-        
-        # Create directories if they don't exist (only if not in current directory)
-        csv_dir = os.path.dirname(self.test_csv)
-        if csv_dir:
-            os.makedirs(csv_dir, exist_ok=True)
-        json_dir = os.path.dirname(self.test_json)
-        if json_dir:
-            os.makedirs(json_dir, exist_ok=True)
-        
-        # Create dummy historical data (3 days of 15-min intervals)
-        # 3 * 24 * 4 = 288 points
-        timestamps = pd.date_range(start='2026-04-01', periods=288, freq='15min', tz='UTC')
-        # Create a daily cycle + some noise
-        # 96 points per day
-        base = 1.0
-        cycle = 0.5 * np.sin(2 * np.pi * np.arange(288) / 96)
-        noise = 0.1 * np.random.randn(288)
-        baseload = base + cycle + noise
-        
-        df = pd.DataFrame({'baseload_power': baseload}, index=timestamps)
-        df.to_csv(self.test_csv)
+import numpy as np
+import pandas as pd
+import pytest
 
-    def tearDown(self):
-        # No cleanup needed - conftest.py handles it via tmp_path fixture
-        pass
+from sarimax_predictor import _get_safe_forecast, load_historical_data, predict_sarimax, save_benchmark_results
 
+
+def _series(days: int = 3) -> pd.Series:
+    index = pd.date_range('2026-04-01', periods=days * 96, freq='15min', tz='UTC')
+    n = np.arange(len(index))
+    values = 1.0 + 0.5 * np.sin(2 * np.pi * n / 96) + 0.15 * np.sin(4 * np.pi * n / 96)
+    return pd.Series(values, index=index, name='baseload_power')
+
+
+def _forecast(mean: float = 1.0, upper: float = 2.0) -> MagicMock:
+    forecast = MagicMock()
+    forecast.predicted_mean = pd.Series([mean, mean])
+    forecast.conf_int.return_value = pd.DataFrame({'lower': [0.0, 0.0], 'upper': [upper, upper]})
+    return forecast
+
+
+class TestSARIMAPredictor:
     def test_load_historical_data(self):
-        ts_data = load_historical_data(self.test_csv, last_n_days=2)
-        # Should be roughly 2 days of 15-min points (96 * 2 = 192)
-        self.assertIsNotNone(ts_data)
-        # The first point of last_n_days might depend on exact timing, but should be > 190
-        self.assertGreaterEqual(len(ts_data), 190)
-        self.assertIsInstance(ts_data.index, pd.DatetimeIndex)
+        path = os.environ['TEST_SARIMA_CSV']
+        _series().to_frame().to_csv(path)
+        loaded = load_historical_data(path, last_n_days=2)
+        assert loaded is not None
+        assert len(loaded) >= 190
+        assert isinstance(loaded.index, pd.DatetimeIndex)
+
+    def test_warm_start_explosion_retries_clean_fit(self):
+        model = MagicMock()
+        bad = _forecast(1.0, 101.0)
+        good = _forecast(1.0, 2.0)
+        model.fit.side_effect = [MagicMock(get_forecast=MagicMock(return_value=bad)),
+                                 MagicMock(get_forecast=MagicMock(return_value=good))]
+
+        assert _get_safe_forecast(model, 2, start_params=np.array([0.1])) is good
+        assert model.fit.call_args_list == [call(start_params=np.array([0.1]), disp=False), call(disp=False)]
+
+    def test_warm_start_exception_retries_clean_fit(self):
+        model = MagicMock()
+        good = _forecast()
+        model.fit.side_effect = [RuntimeError('bad params'), MagicMock(get_forecast=MagicMock(return_value=good))]
+
+        assert _get_safe_forecast(model, 2, start_params=np.array([0.1])) is good
+        assert model.fit.call_args_list == [call(start_params=np.array([0.1]), disp=False), call(disp=False)]
+
+    def test_unreasonable_clean_fit_returns_none(self):
+        model = MagicMock()
+        model.fit.return_value.get_forecast.return_value = _forecast(21.0, 22.0)
+        assert _get_safe_forecast(model, 2) is None
+
+    def test_predict_uses_flat_fallback_after_all_fits_fail(self):
+        params_path = os.environ['TEST_SARIMA_PARAMS']
+        with open(params_path, 'wb') as f:
+            pickle.dump({'params': np.array([0.1]), 'order': (1, 1, 1), 'seasonal_order': (1, 1, 0, 96)}, f)
+        with patch('sarimax_predictor.SARIMAX') as sarimax:
+            sarimax.return_value.fit.side_effect = RuntimeError('cannot fit')
+            mean, ci = predict_sarimax(_series(), forecast_steps=4, params_path=params_path)
+        assert len(mean) == len(ci) == 4
+        assert (mean == _series().mean()).all()
+        assert mean.index.freqstr == '15min'
+        assert np.isfinite(ci.to_numpy()).all()
+        assert sarimax.return_value.fit.call_count == 2
 
     @pytest.mark.slow
-    def test_predict_sarimax(self):
-        # Load all 3 days
-        ts_data = load_historical_data(self.test_csv, last_n_days=3)
-        # Forecast for 1 hour (4 steps)
-        # Note: fitting might be slow, but 288 points should be fine.
-        # Use a non-existent params_path to force default model fit (isolated from production)
-        fake_params = os.path.join(os.path.dirname(self.test_json), 'nonexistent_params.pkl')
-        forecast_mean, forecast_ci = predict_sarimax(ts_data, forecast_steps=4, params_path=fake_params)
-        
-        self.assertIsNotNone(forecast_mean)
-        self.assertEqual(len(forecast_mean), 4)
-        self.assertTrue(all(forecast_mean >= 0))
-        self.assertIsNotNone(forecast_ci)
+    def test_real_sarima_forecast_beats_flat_baseline_on_high_signal_period(self):
+        """A fitted seasonal model must beat the historical mean on an unseen day."""
+        all_data = _series(days=4)
+        train, actual = all_data.iloc[:288], all_data.iloc[288:]
+        safe_results = []
 
-    def test_save_benchmark_results(self):
-        # Mock forecast
-        ts = pd.date_range(start='2026-04-04', periods=2, freq='15min', tz='UTC')
-        mock_forecast = pd.Series([1.2, 1.3], index=ts)
-        
-        save_benchmark_results(mock_forecast, filename=self.test_json)
-        
-        self.assertTrue(os.path.exists(self.test_json))
-        with open(self.test_json, 'r') as f:
-            data = json.load(f)
-            self.assertEqual(len(data), 2)
-            self.assertEqual(data[0]['predicted_baseload'], 1.2)
-            self.assertEqual(data[0]['model'], 'SARIMA')
+        def record_safe_forecast(*args, **kwargs):
+            result = _get_safe_forecast(*args, **kwargs)
+            safe_results.append(result)
+            return result
 
-    @pytest.mark.slow
-    def test_predict_sarimax_fallback_from_bad_params(self):
-        """If saved params produce exploding CIs, predictor should refit."""
-        import pickle
-        import tempfile
-        from statsmodels.tsa.statespace.sarimax import SARIMAX
-
-        # Create a pickle with the bad params observed in production
-        bad_params = pd.Series({
-            'ar.L1': 0.562383,
-            'ma.L1': -0.776564,
-            'ar.S.L96': -0.621604,
-            'sigma2': 0.205888
-        })
-        model_data = {
-            'params': bad_params,
-            'order': (1, 1, 1),
-            'seasonal_order': (1, 1, 0, 96),
-            'last_index': pd.Timestamp('2026-05-31 05:45:00+0000')
-        }
-
-        with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as f:
-            pickle.dump(model_data, f)
-            bad_pickle = f.name
-
-        try:
-            # Use real production data if available, otherwise synthetic
-            ts_data = load_historical_data('state/processed_data.csv', last_n_days=3)
-            if ts_data is None or len(ts_data) < 100:
-                ts_data = load_historical_data(self.test_csv, last_n_days=3)
-
-            # Demonstrate that smooth() with bad params gives exploding CIs on real data
-            model = SARIMAX(ts_data, order=(1, 1, 1), seasonal_order=(1, 1, 0, 96),
-                           enforce_stationarity=False, enforce_invertibility=False)
-            results_smooth = model.smooth(bad_params)
-            ci_smooth = results_smooth.get_forecast(steps=10).conf_int(alpha=0.05)
-            max_smooth_upper = ci_smooth.iloc[:, 1].max()
-            # This confirms the numerical bug exists on real data (>1000 kW upper CI)
-            # On synthetic data it may not reproduce; skip assertion if so
-            if max_smooth_upper > 1000:
-                # predict_sarimax should handle this gracefully
-                forecast_mean, forecast_ci = predict_sarimax(ts_data, forecast_steps=10, params_path=bad_pickle)
-
-                # Mean should be reasonable (home baseload < 50 kW)
-                self.assertTrue(all(forecast_mean < 50))
-                self.assertTrue(all(forecast_mean >= 0))
-
-                # CI should also be reasonable after fallback
-                max_upper = forecast_ci.iloc[:, 1].max()
-                self.assertLess(max_upper, 100, f"Upper CI {max_upper:.1f} kW is unreasonably high for home baseload")
-            else:
-                # Synthetic data doesn't trigger the bug; just verify predict_sarimax returns reasonable values
-                forecast_mean, forecast_ci = predict_sarimax(ts_data, forecast_steps=10, params_path=bad_pickle)
-                self.assertTrue(all(forecast_mean < 50))
-                max_upper = forecast_ci.iloc[:, 1].max()
-                self.assertLess(max_upper, 100)
-        finally:
-            os.unlink(bad_pickle)
+        with patch('sarimax_predictor._get_safe_forecast', side_effect=record_safe_forecast) as safe:
+            predicted, ci = predict_sarimax(train, forecast_steps=96,
+                                            params_path=os.path.join(os.environ['TEST_TMP_DIR'], 'missing.pkl'))
+        assert safe.call_count == 1
+        assert len(safe_results) == 1
+        assert safe_results[0] is not None, "real fit unexpectedly used flat safety fallback"
+        assert len(predicted) == len(actual) == len(ci) == 96
+        mae = float(np.mean(np.abs(predicted.to_numpy() - actual.to_numpy())))
+        baseline_mae = float(np.mean(np.abs(train.mean() - actual.to_numpy())))
+        assert mae < 0.20
+        assert mae < baseline_mae * 0.5
+        assert abs(float((predicted.to_numpy() - actual.to_numpy()).mean())) < 0.10
 
     def test_save_benchmark_results_clamps_exploding_ci(self):
-        """If forecast CIs are unreasonably large, they should be clamped."""
-        ts = pd.date_range(start='2026-04-04', periods=3, freq='15min', tz='UTC')
-        mock_forecast = pd.Series([1.2, 1.3, 1.4], index=ts)
-        # Mock exploding CI: upper bound in thousands
-        mock_ci = pd.DataFrame({
-            'lower baseload_power': [0.5, 0.6, 0.7],
-            'upper baseload_power': [1.5, 1500.0, 2000.0]
-        }, index=ts)
-
-        save_benchmark_results(mock_forecast, mock_ci, filename=self.test_json)
-
-        with open(self.test_json, 'r') as f:
-            data = json.load(f)
-
-        # All upper bounds should be clamped to reasonable values
-        for row in data:
-            self.assertLess(row['upper_95'], 100,
-                           f"Upper CI {row['upper_95']} should be clamped for baseload")
-            self.assertGreaterEqual(row['upper_95'], row['predicted_baseload'])
-
-if __name__ == '__main__':
-    unittest.main()
+        path = os.environ['TEST_SARIMA_FILE']
+        ts = pd.date_range('2026-04-04', periods=3, freq='15min', tz='UTC')
+        mean = pd.Series([1.2, 1.3, 1.4], index=ts)
+        ci = pd.DataFrame({'lower baseload_power': [0.5, 0.6, 0.7],
+                           'upper baseload_power': [1.5, 1500.0, 2000.0]}, index=ts)
+        save_benchmark_results(mean, ci, filename=path)
+        data = pd.read_json(path)
+        assert (data['upper_95'] < 100).all()
+        assert (data['upper_95'] >= data['predicted_baseload']).all()

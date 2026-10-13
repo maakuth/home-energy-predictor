@@ -10,6 +10,7 @@ planning time.
 
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime, timedelta, timezone, time
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
@@ -70,6 +71,10 @@ class BatteryReplaySimulator:
         self.measurements_df = None
         self.predictions_df = None
         self.prices_df = None
+        # Replay inputs are immutable fixture data.  Full replays invoke the
+        # same visibility lookup for every planner at each planning time.
+        self._visible_predictions_cache: dict[pd.Timestamp, pd.DataFrame] = {}
+        self._visible_prices_cache: dict[pd.Timestamp, np.ndarray] = {}
         
         self._load_and_normalize_data()
     
@@ -124,6 +129,11 @@ class BatteryReplaySimulator:
         For each target_timestamp, returns only the latest forecast generated
         before or at planning_time.
         """
+        planning_time = pd.Timestamp(planning_time)
+        cached = self._visible_predictions_cache.get(planning_time)
+        if cached is not None:
+            return cached
+
         if self.predictions_df is None or self.predictions_df.empty:
             return pd.DataFrame()
         
@@ -142,7 +152,9 @@ class BatteryReplaySimulator:
             visible.groupby('target_timestamp')['generated_at'].idxmax()
         ]
         
-        return latest_per_target.set_index('target_timestamp').sort_index()
+        result = latest_per_target.set_index('target_timestamp').sort_index()
+        self._visible_predictions_cache[planning_time] = result
+        return result
     
     def get_visible_prices(self, planning_time) -> np.ndarray:
         """Get market prices visible at planning_time.
@@ -152,6 +164,11 @@ class BatteryReplaySimulator:
         
         Falls back to prices from visible predictions if market prices unavailable.
         """
+        planning_time = pd.Timestamp(planning_time)
+        cached = self._visible_prices_cache.get(planning_time)
+        if cached is not None:
+            return cached.copy()
+
         prices = None
         
         # First try market prices table
@@ -187,7 +204,9 @@ class BatteryReplaySimulator:
                 except:
                     prices = None
         
-        return prices if prices is not None else np.array([])
+        result = prices if prices is not None else np.array([])
+        self._visible_prices_cache[planning_time] = result
+        return result.copy()
     
     def get_planner_horizon(
         self, planning_time, planner_output_length: int
@@ -280,8 +299,33 @@ class BatteryReplaySimulator:
         battery_min_soc_pct: float = 10.0,
         battery_max_soc_pct: float = 90.0,
         battery_initial_soc_pct: float = 10.0,
+        max_planks: int = 96,
+        context: Optional[Dict[str, Any]] = None,
+        planner_horizon: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Run a replay without leaking test-only environment settings."""
+        environment_before = dict(os.environ)
+        try:
+            return self._simulate_battery_control(
+                planner, planner_type, battery_capacity_kwh, battery_min_soc_pct,
+                battery_max_soc_pct, battery_initial_soc_pct, max_planks, context,
+                planner_horizon,
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(environment_before)
+
+    def _simulate_battery_control(
+        self,
+        planner: BatteryPlanner,
+        planner_type: str,
+        battery_capacity_kwh: float = 50.0,
+        battery_min_soc_pct: float = 10.0,
+        battery_max_soc_pct: float = 90.0,
+        battery_initial_soc_pct: float = 10.0,
         max_planks: int = 96,  # 24 hours at 15-min intervals
         context: Optional[Dict[str, Any]] = None,
+        planner_horizon: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Run step-by-step battery planner simulation.
         
@@ -297,7 +341,6 @@ class BatteryReplaySimulator:
         Returns:
             Dict with replay metrics: success, soc_violations, cost, savings, etc.
         """
-        import os
         from dotenv import load_dotenv
         
         load_dotenv(override=True)
@@ -342,9 +385,20 @@ class BatteryReplaySimulator:
             # Compute current SoC to pass directly to planner
             current_soc_pct = (soc_kwh / battery_capacity_kwh) * 100.0
             
+            # Production replans from a bounded, published-price horizon.  Do
+            # not hand a replay planner the entire remaining fixture (and its
+            # padded forecasts), which can be many days long.
+            if planner_horizon is None:
+                tomorrow_valid = (context or {}).get(
+                    'tomorrow_valid', current_time.hour >= 15)
+                planner_output_length = 192 if tomorrow_valid else 96
+            else:
+                planner_output_length = planner_horizon
+            planner_output_length = max(1, min(max_planks, planner_output_length))
+
             # Get planner horizon
             predictions, solar, import_prices, export_prices, timestamps, solar_p10 = self.get_planner_horizon(
-                current_time, max_planks
+                current_time, planner_output_length
             )
 
             if len(predictions) == 0:

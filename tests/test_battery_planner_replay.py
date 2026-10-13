@@ -28,6 +28,19 @@ from tests.battery_planner_replay import (
 )
 
 
+_SIMULATORS: dict[str, BatteryReplaySimulator] = {}
+
+
+@pytest.fixture
+def simulator(fixture_path):
+    """Normalize each immutable fixture once for all planners/tests using it."""
+    cached = _SIMULATORS.get(fixture_path)
+    if cached is None:
+        cached = BatteryReplaySimulator(load_fixture(fixture_path))
+        _SIMULATORS[fixture_path] = cached
+    return cached
+
+
 class TestBatteryPlannerReplay(unittest.TestCase):
     """Base test class for battery planner replay."""
     
@@ -74,11 +87,8 @@ class TestBatteryPlannerReplayParametrized:
         print(f"  {planner_name:22s} {fixture_name:5s}  savings={savings:6.1f}%  soc={soc:5.1f}%  cost={cost:.3f}  base={base:.3f}  viol={viol}")
     
     @pytest.mark.slow
-    def test_planner_replay_no_violations(self, fixture_path, planner_name):
-        """Planner should respect SoC constraints throughout simulation."""
-        fixture = load_fixture(fixture_path)
-        simulator = BatteryReplaySimulator(fixture)
-        
+    def test_planner_replay_full_invariants(self, fixture_path, planner_name, simulator):
+        """A full replay must be safe, finite, and not catastrophically costly."""
         if simulator.measurements_df is None or simulator.measurements_df.empty:
             pytest.skip(f"Fixture {Path(fixture_path).stem} has no measurement data")
         
@@ -101,71 +111,10 @@ class TestBatteryPlannerReplayParametrized:
         assert result['soc_violations'] == 0, \
             f"SoC constraint violations: {result['soc_violation_details']}"
         assert result['intervals_run'] > 0, "No intervals were simulated"
-        
-        # Print planner score
-        self._print_planner_score(result, Path(fixture_path).stem, planner_name)
-    
-    @pytest.mark.slow
-    def test_planner_replay_finite_cost(self, fixture_path, planner_name):
-        """Planner output should not produce NaN or infinite costs."""
-        fixture = load_fixture(fixture_path)
-        simulator = BatteryReplaySimulator(fixture)
-        
-        if simulator.measurements_df is None or simulator.measurements_df.empty:
-            pytest.skip(f"Fixture {Path(fixture_path).stem} has no measurement data")
-        
-        if simulator.predictions_df is None or simulator.predictions_df.empty:
-            pytest.skip(f"Fixture {Path(fixture_path).stem} has no prediction archive")
-        
-        planner = BatteryPlannerFactory.create(planner_name)
-        
-        result = simulator.simulate_battery_control(
-            planner=planner,
-            planner_type=planner_name,
-            battery_capacity_kwh=50.0,
-            battery_min_soc_pct=10.0,
-            battery_max_soc_pct=90.0,
-            battery_initial_soc_pct=10.0,
-            max_planks=len(simulator.measurements_df) if simulator.measurements_df is not None else 96,
-        )
-        
-        assert result['success']
         assert np.isfinite(result['cost_with_battery_eur']), \
             f"Cost with battery is not finite: {result['cost_with_battery_eur']}"
         assert np.isfinite(result['cost_no_battery_eur']), \
             f"Baseline cost is not finite: {result['cost_no_battery_eur']}"
-        
-        # Print planner score
-        self._print_planner_score(result, Path(fixture_path).stem, planner_name)
-    
-    @pytest.mark.slow
-    def test_planner_replay_not_worse_than_baseline(self, fixture_path, planner_name):
-        """Planner cost should not catastrophically exceed baseline.
-        
-        Because battery round-trip losses (~10%) require price spreads that may
-        not always be present, a planner may show small losses. We allow up to
-        100% degradation (cost <= 2x baseline) to filter truly broken planners.
-        """
-        fixture = load_fixture(fixture_path)
-        simulator = BatteryReplaySimulator(fixture)
-        
-        if simulator.measurements_df is None or simulator.measurements_df.empty:
-            pytest.skip(f"Fixture {Path(fixture_path).stem} has no measurement data")
-        
-        planner = BatteryPlannerFactory.create(planner_name)
-        
-        result = simulator.simulate_battery_control(
-            planner=planner,
-            planner_type=planner_name,
-            battery_capacity_kwh=50.0,
-            battery_min_soc_pct=10.0,
-            battery_max_soc_pct=90.0,
-            battery_initial_soc_pct=10.0,
-            max_planks=len(simulator.measurements_df) if simulator.measurements_df is not None else 96,
-        )
-        
-        assert result['success']
-        
         baseline_cost = result['cost_no_battery_eur']
         planner_cost = result['cost_with_battery_eur']
         
@@ -179,10 +128,8 @@ class TestBatteryPlannerReplayParametrized:
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
     @pytest.mark.slow
-    def test_planner_output_structure(self, fixture_path, planner_name):
+    def test_planner_output_structure(self, fixture_path, planner_name, simulator):
         """Planner output should have correct structure and valid values."""
-        fixture = load_fixture(fixture_path)
-        simulator = BatteryReplaySimulator(fixture)
         planner = BatteryPlannerFactory.create(planner_name)
         
         # Get a visible plan
@@ -240,11 +187,8 @@ class TestBatteryPlannerReplayParametrized:
         assert entry.grid_import_kwh >= 0, "grid_import_kwh is negative"
         assert entry.grid_export_kwh >= 0, "grid_export_kwh is negative"
     
-    def test_planner_replay_quick(self, fixture_path, planner_name):
+    def test_planner_replay_quick(self, fixture_path, planner_name, simulator):
         """Quick 24h (96 interval) sanity check for rapid iteration."""
-        fixture = load_fixture(fixture_path)
-        simulator = BatteryReplaySimulator(fixture)
-
         if simulator.measurements_df is None or simulator.measurements_df.empty:
             pytest.skip(f"Fixture {Path(fixture_path).stem} has no measurement data")
 
@@ -271,11 +215,8 @@ class TestBatteryPlannerReplayParametrized:
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
 
     @pytest.mark.slow
-    def test_planner_replay_with_context(self, fixture_path, planner_name):
+    def test_planner_replay_with_context(self, fixture_path, planner_name, simulator):
         """Planner should accept a context dict during replay and still pass constraints."""
-        fixture = load_fixture(fixture_path)
-        simulator = BatteryReplaySimulator(fixture)
-        
         if simulator.measurements_df is None or simulator.measurements_df.empty:
             pytest.skip(f"Fixture {Path(fixture_path).stem} has no measurement data")
         
@@ -312,11 +253,10 @@ class TestSolarP10Passthrough(unittest.TestCase):
     predictions archive carries the column, and omit it otherwise.
     """
 
-    def _make_simulator(self, with_p10: bool) -> BatteryReplaySimulator:
+    def _make_simulator(self, with_p10: bool, n: int = 4) -> BatteryReplaySimulator:
         from utils.battery_test_data import BatteryTestData
 
         t0 = pd.Timestamp('2026-07-15 00:00', tz='UTC')
-        n = 4
         measurements = [
             {
                 'timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
@@ -346,12 +286,14 @@ class TestSolarP10Passthrough(unittest.TestCase):
             self.seen_context = None
             self.seen_solar = None
             self.seen_flexible_loads = None
+            self.horizon_lengths = []
 
         def plan(self, predictions_kwh, solar_kwh, import_prices, export_prices,
                  prediction_timestamps, committed_load_kwh=None, allow_export=True,
                  initial_soc_pct=None, context=None):
             self.seen_context = dict(context) if context else {}
             self.seen_solar = np.asarray(solar_kwh, dtype=float).copy()
+            self.horizon_lengths.append(len(predictions_kwh))
             self.seen_flexible_loads = {
                 name: os.environ.get(name)
                 for name in (
@@ -371,13 +313,13 @@ class TestSolarP10Passthrough(unittest.TestCase):
                 for ts in prediction_timestamps
             ]
 
-    def _run(self, simulator, context=None):
+    def _run(self, simulator, context=None, max_planks=4):
         spy = self._SpyPlanner()
         result = simulator.simulate_battery_control(
             planner=spy, planner_type='spy',
             battery_capacity_kwh=10.0, battery_min_soc_pct=10.0,
             battery_max_soc_pct=90.0, battery_initial_soc_pct=50.0,
-            max_planks=4, context=context,
+            max_planks=max_planks, context=context,
         )
         assert result['success'], f"replay failed: {result.get('error')}"
         return spy
@@ -410,6 +352,8 @@ class TestSolarP10Passthrough(unittest.TestCase):
             'LEAF_OPTIMIZE_ENABLED': 'true',
         }, clear=False):
             spy = self._run(self._make_simulator(with_p10=False))
+            assert os.environ['GSHP_OPTIMIZE_ENABLED'] == 'true'
+            assert os.environ['RESISTIVE_HEATER_OPTIMIZE_ENABLED'] == 'true'
 
         assert spy.seen_flexible_loads == {
             'GSHP_OPTIMIZE_ENABLED': 'false',
@@ -417,6 +361,19 @@ class TestSolarP10Passthrough(unittest.TestCase):
             'BULK_HEATER_OPTIMIZE_ENABLED': 'false',
             'LEAF_OPTIMIZE_ENABLED': 'false',
         }
+
+    def test_replay_uses_bounded_production_horizon_throughout(self):
+        """A long replay executes all intervals but exposes only 24h pre-publication."""
+        simulator = self._make_simulator(with_p10=False, n=100)
+        spy = self._run(simulator, context={'tomorrow_valid': False}, max_planks=100)
+        assert len(spy.horizon_lengths) == 99
+        assert set(spy.horizon_lengths) == {96}
+
+    def test_replay_uses_48h_horizon_when_tomorrow_prices_are_valid(self):
+        simulator = self._make_simulator(with_p10=False, n=100)
+        spy = self._run(simulator, context={'tomorrow_valid': True}, max_planks=100)
+        assert len(spy.horizon_lengths) == 99
+        assert set(spy.horizon_lengths) == {100}
 
 
 class TestPriceWindowRobustness(unittest.TestCase):
@@ -524,6 +481,19 @@ class TestBatteryReplaySimulatorBasics(unittest.TestCase):
                     gen_dt = pd.to_datetime(generated_at, utc=True)
                     assert gen_dt <= planning_time, \
                         f"Generated at {generated_at} is after planning time {planning_time}"
+
+    def test_visible_prediction_cache_preserves_selection(self):
+        """Memoization must not change visibility selection or expose later forecasts."""
+        if not get_fixtures():
+            self.skipTest("No fixtures available")
+        simulator = BatteryReplaySimulator(load_fixture(get_fixtures()[0]))
+        if simulator.predictions_df is None or simulator.predictions_df.empty:
+            self.skipTest("No prediction data in fixture")
+        planning_time = pd.Timestamp(simulator.predictions_df.index.get_level_values(0)[0])
+        first = simulator.get_visible_predictions(planning_time)
+        second = simulator.get_visible_predictions(planning_time)
+        pd.testing.assert_frame_equal(first, second)
+        assert len(simulator._visible_predictions_cache) == 1
 
 
 class TestReplayIntervalAccounting(unittest.TestCase):
