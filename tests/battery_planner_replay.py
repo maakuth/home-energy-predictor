@@ -70,6 +70,10 @@ class BatteryReplaySimulator:
         self.measurements_df = None
         self.predictions_df = None
         self.prices_df = None
+        # Replay inputs are immutable fixture data.  Full replays invoke the
+        # same visibility lookup for every planner at each planning time.
+        self._visible_predictions_cache: dict[pd.Timestamp, pd.DataFrame] = {}
+        self._visible_prices_cache: dict[pd.Timestamp, np.ndarray] = {}
         
         self._load_and_normalize_data()
     
@@ -124,6 +128,11 @@ class BatteryReplaySimulator:
         For each target_timestamp, returns only the latest forecast generated
         before or at planning_time.
         """
+        planning_time = pd.Timestamp(planning_time)
+        cached = self._visible_predictions_cache.get(planning_time)
+        if cached is not None:
+            return cached
+
         if self.predictions_df is None or self.predictions_df.empty:
             return pd.DataFrame()
         
@@ -142,7 +151,9 @@ class BatteryReplaySimulator:
             visible.groupby('target_timestamp')['generated_at'].idxmax()
         ]
         
-        return latest_per_target.set_index('target_timestamp').sort_index()
+        result = latest_per_target.set_index('target_timestamp').sort_index()
+        self._visible_predictions_cache[planning_time] = result
+        return result
     
     def get_visible_prices(self, planning_time) -> np.ndarray:
         """Get market prices visible at planning_time.
@@ -152,6 +163,11 @@ class BatteryReplaySimulator:
         
         Falls back to prices from visible predictions if market prices unavailable.
         """
+        planning_time = pd.Timestamp(planning_time)
+        cached = self._visible_prices_cache.get(planning_time)
+        if cached is not None:
+            return cached.copy()
+
         prices = None
         
         # First try market prices table
@@ -187,7 +203,9 @@ class BatteryReplaySimulator:
                 except:
                     prices = None
         
-        return prices if prices is not None else np.array([])
+        result = prices if prices is not None else np.array([])
+        self._visible_prices_cache[planning_time] = result
+        return result.copy()
     
     def get_planner_horizon(
         self, planning_time, planner_output_length: int

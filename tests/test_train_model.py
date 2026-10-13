@@ -62,18 +62,14 @@ class TestTrainModel(unittest.TestCase):
 
         df.to_csv(os.path.join(state_dir, 'processed_data.csv'))
 
-    def test_model_files_created(self):
+    def test_training_writes_valid_model_and_feature_artifacts(self):
+        """One real fit covers all persisted-artifact assertions."""
         from train_model import train
         train()
         model_path = os.path.join(self.test_dir, 'state', 'energy_model.json')
         features_path = os.path.join(self.test_dir, 'state', 'model_features.json')
         self.assertTrue(os.path.exists(model_path), "train() should create energy_model.json")
         self.assertTrue(os.path.exists(features_path), "train() should create model_features.json")
-
-    def test_features_file_format(self):
-        from train_model import train
-        train()
-        features_path = os.path.join(self.test_dir, 'state', 'model_features.json')
         with open(features_path) as f:
             saved_features = json.load(f)
         expected_features = [
@@ -86,11 +82,6 @@ class TestTrainModel(unittest.TestCase):
             'hour_sin', 'hour_cos', 'day_sin', 'day_cos', 'month_sin', 'month_cos'
         ]
         self.assertEqual(saved_features, expected_features)
-
-    def test_model_is_valid_json(self):
-        from train_model import train
-        train()
-        model_path = os.path.join(self.test_dir, 'state', 'energy_model.json')
         with open(model_path) as f:
             model_json = json.load(f)
         self.assertIn('learner', model_json, "XGBoost JSON should have 'learner' key")
@@ -110,14 +101,10 @@ class TestTrainModel(unittest.TestCase):
         os.makedirs(train_dir, exist_ok=True)
         df = pd.DataFrame({'baseload_power': [1.0], 'outside_temp': [10.0]})
         df.to_csv(os.path.join(train_dir, 'processed_data.csv'))
-        # Chdir to the small-data dir
-        os.chdir(os.path.dirname(train_dir))
-        try:
-            from train_model import train
-            result = train()
-            self.assertIsNone(result)
-        finally:
-            os.chdir(self.test_dir)
+        from train_model import train
+        result = train(data_path=os.path.join(train_dir, 'processed_data.csv'))
+        self.assertIsNone(result)
+        self.assertFalse(os.path.exists(os.path.join(self.test_dir, 'state', 'energy_model.json')))
 
 
 if __name__ == '__main__':
