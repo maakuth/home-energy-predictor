@@ -253,11 +253,10 @@ class TestSolarP10Passthrough(unittest.TestCase):
     predictions archive carries the column, and omit it otherwise.
     """
 
-    def _make_simulator(self, with_p10: bool) -> BatteryReplaySimulator:
+    def _make_simulator(self, with_p10: bool, n: int = 4) -> BatteryReplaySimulator:
         from utils.battery_test_data import BatteryTestData
 
         t0 = pd.Timestamp('2026-07-15 00:00', tz='UTC')
-        n = 4
         measurements = [
             {
                 'timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
@@ -287,12 +286,14 @@ class TestSolarP10Passthrough(unittest.TestCase):
             self.seen_context = None
             self.seen_solar = None
             self.seen_flexible_loads = None
+            self.horizon_lengths = []
 
         def plan(self, predictions_kwh, solar_kwh, import_prices, export_prices,
                  prediction_timestamps, committed_load_kwh=None, allow_export=True,
                  initial_soc_pct=None, context=None):
             self.seen_context = dict(context) if context else {}
             self.seen_solar = np.asarray(solar_kwh, dtype=float).copy()
+            self.horizon_lengths.append(len(predictions_kwh))
             self.seen_flexible_loads = {
                 name: os.environ.get(name)
                 for name in (
@@ -312,13 +313,13 @@ class TestSolarP10Passthrough(unittest.TestCase):
                 for ts in prediction_timestamps
             ]
 
-    def _run(self, simulator, context=None):
+    def _run(self, simulator, context=None, max_planks=4):
         spy = self._SpyPlanner()
         result = simulator.simulate_battery_control(
             planner=spy, planner_type='spy',
             battery_capacity_kwh=10.0, battery_min_soc_pct=10.0,
             battery_max_soc_pct=90.0, battery_initial_soc_pct=50.0,
-            max_planks=4, context=context,
+            max_planks=max_planks, context=context,
         )
         assert result['success'], f"replay failed: {result.get('error')}"
         return spy
@@ -351,6 +352,8 @@ class TestSolarP10Passthrough(unittest.TestCase):
             'LEAF_OPTIMIZE_ENABLED': 'true',
         }, clear=False):
             spy = self._run(self._make_simulator(with_p10=False))
+            assert os.environ['GSHP_OPTIMIZE_ENABLED'] == 'true'
+            assert os.environ['RESISTIVE_HEATER_OPTIMIZE_ENABLED'] == 'true'
 
         assert spy.seen_flexible_loads == {
             'GSHP_OPTIMIZE_ENABLED': 'false',
@@ -358,6 +361,19 @@ class TestSolarP10Passthrough(unittest.TestCase):
             'BULK_HEATER_OPTIMIZE_ENABLED': 'false',
             'LEAF_OPTIMIZE_ENABLED': 'false',
         }
+
+    def test_replay_uses_bounded_production_horizon_throughout(self):
+        """A long replay executes all intervals but exposes only 24h pre-publication."""
+        simulator = self._make_simulator(with_p10=False, n=100)
+        spy = self._run(simulator, context={'tomorrow_valid': False}, max_planks=100)
+        assert len(spy.horizon_lengths) == 99
+        assert set(spy.horizon_lengths) == {96}
+
+    def test_replay_uses_48h_horizon_when_tomorrow_prices_are_valid(self):
+        simulator = self._make_simulator(with_p10=False, n=100)
+        spy = self._run(simulator, context={'tomorrow_valid': True}, max_planks=100)
+        assert len(spy.horizon_lengths) == 99
+        assert set(spy.horizon_lengths) == {100}
 
 
 class TestPriceWindowRobustness(unittest.TestCase):

@@ -10,6 +10,7 @@ planning time.
 
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime, timedelta, timezone, time
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
@@ -298,8 +299,33 @@ class BatteryReplaySimulator:
         battery_min_soc_pct: float = 10.0,
         battery_max_soc_pct: float = 90.0,
         battery_initial_soc_pct: float = 10.0,
+        max_planks: int = 96,
+        context: Optional[Dict[str, Any]] = None,
+        planner_horizon: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Run a replay without leaking test-only environment settings."""
+        environment_before = dict(os.environ)
+        try:
+            return self._simulate_battery_control(
+                planner, planner_type, battery_capacity_kwh, battery_min_soc_pct,
+                battery_max_soc_pct, battery_initial_soc_pct, max_planks, context,
+                planner_horizon,
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(environment_before)
+
+    def _simulate_battery_control(
+        self,
+        planner: BatteryPlanner,
+        planner_type: str,
+        battery_capacity_kwh: float = 50.0,
+        battery_min_soc_pct: float = 10.0,
+        battery_max_soc_pct: float = 90.0,
+        battery_initial_soc_pct: float = 10.0,
         max_planks: int = 96,  # 24 hours at 15-min intervals
         context: Optional[Dict[str, Any]] = None,
+        planner_horizon: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Run step-by-step battery planner simulation.
         
@@ -315,7 +341,6 @@ class BatteryReplaySimulator:
         Returns:
             Dict with replay metrics: success, soc_violations, cost, savings, etc.
         """
-        import os
         from dotenv import load_dotenv
         
         load_dotenv(override=True)
@@ -360,9 +385,20 @@ class BatteryReplaySimulator:
             # Compute current SoC to pass directly to planner
             current_soc_pct = (soc_kwh / battery_capacity_kwh) * 100.0
             
+            # Production replans from a bounded, published-price horizon.  Do
+            # not hand a replay planner the entire remaining fixture (and its
+            # padded forecasts), which can be many days long.
+            if planner_horizon is None:
+                tomorrow_valid = (context or {}).get(
+                    'tomorrow_valid', current_time.hour >= 15)
+                planner_output_length = 192 if tomorrow_valid else 96
+            else:
+                planner_output_length = planner_horizon
+            planner_output_length = max(1, min(max_planks, planner_output_length))
+
             # Get planner horizon
             predictions, solar, import_prices, export_prices, timestamps, solar_p10 = self.get_planner_horizon(
-                current_time, max_planks
+                current_time, planner_output_length
             )
 
             if len(predictions) == 0:
