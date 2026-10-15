@@ -18,6 +18,8 @@ ENV/
 !java-battery-planner/fixtures/*.json
 # ... and the empirical solar p10 ratio model used by bench_solar_hedge.py
 !tests/fixtures/solar_p10_ratio_model.json
+# ... and immutable offline quality-gate inputs and approved references.
+!tests/fixtures/quality_*.json
 
 hepo.db
 sarima_model_params.pkl

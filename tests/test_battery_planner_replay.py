@@ -11,6 +11,7 @@ Tests each planner against all available fixtures, verifying:
 
 import unittest
 import os
+import json
 from pathlib import Path
 from unittest.mock import patch
 import pytest
@@ -23,12 +24,23 @@ from battery_planners.base import BatteryPlanEntry
 from tests.battery_planner_replay import (
     BatteryReplaySimulator,
     execute_plan_entry,
+    plan_entry_errors,
     load_fixture,
     get_fixtures,
 )
 
 
 _SIMULATORS: dict[str, BatteryReplaySimulator] = {}
+
+
+def quality_replay_cases():
+    """Only fixtures reviewed into the manifest belong in the quality suite."""
+    manifest_path = Path(__file__).parent / 'fixtures' / 'quality_manifest.json'
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    return [
+        (str(manifest_path.parent / fixture['name']), fixture['planner'])
+        for fixture in manifest['fixtures'] if fixture.get('included', False)
+    ]
 
 
 @pytest.fixture
@@ -126,7 +138,7 @@ class TestBatteryPlannerReplayParametrized:
         
         # Print planner score
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
-    
+
     @pytest.mark.slow
     def test_planner_output_structure(self, fixture_path, planner_name, simulator, monkeypatch):
         """Planner output should have correct structure and valid values."""
@@ -243,6 +255,29 @@ class TestBatteryPlannerReplayParametrized:
         assert result['success'], f"Replay with context failed: {result.get('error', 'Unknown error')}"
         assert result['soc_violations'] == 0, \
             f"SoC constraint violations with context: {result.get('soc_violation_details', [])}"
+
+
+@pytest.mark.slow
+@pytest.mark.quality
+@pytest.mark.parametrize('fixture_path,planner_name', quality_replay_cases())
+class TestQualityManifestReplay:
+    """The quality marker uses only the explicitly reviewed portfolio."""
+
+    def test_full_replay_hard_safety_constraints(self, fixture_path, planner_name, simulator):
+        planner = BatteryPlannerFactory.create(planner_name)
+        assert simulator.measurements_df is not None
+        result = simulator.simulate_battery_control(
+            planner=planner,
+            planner_type=planner_name,
+            battery_capacity_kwh=50.0,
+            battery_min_soc_pct=10.0,
+            battery_max_soc_pct=90.0,
+            battery_initial_soc_pct=10.0,
+            max_planks=len(simulator.measurements_df),
+        )
+        assert result['success'], result.get('error')
+        assert result['complete']
+        assert result['soc_violations'] == 0
 
 
 class TestSolarP10Passthrough(unittest.TestCase):
@@ -528,6 +563,42 @@ class TestReplayIntervalAccounting(unittest.TestCase):
         self.assertTrue(result['soc_violation'])
         self.assertAlmostEqual(result['raw_soc_kwh'], 7.5)
         self.assertAlmostEqual(result['soc_kwh'], 9.0)
+
+    def test_empty_plan_is_an_incomplete_failed_replay(self):
+        from utils.battery_test_data import BatteryTestData
+
+        t0 = pd.Timestamp('2026-07-15 00:00', tz='UTC')
+        raw = {'metadata': {}, 'history': {
+            'measurements': [
+                {'timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
+                 'total_power_kw': 1.0, 'solar_actual_kw': 0.0}
+                for i in range(3)
+            ],
+            'predictions_archive': [
+                {'target_timestamp': (t0 + pd.Timedelta(minutes=15 * i)).isoformat(),
+                 'generated_at': t0.isoformat(), 'predicted_usage_kw': 1.0,
+                 'solar_forecast_kw': 0.0, 'import_price': 0.10, 'export_price': 0.02}
+                for i in range(3)
+            ],
+        }}
+
+        class EmptyPlanner:
+            def plan(self, **_kwargs):
+                return []
+
+        result = BatteryReplaySimulator(BatteryTestData(raw)).simulate_battery_control(
+            EmptyPlanner(), 'empty', max_planks=3)
+
+        self.assertFalse(result['success'])
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['error'], 'Planner returned an empty plan')
+        self.assertEqual(result['intervals_attempted'], 1)
+
+    def test_non_finite_entry_is_a_schema_violation(self):
+        entry = self._entry()
+        entry.grid_import_kwh = float('nan')
+
+        self.assertEqual(plan_entry_errors(entry), ['grid_import_kwh is not finite'])
 
 
 if __name__ == '__main__':

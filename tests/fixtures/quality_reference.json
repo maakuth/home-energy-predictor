@@ -1,0 +1,131 @@
+{
+  "candidate": {
+    "planner": "nemotron-linprog",
+    "version": "1.34.0"
+  },
+  "evaluator_version": "1",
+  "manifest": "quality_manifest.json",
+  "results": [
+    {
+      "action_counts": {
+        "charge_grid": 130,
+        "charge_solar": 91,
+        "discharge_export": 57,
+        "discharge_load": 108,
+        "discharge_mixed": 41,
+        "idle": 245
+      },
+      "complete": true,
+      "cost_no_battery_eur": 6.267939842841685,
+      "cost_with_battery_eur": -22.145924535847684,
+      "delta_vs_no_battery_eur": -28.413864378689368,
+      "exported_kwh": 340.8356617737246,
+      "final_soc_pct": 90.0,
+      "fixture": "jan.pkl",
+      "fixture_digest": "e1c07cd606a1c18291e599c2481c8bbea51d5829932f028fcff8630010f380ee",
+      "forecast_evaluation": {
+        "available": false,
+        "reason": "archived replay forecasts"
+      },
+      "imported_kwh": 416.9892837549614,
+      "intervals_attempted": 672,
+      "intervals_run": 672,
+      "planner": "nemotron-linprog",
+      "safety": {
+        "ok": true,
+        "violations": []
+      }
+    },
+    {
+      "action_counts": {
+        "charge_grid": 168,
+        "charge_solar": 132,
+        "discharge_export": 71,
+        "discharge_load": 134,
+        "discharge_mixed": 64,
+        "idle": 295
+      },
+      "complete": true,
+      "cost_no_battery_eur": 11.220428145681755,
+      "cost_with_battery_eur": -20.157798077475196,
+      "delta_vs_no_battery_eur": -31.37822622315695,
+      "exported_kwh": 425.41270555340736,
+      "final_soc_pct": 90.0,
+      "fixture": "may.pkl",
+      "fixture_digest": "28627831e3de581fd332a93807902b03f6f77f1aaef9955e731ab0ca220211e9",
+      "forecast_evaluation": {
+        "available": false,
+        "reason": "archived replay forecasts"
+      },
+      "imported_kwh": 528.3325415486883,
+      "intervals_attempted": 864,
+      "intervals_run": 864,
+      "planner": "nemotron-linprog",
+      "safety": {
+        "ok": true,
+        "violations": []
+      }
+    },
+    {
+      "action_counts": {
+        "charge_grid": 125,
+        "charge_solar": 97,
+        "discharge_export": 65,
+        "discharge_load": 100,
+        "discharge_mixed": 51,
+        "idle": 234
+      },
+      "complete": true,
+      "cost_no_battery_eur": 7.91400486558216,
+      "cost_with_battery_eur": -32.07722038548078,
+      "delta_vs_no_battery_eur": -39.991225251062936,
+      "exported_kwh": 376.82316349700466,
+      "final_soc_pct": 10.0,
+      "fixture": "jul.pkl",
+      "fixture_digest": "044a432a937d8cf6c08e04a8f85509b810bbd0d842cf2737fdcc6064d70f460a",
+      "forecast_evaluation": {
+        "available": false,
+        "reason": "archived replay forecasts"
+      },
+      "imported_kwh": 407.46438484915194,
+      "intervals_attempted": 672,
+      "intervals_run": 672,
+      "planner": "nemotron-linprog",
+      "safety": {
+        "ok": true,
+        "violations": []
+      }
+    },
+    {
+      "action_counts": {
+        "charge_grid": 122,
+        "charge_solar": 101,
+        "discharge_export": 46,
+        "discharge_load": 126,
+        "discharge_mixed": 52,
+        "idle": 225
+      },
+      "complete": true,
+      "cost_no_battery_eur": 26.564849146686786,
+      "cost_with_battery_eur": -7.261443684674227,
+      "delta_vs_no_battery_eur": -33.826292831361016,
+      "exported_kwh": 296.26718090291314,
+      "final_soc_pct": 10.0,
+      "fixture": "oct.pkl",
+      "fixture_digest": "958ebe738905cd5a1d171c3eb4d7861fc008d328f58453171d9ed4a95dd4a425",
+      "forecast_evaluation": {
+        "available": false,
+        "reason": "archived replay forecasts"
+      },
+      "imported_kwh": 440.7518171788188,
+      "intervals_attempted": 672,
+      "intervals_run": 672,
+      "planner": "nemotron-linprog",
+      "safety": {
+        "ok": true,
+        "violations": []
+      }
+    }
+  ],
+  "schema_version": 1
+}

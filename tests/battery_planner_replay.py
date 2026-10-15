@@ -51,6 +51,25 @@ def execute_plan_entry(
     }
 
 
+def plan_entry_errors(entry: BatteryPlanEntry) -> list[str]:
+    """Return schema/finite-value violations before executing a plan entry."""
+    numeric_fields = (
+        'battery_power_kw', 'soc_kwh', 'soc_pct', 'grid_import_kwh', 'grid_export_kwh',
+        'charge_from_solar_kwh', 'charge_from_grid_kwh',
+        'discharge_to_load_kwh', 'discharge_to_export_kwh',
+    )
+    errors: list[str] = []
+    if not getattr(entry, 'timestamp', None) or not getattr(entry, 'battery_action', None):
+        errors.append('missing timestamp or battery_action')
+    for field in numeric_fields:
+        value = getattr(entry, field, None)
+        if not isinstance(value, (int, float)) or not np.isfinite(value):
+            errors.append(f'{field} is not finite')
+        elif field != 'battery_power_kw' and value < 0:
+            errors.append(f'{field} is negative')
+    return errors
+
+
 class BatteryReplaySimulator:
     """Simulates battery planner performance over historical data.
     
@@ -341,10 +360,6 @@ class BatteryReplaySimulator:
         Returns:
             Dict with replay metrics: success, soc_violations, cost, savings, etc.
         """
-        from dotenv import load_dotenv
-        
-        load_dotenv(override=True)
-        
         # Configure battery parameters for this test
         os.environ['BATTERY_CAPACITY_KWH'] = str(battery_capacity_kwh)
         os.environ['BATTERY_MIN_SOC_PCT'] = str(battery_min_soc_pct)
@@ -375,13 +390,18 @@ class BatteryReplaySimulator:
         
         # Metrics
         intervals_run = 0
+        intervals_attempted = 0
         soc_violations = []
         cost_with_battery = 0.0
         cost_no_battery = 0.0
         battery_actions = []
+        imported_kwh = 0.0
+        exported_kwh = 0.0
+        ended_before_fixture_end = False
         
         # Simulation loop
         while current_time < end_time and intervals_run < max_planks:
+            intervals_attempted += 1
             # Compute current SoC to pass directly to planner
             current_soc_pct = (soc_kwh / battery_capacity_kwh) * 100.0
             
@@ -402,7 +422,20 @@ class BatteryReplaySimulator:
             )
 
             if len(predictions) == 0:
-                break
+                # Some historical broad fixtures end after their last archived
+                # forecast. Preserve their legacy partial-replay behaviour, but
+                # expose incompleteness so the manifest quality gate rejects it.
+                if intervals_run:
+                    ended_before_fixture_end = True
+                    break
+                return {
+                    'success': False,
+                    'complete': False,
+                    'error': 'No visible predictions for replay interval',
+                    'planner_type': planner_type,
+                    'intervals_attempted': intervals_attempted,
+                    'intervals_run': intervals_run,
+                }
 
             try:
                 # Run planner
@@ -432,10 +465,28 @@ class BatteryReplaySimulator:
                 )
                 
                 if plan is None or len(plan) == 0:
-                    break
+                    return {
+                        'success': False,
+                        'complete': False,
+                        'error': 'Planner returned an empty plan',
+                        'planner_type': planner_type,
+                        'intervals_attempted': intervals_attempted,
+                        'intervals_run': intervals_run,
+                    }
                 
                 # Execute first interval only
                 entry = plan[0]
+                entry_errors = plan_entry_errors(entry)
+                if entry_errors:
+                    return {
+                        'success': False,
+                        'complete': False,
+                        'error': '; '.join(entry_errors),
+                        'planner_type': planner_type,
+                        'intervals_attempted': intervals_attempted,
+                        'intervals_run': intervals_run,
+                        'constraint_violations': entry_errors,
+                    }
                 
                 # Get actual measurements for this interval
                 measurements = self.get_measurements_at(current_time)
@@ -475,6 +526,8 @@ class BatteryReplaySimulator:
                 
                 grid_import = float(interval['grid_import_kwh'])
                 grid_export = float(interval['grid_export_kwh'])
+                imported_kwh += grid_import
+                exported_kwh += grid_export
                 
                 interval_cost_battery = grid_import * import_price - grid_export * export_price
                 no_battery_import = max(0.0, actual_load_kwh - actual_solar * interval_hours)
@@ -502,6 +555,8 @@ class BatteryReplaySimulator:
                     'success': False,
                     'error': str(e),
                     'planner_type': planner_type,
+                    'complete': False,
+                    'intervals_attempted': intervals_attempted,
                     'intervals_run': intervals_run,
                 }
             
@@ -513,7 +568,9 @@ class BatteryReplaySimulator:
         
         return {
             'success': True,
+            'complete': not ended_before_fixture_end,
             'planner_type': planner_type,
+            'intervals_attempted': intervals_attempted,
             'intervals_run': intervals_run,
             'soc_violations': len(soc_violations),
             'soc_violation_details': soc_violations[:5],  # First 5 for logging
@@ -522,6 +579,12 @@ class BatteryReplaySimulator:
             'savings_eur': savings,
             'savings_pct': (savings / cost_no_battery * 100.0) if cost_no_battery > 0 else 0.0,
             'final_soc_pct': (soc_kwh / battery_capacity_kwh) * 100.0,
+            'imported_kwh': imported_kwh,
+            'exported_kwh': exported_kwh,
+            'action_counts': {
+                action: sum(item['action'] == action for item in battery_actions)
+                for action in sorted({item['action'] for item in battery_actions})
+            },
             'battery_actions_sample': battery_actions[:5],
             'battery_actions': battery_actions,
         }

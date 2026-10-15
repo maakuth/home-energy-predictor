@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "evaluator_version": "1",
+  "reference": {
+    "file": "quality_reference.json",
+    "status": "approved",
+    "model_version": "1.34.0",
+    "planner": "nemotron-linprog",
+    "notes": "Approved exact deterministic baseline; fixture and portfolio tolerances are 0.0 EUR."
+  },
+  "portfolio_tolerance_eur": 0.0,
+  "fixtures": [
+    {
+      "name": "jan.pkl",
+      "sha256": "e1c07cd606a1c18291e599c2481c8bbea51d5829932f028fcff8630010f380ee",
+      "included": true,
+      "planner": "nemotron-linprog",
+      "weight": 1.0,
+      "tolerance_eur": 0.0,
+      "period": "2026-06-05T12:30:00Z/2026-06-12T12:30:00Z",
+      "intervals": 673,
+      "model_version": "1.6.2",
+      "regime": "solar/export-heavy early-summer week"
+    },
+    {
+      "name": "may.pkl",
+      "sha256": "28627831e3de581fd332a93807902b03f6f77f1aaef9955e731ab0ca220211e9",
+      "included": true,
+      "planner": "nemotron-linprog",
+      "weight": 1.0,
+      "tolerance_eur": 0.0,
+      "period": "2026-06-03T12:30:00Z/2026-06-12T12:30:00Z",
+      "intervals": 865,
+      "model_version": "1.6.2",
+      "regime": "long solar/export-heavy early-summer period"
+    },
+    {
+      "name": "jul.pkl",
+      "sha256": "044a432a937d8cf6c08e04a8f85509b810bbd0d842cf2737fdcc6064d70f460a",
+      "included": true,
+      "planner": "nemotron-linprog",
+      "weight": 1.0,
+      "tolerance_eur": 0.0,
+      "period": "2026-06-05T12:30:00Z/2026-06-12T12:30:00Z",
+      "intervals": 673,
+      "model_version": "1.6.2",
+      "regime": "solar/export-heavy early-summer week with alternative forecast archive"
+    },
+    {
+      "name": "oct.pkl",
+      "sha256": "958ebe738905cd5a1d171c3eb4d7861fc008d328f58453171d9ed4a95dd4a425",
+      "included": true,
+      "planner": "nemotron-linprog",
+      "weight": 1.0,
+      "tolerance_eur": 0.0,
+      "period": "2026-06-09T05:15:00Z/2026-06-16T05:15:00Z",
+      "intervals": 673,
+      "model_version": "1.7.0",
+      "regime": "higher-import early-summer week"
+    },
+    {
+      "name": "aug.pkl",
+      "sha256": "f6dda3ee23cdfe2f1235d615fbc1b56f928e5a6eb05a6c31f30672809afb1a97",
+      "included": false,
+      "planner": "nemotron-linprog",
+      "weight": 1.0,
+      "period": "2026-08-13T11:15:00Z/2026-08-24T11:15:00Z",
+      "intervals": 1057,
+      "model_version": "1.20.1",
+      "regime": "large August archive; excluded pending reproducible runtime review"
+    }
+  ]
+}
