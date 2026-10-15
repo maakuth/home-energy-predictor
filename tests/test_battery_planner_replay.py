@@ -128,7 +128,7 @@ class TestBatteryPlannerReplayParametrized:
         self._print_planner_score(result, Path(fixture_path).stem, planner_name)
     
     @pytest.mark.slow
-    def test_planner_output_structure(self, fixture_path, planner_name, simulator):
+    def test_planner_output_structure(self, fixture_path, planner_name, simulator, monkeypatch):
         """Planner output should have correct structure and valid values."""
         planner = BatteryPlannerFactory.create(planner_name)
         
@@ -146,10 +146,10 @@ class TestBatteryPlannerReplayParametrized:
         if len(predictions) == 0:
             pytest.skip("No visible forecasts in fixture for first interval")
         
-        os.environ['BATTERY_INITIAL_SOC_PCT'] = '50'
-        os.environ['BATTERY_CAPACITY_KWH'] = '50'
-        os.environ['BATTERY_MIN_SOC_PCT'] = '10'
-        os.environ['BATTERY_MAX_SOC_PCT'] = '90'
+        monkeypatch.setenv('BATTERY_INITIAL_SOC_PCT', '50')
+        monkeypatch.setenv('BATTERY_CAPACITY_KWH', '50')
+        monkeypatch.setenv('BATTERY_MIN_SOC_PCT', '10')
+        monkeypatch.setenv('BATTERY_MAX_SOC_PCT', '90')
         
         plan = planner.plan(
             predictions_kwh=predictions,
