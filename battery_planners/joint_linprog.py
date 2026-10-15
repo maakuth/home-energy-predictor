@@ -175,6 +175,28 @@ class JointLinprogPlanner(BatteryPlanner):
             max_horizon = get_env_int('BATTERY_LP_HORIZON_FALLBACK', 96)
         horizon = min(total_intervals, max(1, max_horizon))
 
+        load_forecast_bias_kw = 0.0
+        if context:
+            for key in ('bias_kw', 'forecast_bias_kw', 'load_bias_kw', 'predicted_usage_bias_kw', 'load_forecast_bias_kw'):
+                value = context.get(key)
+                if value is not None:
+                    try:
+                        if isinstance(value, (list, tuple, np.ndarray)):
+                            value = float(np.nanmean(np.asarray(value, dtype=float)))
+                        else:
+                            value = float(value)
+                        load_forecast_bias_kw = value
+                        break
+                    except (TypeError, ValueError):
+                        continue
+        env_bias = os.getenv('LOAD_FORECAST_BIAS_KW') or os.getenv('PREDICTION_BIAS_KW') or os.getenv('FORECAST_BIAS_KW')
+        if env_bias is not None:
+            try:
+                load_forecast_bias_kw = float(env_bias)
+            except ValueError:
+                pass
+        if load_forecast_bias_kw:
+            load = load - (load_forecast_bias_kw * interval_hours)
         load = np.maximum(load, 0.0)
         solar = np.maximum(solar, 0.0)
         solar = self._hedge_solar(solar, context)
@@ -182,6 +204,9 @@ class JointLinprogPlanner(BatteryPlanner):
         import_price_floor = get_env_float('IMPORT_PRICE_FLOOR_EUR_PER_KWH', 0.0)
         if import_price_floor > 0:
             import_prices = np.maximum(import_prices, import_price_floor)
+
+        export_price_floor = get_env_float('EXPORT_PRICE_FLOOR_EUR_PER_KWH', 0.0)
+        export_prices = np.maximum(export_prices, export_price_floor)
 
         main_fuse_a = get_env_float('MAIN_FUSE_SIZE_A', 25.0)
         max_grid_import_kwh = max(0.0, main_fuse_a * 3 * 0.230 * interval_hours)
@@ -341,7 +366,10 @@ class JointLinprogPlanner(BatteryPlanner):
         # Terminal valuation
         terminal_percentile = get_env_float('BATTERY_TERMINAL_VALUE_PERCENTILE', 0.0)
         if terminal_percentile > 0:
-            terminal_price = float(np.percentile(import_prices[:horizon], terminal_percentile))
+            future_prices = np.asarray(import_prices[:horizon], dtype=float)
+            best_future_price = float(np.max(future_prices)) if future_prices.size else 0.0
+            cheapest_recharge_price = float(np.min(future_prices)) if future_prices.size else 0.0
+            terminal_price = max(0.0, best_future_price - cheapest_recharge_price)
             objective[index(horizon - 1, soc)] = -terminal_price * discharge_eff * (discount ** (horizon - 1))
 
         # Value terminal heat relative to the safety floor up to the operating
