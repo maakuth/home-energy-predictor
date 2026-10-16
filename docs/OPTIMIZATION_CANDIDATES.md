@@ -38,20 +38,21 @@ approved-reference update or authorization to enable a changed default.
 
 ### Switching-cost evaluation
 
-`BATTERY_SWITCHING_COST_EUR=0.0001` is currently the strongest evaluated
-candidate. Two independent runs at 0 and 0.0001 were byte-identical within
-each setting.
+`BATTERY_SWITCHING_COST_EUR=0.000025` is currently the strongest evaluated
+candidate. The optimum is a stable `0.000020`–`0.000030` plateau; 0.000025 was
+chosen as its central value. Independent runs at 0, 0.0001, and 0.000025 were
+byte-identical within each setting.
 
 | Setting | Portfolio cost (EUR) | Change vs 0 | Fixture result | Safety |
 |---|---:|---:|---|---|
 | `0` | -81.642387 | 0.000000 | baseline | pass |
-| `0.0001` | -82.676653 | -1.034267 | improves all four | pass |
+| `0.000025` | -82.860427 | -1.218040 | improves all four | pass |
 
-The setting reduces direction reversals in May (121 to 116) and July (86 to
-85), and lowers net-flow variation in May, July, and October, but it does not
-materially reduce transitions overall. Treat it as a low-cost LP tie-breaker,
-not a replacement for a real minimum-runtime/dwell constraint. A narrow sweep
-around 0.0001 is pending before selecting an opt-in/default value.
+The setting reduces direction reversals from 384 to 382 and net-flow variation
+from 2487.809 to 2487.145 kWh; action transitions change from 1467 to 1466.
+It is therefore a low-cost LP tie-breaker, not a replacement for a real
+minimum-runtime/dwell constraint. See [Switching-cost sweep](switching_cost_sweep.md)
+for the complete evaluated range and per-fixture metrics.
 
 ### Discount evaluation
 
