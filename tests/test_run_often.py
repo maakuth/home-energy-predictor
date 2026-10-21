@@ -69,6 +69,26 @@ class TestRunOften(unittest.TestCase):
         self.assertEqual(_select_thermal_reference(None, None, 45.0), 45.0)
 
     @patch('run_often.call_ha_service')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.push_ha_state')
+    @patch('run_often.get_ha_state')
+    def test_blank_accumulator_entity_does_not_query_empty_id(
+        self, mock_get_state, mock_push_state, mock_push_battery, mock_service,
+    ):
+        from run_often import main
+
+        mock_get_state.return_value = {'state': '0.0'}
+        with patch.dict(os.environ, {
+            'GSHP_ACCUMULATOR_TEMP_ENTITY': '',
+            'GSHP_SUPPLY_TEMP_ENTITY': 'sensor.test_supply',
+        }):
+            main()
+
+        queried_entities = [call.args[0] for call in mock_get_state.call_args_list]
+        self.assertNotIn('', queried_entities)
+        self.assertIn('sensor.test_supply', queried_entities)
+
+    @patch('run_often.call_ha_service')
     def test_resistive_heater_control_follows_on_intent(self, mock_service):
         from run_often import control_resistive_heater
         now = datetime.now().astimezone()

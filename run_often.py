@@ -342,7 +342,10 @@ def main():
     grid_power = get_ha_state('sensor.sahkokauppa_20s')
     solar = get_ha_state(os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'))
     gshp = get_ha_state('sensor.mlp_teho')
-    accumulator = get_ha_state(os.getenv('GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila'))
+    accumulator_entity = os.getenv(
+        'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
+    ).strip()
+    accumulator = get_ha_state(accumulator_entity) if accumulator_entity else None
     supply_temp_state = get_ha_state(os.getenv('GSHP_SUPPLY_TEMP_ENTITY', 'sensor.gshp_supply_temp'))
     return_temp_state = get_ha_state(os.getenv('GSHP_RETURN_TEMP_ENTITY', 'sensor.gshp_return_temp'))
     outside_temp_state = get_ha_state(os.getenv('OUTSIDE_TEMP_ENTITY', 'sensor.outdoor_temperature'))
