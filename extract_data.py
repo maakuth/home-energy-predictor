@@ -12,7 +12,7 @@ load_dotenv(override=True)
 RESAMPLE_INTERVAL: str = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
 
 ENTITIES: dict[str, str] = {
-    'sensor.ulkona_temperature_2': 'outside_temp',
+    os.getenv('OUTSIDE_TEMP_ENTITY', 'sensor.outdoor_temperature'): 'outside_temp',
     # Shared electrical meter; process_data splits out the resistive component.
     'sensor.mlp_teho': 'gshp_power',
     os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'): 'resistive_heater_power',
@@ -21,6 +21,8 @@ ENTITIES: dict[str, str] = {
     'sensor.mokkimokin_ilp_power': 'aahp_cabin_power',
     'sensor.mummun_energy': 'mummun_energy',
     'sensor.mlp_varaajan_lampotila': 'accumulator_temp',
+    os.getenv('GSHP_SUPPLY_TEMP_ENTITY', 'sensor.gshp_supply_temp'): 'gshp_supply_temp',
+    os.getenv('GSHP_RETURN_TEMP_ENTITY', 'sensor.gshp_return_temp'): 'gshp_return_temp',
     'sensor.xpz_491_battery_level': 'ev_soc',
     'device_tracker.xpz_491_position': 'ev_position',
     'sensor.tasmota_energy_power_3': 'leaf_power',
@@ -73,6 +75,56 @@ def extract_attribute(cur: psycopg2.extensions.cursor, metadata_id: int, attr_na
         """
         cur.execute(query, (attr_name, metadata_id, start_ts))
         return cur.fetchall()
+
+
+def diagnose_feature_coverage(df, required_cols=None):
+    """Report missingness and freshness for required extracted signals."""
+    if required_cols is None:
+        required_cols = ['outside_temp', 'gshp_power', 'accumulator_temp', 'total_power']
+    report = {}
+    all_null = []
+    missing_cols = []
+    for col in required_cols:
+        if col not in df.columns:
+            missing_cols.append(col)
+            report[col] = {'present': False, 'missing_fraction': 1.0, 'freshness_minutes': None}
+            print(f"❌ Feature coverage: {col} is missing from extracted data")
+            continue
+        series = df[col]
+        non_null = int(series.notna().sum())
+        missing_fraction = float(series.isna().mean()) if len(series) else 1.0
+        last_valid = series.last_valid_index()
+        freshness = None
+        if last_valid is not None and len(df.index):
+            freshness = (df.index.max() - last_valid).total_seconds() / 60.0
+        report[col] = {
+            'present': True,
+            'rows': len(series),
+            'non_null': non_null,
+            'missing_fraction': missing_fraction,
+            'last_valid': None if last_valid is None else str(last_valid),
+            'freshness_minutes': freshness,
+        }
+        if non_null == 0:
+            all_null.append(col)
+            print(f"❌ Feature coverage: {col} has no valid observations (missing 100.0%)")
+        else:
+            print(
+                f"Feature coverage: {col}: missing={missing_fraction:.1%}, "
+                f"non_null={non_null}/{len(series)}, freshness={freshness:.1f} min"
+                if freshness is not None
+                else f"Feature coverage: {col}: missing={missing_fraction:.1%}, non_null={non_null}/{len(series)}"
+            )
+    if missing_cols:
+        print(f"⚠️ Required extracted feature(s) missing: {', '.join(missing_cols)}")
+    if all_null:
+        print(f"⚠️ Required extracted feature(s) have no valid observations: {', '.join(all_null)}")
+    return report
+
+
+# Backwards/alternate names used by callers and tests.
+check_feature_coverage = diagnose_feature_coverage
+feature_coverage = diagnose_feature_coverage
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Extract historical data from Home Assistant DB.')
@@ -162,6 +214,8 @@ def main() -> None:
     output_dir = os.path.dirname(args.output)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
+    diagnose_feature_coverage(final_df)
+
     final_df.to_csv(args.output)
     print(f"✅ Data extraction complete. Saved to {args.output}. Shape: {final_df.shape}")
 
