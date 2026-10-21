@@ -18,14 +18,22 @@ def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv') ->
     
     # Features (X)
     features = [
-        'outside_temp', 'wind_speed', 'solar_forecast', 
-        'accumulator_temp', 'gshp_pump_temp', 'is_gshp_pump_running', 'acc_roc', 'is_fireplace_lag1', 
+        'outside_temp', 'wind_speed', 'solar_forecast',
+        'accumulator_temp', 'gshp_pump_temp', 'is_gshp_pump_running', 'acc_roc', 'is_fireplace_lag1',
         'leaf_power_lag_1h', 'leaf_energy_24h',
         'baseload_lag_1h', 'baseload_lag_24h',
         'is_extended_complex',
         'hour', 'minute', 'quarter_hour', 'day_of_week', 'month',
         'hour_sin', 'hour_cos', 'day_sin', 'day_cos', 'month_sin', 'month_cos'
     ]
+
+    # Heating-circuit temperatures are introduced only when historical data and
+    # quality checks show they are available; never required for older datasets.
+    optional_features = []
+    for col in ('gshp_supply_temp', 'gshp_return_temp', 'gshp_supply_return_delta'):
+        if col in df.columns and df[col].notna().any():
+            optional_features.append(col)
+    features = features + optional_features
 
     # A partial/corrupt extract cannot provide a usable model.  Check columns
     # before dropna so this path fails gracefully instead of raising KeyError.

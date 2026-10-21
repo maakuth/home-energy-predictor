@@ -18,6 +18,7 @@ from utils.price_utils import (
 )
 from utils.git_utils import get_model_version
 from utils.gshp_health import gshp_is_failed
+from utils.sg_ready import load_virtual_accumulator_state
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.db_utils import fetch_states_history
 from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPlannerContext
@@ -587,6 +588,83 @@ def plan_gshp_dispatch(
     return gshp_plan
 
 
+def get_gshp_initial_temp() -> float:
+    """Resolve GSHP initial accumulator temperature using the runtime hierarchy.
+
+    Order: valid physical accumulator -> supply temperature -> persisted virtual
+    accumulator -> configured static default.  Every fallback is logged.
+    """
+    accumulator_entity = os.getenv(
+        'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
+    ).strip()
+    supply_entity = os.getenv(
+        'GSHP_SUPPLY_TEMP_ENTITY', 'sensor.gshp_supply_temp',
+    ).strip()
+
+    def _valid_temp(state):
+        if state is None:
+            return None
+        try:
+            value = state.get('state', None) if isinstance(state, dict) else state
+            if value is None or value in ('unknown', 'unavailable'):
+                return None
+            return float(value)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    current_acc_temp = None
+    temp_source = None
+
+    # 1. Physical accumulator (authoritative when valid).
+    if accumulator_entity:
+        acc_temp_state = get_ha_state(accumulator_entity)
+        value = _valid_temp(acc_temp_state)
+        if value is not None:
+            current_acc_temp = value
+            temp_source = 'physical accumulator'
+        else:
+            print(f"⚠️ Physical accumulator temperature unavailable/invalid"
+                  f" ({accumulator_entity}); trying supply temperature.")
+
+    # 2. Heating-circuit supply temperature fallback.
+    if current_acc_temp is None and supply_entity:
+        supply_state = get_ha_state(supply_entity)
+        value = _valid_temp(supply_state)
+        if value is not None:
+            current_acc_temp = value
+            temp_source = 'supply temperature'
+            print(f"⚠️ Using supply temperature fallback for GSHP initial state: {value:.1f}°C")
+        else:
+            print(f"⚠️ Supply temperature unavailable/invalid ({supply_entity}); trying virtual accumulator.")
+
+    # 3. Persisted virtual accumulator.
+    if current_acc_temp is None:
+        virtual_state = load_virtual_accumulator_state()
+        if isinstance(virtual_state, dict):
+            value = _valid_temp({'state': virtual_state.get('temp')})
+            if value is not None:
+                current_acc_temp = value
+                temp_source = 'persisted virtual accumulator'
+                print(f"⚠️ Using persisted virtual accumulator fallback for GSHP initial state: {value:.1f}°C")
+
+    # 4. Configured static default.
+    if current_acc_temp is None:
+        current_acc_temp = float(os.getenv('GSHP_INITIAL_TEMP', '50.0'))
+        temp_source = 'configured static default'
+        print(f"⚠️ Using configured static default for GSHP initial state: {current_acc_temp:.1f}°C")
+
+    print(f"GSHP Initial State: {current_acc_temp:.1f}°C, source={temp_source}")
+    return float(current_acc_temp)
+
+
+# Backwards/alternate names used by callers and tests.
+_get_gshp_initial_temp = get_gshp_initial_temp
+resolve_gshp_initial_temp = get_gshp_initial_temp
+get_initial_acc_temp = get_gshp_initial_temp
+select_gshp_initial_temp = get_gshp_initial_temp
+
+
+
 def optimize() -> None:
     print('Loading predictions...')
     try:
@@ -635,16 +713,7 @@ def optimize() -> None:
     solar_array_p90 = np.array(prediction_solar_p90, dtype=float)
 
     # --- GSHP Optimization (Must run before battery) ---
-    accumulator_entity = os.getenv(
-        'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
-    ).strip()
-    acc_temp_state = get_ha_state(accumulator_entity) if accumulator_entity else None
-    current_acc_temp = 50.0
-    if acc_temp_state is not None:
-        try:
-            current_acc_temp = float(acc_temp_state.get('state', 50.0))
-        except (TypeError, ValueError):
-            pass
+    current_acc_temp = get_gshp_initial_temp()
     
     gshp_power_state = get_ha_state('sensor.mlp_teho')
     resistive_state = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))

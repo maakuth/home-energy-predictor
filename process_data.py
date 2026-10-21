@@ -5,6 +5,53 @@ import pandas as pd
 import numpy as np
 from typing import Any
 
+
+def diagnose_feature_coverage(df, required_cols=None):
+    """Report missingness and freshness for required processed signals."""
+    if required_cols is None:
+        required_cols = ['total_home_power', 'outside_temp', 'accumulator_temp']
+    report = {}
+    all_null = []
+    missing_cols = []
+    for col in required_cols:
+        if col not in df.columns:
+            missing_cols.append(col)
+            report[col] = {'present': False, 'missing_fraction': 1.0, 'freshness_minutes': None}
+            print(f"❌ Feature coverage: {col} is missing from processed data")
+            continue
+        series = df[col]
+        non_null = int(series.notna().sum())
+        missing_fraction = float(series.isna().mean()) if len(series) else 1.0
+        last_valid = series.last_valid_index()
+        freshness = None
+        if last_valid is not None and len(df.index):
+            freshness = (df.index.max() - last_valid).total_seconds() / 60.0
+        report[col] = {
+            'present': True,
+            'rows': len(series),
+            'non_null': non_null,
+            'missing_fraction': missing_fraction,
+            'last_valid': None if last_valid is None else str(last_valid),
+            'freshness_minutes': freshness,
+        }
+        if non_null == 0:
+            all_null.append(col)
+            print(f"❌ Feature coverage: {col} has no valid observations (missing 100.0%)")
+        else:
+            if freshness is None:
+                print(f"Feature coverage: {col}: missing={missing_fraction:.1%}, non_null={non_null}/{len(series)}")
+            else:
+                print(f"Feature coverage: {col}: missing={missing_fraction:.1%}, non_null={non_null}/{len(series)}, freshness={freshness:.1f} min")
+    if missing_cols:
+        raise ValueError(f"Required processed feature(s) missing: {', '.join(missing_cols)}")
+    if all_null:
+        raise ValueError(f"Required processed feature(s) have no valid observations: {', '.join(all_null)}")
+    return report
+
+
+check_feature_coverage = diagnose_feature_coverage
+feature_coverage = diagnose_feature_coverage
+
 def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'state/processed_data.csv') -> None:
     print('Loading raw data...')
     try:
@@ -102,6 +149,16 @@ def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'sta
     
     if 'outside_temp' in df.columns:
         df['outside_temp'] = df['outside_temp'].ffill().clip(lower=-50, upper=50)
+
+    # New GSHP heating-circuit sensors are thermal-state features only.  They are
+    # recorded historically, but no delivered thermal kW is inferred from dT.
+    for col in ('gshp_supply_temp', 'gshp_return_temp'):
+        if col in df.columns:
+            df[col] = df[col].ffill().clip(lower=-50, upper=150)
+    if 'gshp_supply_temp' in df.columns and 'gshp_return_temp' in df.columns:
+        df['gshp_supply_return_delta'] = (
+            df['gshp_supply_temp'] - df['gshp_return_temp']
+        )
     if 'wind_speed' in df.columns:
         df['wind_speed'] = df['wind_speed'].ffill().clip(lower=0, upper=100)
     if 'accumulator_temp' in df.columns:
@@ -182,6 +239,8 @@ def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'sta
     df['month_sin'] = np.sin(2 * np.pi * (df['month']-1) / 12)
     df['month_cos'] = np.cos(2 * np.pi * (df['month']-1) / 12)
     
+    diagnose_feature_coverage(df)
+
     critical_cols = ['total_home_power', 'outside_temp', 'accumulator_temp']
     df = df.dropna(subset=[c for c in critical_cols if c in df.columns])
     

@@ -373,6 +373,14 @@ def main():
         virtual_acc_temp = update_virtual_accumulator_temp(gshp_kw, outside_temp if outside_temp is not None else 10.0)
     except Exception:
         virtual_acc_temp = None
+
+    if accumulator_temp is None:
+        if supply_temp is not None:
+            print(f"⚠️ Physical accumulator unavailable/invalid; using supply temperature fallback: {supply_temp:.1f}°C")
+        elif virtual_acc_temp is not None:
+            print(f"⚠️ Physical accumulator and supply unavailable; using virtual accumulator fallback: {virtual_acc_temp:.1f}°C")
+        else:
+            print("⚠️ No thermal reference available; using no accumulator temperature.")
     accumulator_temp = _select_thermal_reference(
         accumulator_temp, supply_temp, virtual_acc_temp,
     )

@@ -1879,3 +1879,70 @@ class GSHPPlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GshpInitialTempHierarchyTests(unittest.TestCase):
+    def test_physical_accumulator_authoritative(self):
+        with patch.dict(os.environ, {'GSHP_ACCUMULATOR_TEMP_ENTITY': 'sensor.acc', 'GSHP_INITIAL_TEMP': '50.0'}, clear=False):
+            with patch('optimize_plan.get_ha_state', return_value={'state': '47.5'}):
+                with patch('optimize_plan.load_virtual_accumulator_state', return_value={'temp': 30.0}):
+                    from optimize_plan import get_gshp_initial_temp
+                    self.assertAlmostEqual(get_gshp_initial_temp(), 47.5)
+
+    def test_supply_fallback_when_physical_invalid(self):
+        def ha_state(entity):
+            if entity == 'sensor.acc':
+                return {'state': 'unavailable'}
+            if entity == 'sensor.supply':
+                return {'state': '44.0'}
+            return None
+        with patch.dict(os.environ, {
+            'GSHP_ACCUMULATOR_TEMP_ENTITY': 'sensor.acc',
+            'GSHP_SUPPLY_TEMP_ENTITY': 'sensor.supply',
+            'GSHP_INITIAL_TEMP': '50.0',
+        }, clear=False):
+            with patch('optimize_plan.get_ha_state', side_effect=ha_state):
+                with patch('optimize_plan.load_virtual_accumulator_state', return_value={'temp': 30.0}):
+                    from optimize_plan import get_gshp_initial_temp
+                    self.assertAlmostEqual(get_gshp_initial_temp(), 44.0)
+
+    def test_virtual_fallback_when_physical_and_supply_invalid(self):
+        def ha_state(entity):
+            return {'state': 'bad'} if entity in ('sensor.acc', 'sensor.supply') else None
+        with patch.dict(os.environ, {
+            'GSHP_ACCUMULATOR_TEMP_ENTITY': 'sensor.acc',
+            'GSHP_SUPPLY_TEMP_ENTITY': 'sensor.supply',
+            'GSHP_INITIAL_TEMP': '50.0',
+        }, clear=False):
+            with patch('optimize_plan.get_ha_state', side_effect=ha_state):
+                with patch('optimize_plan.load_virtual_accumulator_state', return_value={'temp': 38.0}):
+                    from optimize_plan import get_gshp_initial_temp
+                    self.assertAlmostEqual(get_gshp_initial_temp(), 38.0)
+
+    def test_static_default_when_all_unavailable(self):
+        def ha_state(entity):
+            return {'state': 'unavailable'}
+        with patch.dict(os.environ, {
+            'GSHP_ACCUMULATOR_TEMP_ENTITY': 'sensor.acc',
+            'GSHP_SUPPLY_TEMP_ENTITY': 'sensor.supply',
+            'GSHP_INITIAL_TEMP': '52.0',
+        }, clear=False):
+            with patch('optimize_plan.get_ha_state', side_effect=ha_state):
+                with patch('optimize_plan.load_virtual_accumulator_state', return_value=None):
+                    from optimize_plan import get_gshp_initial_temp
+                    self.assertAlmostEqual(get_gshp_initial_temp(), 52.0)
+
+    def test_blank_accumulator_entity_uses_supply(self):
+        def ha_state(entity):
+            if entity == 'sensor.supply':
+                return {'state': '41.0'}
+            return None
+        with patch.dict(os.environ, {
+            'GSHP_ACCUMULATOR_TEMP_ENTITY': '  ',
+            'GSHP_SUPPLY_TEMP_ENTITY': 'sensor.supply',
+            'GSHP_INITIAL_TEMP': '50.0',
+        }, clear=False):
+            with patch('optimize_plan.get_ha_state', side_effect=ha_state):
+                with patch('optimize_plan.load_virtual_accumulator_state', return_value=None):
+                    from optimize_plan import get_gshp_initial_temp
+                    self.assertAlmostEqual(get_gshp_initial_temp(), 41.0)

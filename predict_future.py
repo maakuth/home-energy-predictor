@@ -376,15 +376,48 @@ def predict() -> None:
     accumulator_entity = os.getenv(
         'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
     ).strip()
-    acc_temp = get_ha_state(accumulator_entity) if accumulator_entity else None
-    acc_val = 45.0
-    if acc_temp is not None:
+    supply_entity = os.getenv(
+        'GSHP_SUPPLY_TEMP_ENTITY', 'sensor.gshp_supply_temp',
+    ).strip()
+
+    def _valid_temp_state(state):
+        if state is None:
+            return None
         try:
-            acc_state = acc_temp.get('state')
-            if acc_state is not None and acc_state not in ['unknown', 'unavailable']:
-                acc_val = float(acc_state)
-        except (ValueError, TypeError, AttributeError):
-            pass
+            value = state.get('state') if isinstance(state, dict) else state
+            if value is None or value in ('unknown', 'unavailable'):
+                return None
+            return float(value)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    acc_val = None
+    acc_temp = get_ha_state(accumulator_entity) if accumulator_entity else None
+    value = _valid_temp_state(acc_temp)
+    if value is not None:
+        acc_val = value
+    else:
+        if accumulator_entity:
+            print(f"⚠️ Physical accumulator temperature unavailable/invalid ({accumulator_entity}); trying supply temperature.")
+        supply_state = get_ha_state(supply_entity) if supply_entity else None
+        value = _valid_temp_state(supply_state)
+        if value is not None:
+            acc_val = value
+            print(f"⚠️ Using supply temperature fallback for prediction accumulator: {value:.1f}°C")
+        else:
+            try:
+                from utils.sg_ready import load_virtual_accumulator_state
+                virtual_state = load_virtual_accumulator_state()
+                if isinstance(virtual_state, dict):
+                    v = virtual_state.get('temp')
+                    if v is not None:
+                        acc_val = float(v)
+                        print(f"⚠️ Using persisted virtual accumulator fallback for prediction: {acc_val:.1f}°C")
+            except Exception:
+                acc_val = None
+    if acc_val is None:
+        acc_val = 45.0
+        print(f"⚠️ Using configured static default for prediction accumulator: {acc_val:.1f}°C")
 
     # GSHP Pump Temperature logic
     gshp_pump_temp_state = get_ha_state('sensor.mlp_pumpun_lampotla')
