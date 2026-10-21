@@ -191,7 +191,9 @@ def main() -> None:
             # Handle energy total to power conversion later
             resampled = df[col_name].resample(RESAMPLE_INTERVAL).mean()
         else:
-            resampled = df[col_name].resample(RESAMPLE_INTERVAL).mean()
+            # Average within each interval, then carry the last known value
+            # forward so sensors that only update on change do not leave gaps.
+            resampled = df[col_name].resample(RESAMPLE_INTERVAL).mean().ffill()
             
         all_dfs.append(resampled)
     
