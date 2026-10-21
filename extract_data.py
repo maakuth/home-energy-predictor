@@ -12,7 +12,7 @@ load_dotenv(override=True)
 RESAMPLE_INTERVAL: str = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
 
 ENTITIES: dict[str, str] = {
-    'sensor.ulkona_temperature_2': 'outside_temp',
+    os.getenv('OUTSIDE_TEMP_ENTITY', 'sensor.ulkona_temperature_2'): 'outside_temp',
     # Shared electrical meter; process_data splits out the resistive component.
     'sensor.mlp_teho': 'gshp_power',
     os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'): 'resistive_heater_power',
