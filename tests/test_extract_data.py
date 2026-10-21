@@ -35,7 +35,7 @@ class TestExtractDataHelpers(unittest.TestCase):
         from extract_data import ENTITIES, get_metadata_ids
         entity_set = set(ENTITIES.keys())
         # Just verify the entities list isn't empty and contains expected keys
-        self.assertIn('sensor.outdoor_temperature', entity_set)
+        self.assertIn('sensor.ulkona_temperature_2', entity_set)
         self.assertIn('weather.home', entity_set)
         self.assertIn('switch.mlp_vastus_output_0', entity_set)
         self.assertGreaterEqual(len(entity_set), 15)
