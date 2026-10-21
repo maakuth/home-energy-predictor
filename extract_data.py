@@ -12,7 +12,7 @@ load_dotenv(override=True)
 RESAMPLE_INTERVAL: str = os.getenv('DATA_RESAMPLE_INTERVAL', '1min')
 
 ENTITIES: dict[str, str] = {
-    os.getenv('OUTSIDE_TEMP_ENTITY', 'sensor.outdoor_temperature'): 'outside_temp',
+    'sensor.ulkona_temperature_2': 'outside_temp',
     # Shared electrical meter; process_data splits out the resistive component.
     'sensor.mlp_teho': 'gshp_power',
     os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'): 'resistive_heater_power',
@@ -171,7 +171,15 @@ def main() -> None:
             heater_w = float(os.getenv(power_var, '6.0')) * 1000.0
             df[col_name] = df[col_name].astype(str).str.lower().eq('on').astype(float) * heater_w
         elif col_name != 'ev_position':
-            df[col_name] = pd.to_numeric(df[col_name], errors='coerce')
+            converted = pd.to_numeric(df[col_name], errors='coerce')
+            # Tolerate values carrying units or other non-numeric suffixes
+            # (e.g. "5.2 °C") by extracting the leading numeric token.
+            if converted.isna().all() and df[col_name].notna().any():
+                extracted = df[col_name].astype(str).str.extract(
+                    r'([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)', expand=False
+                )
+                converted = pd.to_numeric(extracted, errors='coerce')
+            df[col_name] = converted
         
         # Resample to configured interval (default 15 minutes).
         if col_name == 'ev_position':
