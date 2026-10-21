@@ -3,6 +3,7 @@ import json
 import os
 from typing import Any, Optional
 from utils.ha_utils import push_ha_state
+from utils.sg_ready import derive_sg_ready_bits, derive_sg_ready_mode
 from utils.battery_utils import get_current_plan_entry
 from utils.sqlite_utils import get_db_connection, db_exists
 
@@ -135,6 +136,28 @@ def push_plan() -> None:
         'percentile': low_cost_percentile
     })
     print(f'✅ Low Cost Signal pushed: {low_cost_signal} (threshold={threshold:.4f})')
+
+    # Derive and push SG Ready smart-grid bits for GSHP control
+    try:
+        virtual_temp = current.get('gshp_temp_simulated', current.get('gshp_temp_sim'))
+        a, b = derive_sg_ready_bits(current=current, plan=plan, virtual_acc_temp=virtual_temp)
+        mode = derive_sg_ready_mode(current=current, plan=plan, virtual_acc_temp=virtual_temp)
+        push_ha_state('sensor.hepo_sg_ready_a', str(a), {
+            'friendly_name': 'HEPO SG Ready Bit A',
+            'icon': 'mdi:transmission-tower',
+        })
+        push_ha_state('sensor.hepo_sg_ready_b', str(b), {
+            'friendly_name': 'HEPO SG Ready Bit B',
+            'icon': 'mdi:transmission-tower',
+        })
+        push_ha_state('sensor.hepo_sg_ready', mode, {
+            'friendly_name': 'HEPO SG Ready Mode',
+            'bit_a': a,
+            'bit_b': b,
+        })
+        print(f'✅ SG Ready pushed: A={a}, B={b} ({mode})')
+    except Exception as e:
+        print(f'⚠️ Error pushing SG Ready bits: {e}')
 
     # Also push 24h usage as a standalone sensor for easier history tracking
     attributes_24h = {

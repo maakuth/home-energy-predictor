@@ -7,6 +7,7 @@ from utils.ha_utils import call_ha_service, get_ha_state, parse_ha_bool, push_ha
 from typing import cast
 from utils.type_defs import BatteryAction
 from utils.gshp_health import health_attributes, update_gshp_health
+from utils.sg_ready import update_virtual_accumulator_temp, derive_sg_ready_bits, derive_sg_ready_mode
 from utils.plan_time import slot_start
 from utils.battery_utils import (
     push_battery_control,
@@ -324,6 +325,7 @@ def main():
     solar = get_ha_state(os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'))
     gshp = get_ha_state('sensor.mlp_teho')
     accumulator = get_ha_state('sensor.mlp_varaajan_lampotila')
+    outside_temp_state = get_ha_state(os.getenv('OUTSIDE_TEMP_ENTITY', 'sensor.outdoor_temperature'))
     leaf = get_ha_state('sensor.tasmota_energy_power_3')
     p1 = get_ha_state('sensor.current_phase_1')
     p2 = get_ha_state('sensor.current_phase_2')
@@ -341,6 +343,11 @@ def main():
     solar_kw = solar_raw if solar_raw is not None else 0.0
     gshp_kw = (_get_float(gshp) or 0.0) / 1000.0
     accumulator_temp = _get_float(accumulator)
+    outside_temp = _get_float(outside_temp_state)
+    try:
+        virtual_acc_temp = update_virtual_accumulator_temp(gshp_kw, outside_temp if outside_temp is not None else 10.0)
+    except Exception:
+        virtual_acc_temp = None
     leaf_kw = (_get_float(leaf) or 0.0) / 1000.0
     i_p1 = _get_float(p1)
     i_p2 = _get_float(p2)
@@ -446,6 +453,16 @@ def main():
     )
     health = update_gshp_health(current, gshp_kw, element_kw, accumulator_temp=accumulator_temp)
     push_ha_state('sensor.hepo_gshp_health', health.get('status', 'normal'), health_attributes(health))
+
+    try:
+        virtual_temp_for_bits = accumulator_temp if accumulator_temp is not None else virtual_acc_temp
+        a, b = derive_sg_ready_bits(current=current, plan=plan, virtual_acc_temp=virtual_temp_for_bits)
+        mode = derive_sg_ready_mode(current=current, plan=plan, virtual_acc_temp=virtual_temp_for_bits)
+        push_ha_state('sensor.hepo_sg_ready_a', str(a), {'friendly_name': 'HEPO SG Ready Bit A'})
+        push_ha_state('sensor.hepo_sg_ready_b', str(b), {'friendly_name': 'HEPO SG Ready Bit B'})
+        push_ha_state('sensor.hepo_sg_ready', mode, {'friendly_name': 'HEPO SG Ready Mode', 'bit_a': a, 'bit_b': b})
+    except Exception as e:
+        print(f'⚠️ Error pushing SG Ready bits: {e}')
     if health.get('status') == 'failed':
         print(f"GSHP electrical fault latched: compressor={health.get('compressor_kw', 0.0):.2f}kW")
 
