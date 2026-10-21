@@ -202,6 +202,43 @@ def _is_cheap(
         return False
 
 
+
+def _local_price_extremum(
+    current: Dict[str, Any],
+    plan: Optional[Sequence[Dict[str, Any]]] = None,
+    window: int = 1,
+) -> str:
+    """Classify the current interval as 'max', 'min', or 'none' locally."""
+    if not plan:
+        return "none"
+    try:
+        idx = next(i for i, p in enumerate(plan) if p is current)
+    except StopIteration:
+        # Fall back to value matching when identity is not preserved.
+        try:
+            idx = next(i for i, p in enumerate(plan) if p.get("effective_cost") == current.get("effective_cost"))
+        except StopIteration:
+            return "none"
+    costs = []
+    for p in plan:
+        try:
+            costs.append(float(p.get("effective_cost", 0.0)))
+        except (TypeError, ValueError):
+            costs.append(0.0)
+    if not costs or idx >= len(costs):
+        return "none"
+    current_cost = costs[idx]
+    left = max(0, idx - window)
+    right = min(len(costs), idx + window + 1)
+    neighbors = [costs[i] for i in range(left, right) if i != idx]
+    if not neighbors:
+        return "none"
+    if current_cost >= max(neighbors):
+        return "max"
+    if current_cost <= min(neighbors):
+        return "min"
+    return "none"
+
 def derive_sg_ready_bits(
     current: Optional[Dict[str, Any]] = None,
     plan: Optional[Sequence[Dict[str, Any]]] = None,
@@ -261,8 +298,12 @@ def derive_sg_ready_bits(
         return (1, 1)  # force run during expensive periods
 
     # STOP intent
-    if not cheap:
-        return (1, 0)  # blocking during peaks
+    # Global minima use the low-price mode; local maxima are blocked; everything
+    # else (including ordinary local minima) defaults to normal.
+    if cheap:
+        return (0, 1)  # global minimum: low-price behaviour
+    if _local_price_extremum(current, plan) == "max":
+        return (1, 0)  # local maximum: block the compressor
     return (0, 0)  # normal otherwise
 
 

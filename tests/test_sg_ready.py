@@ -31,10 +31,18 @@ def test_stop_expensive_blocking():
     assert derive_sg_ready_bits(current=current, plan=plan) == (1, 0)
 
 
-def test_stop_cheap_normal():
+def test_stop_global_min_low_price():
     current = {"gshp_intent": "STOP", "effective_cost": 0.05}
     plan = [current] + [{"effective_cost": 0.20} for _ in range(5)]
+    assert derive_sg_ready_bits(current=current, plan=plan) == (0, 1)
+    assert derive_sg_ready_mode(current=current, plan=plan) == "low_price"
+
+
+def test_stop_local_min_normal():
+    current = {"gshp_intent": "STOP", "effective_cost": 0.15}
+    plan = [{"effective_cost": 0.20}, current, {"effective_cost": 0.20}] + [{"effective_cost": 0.05} for _ in range(5)]
     assert derive_sg_ready_bits(current=current, plan=plan) == (0, 0)
+    assert derive_sg_ready_mode(current=current, plan=plan) == "normal"
 
 
 def test_boost_bulk_overcapacity():
