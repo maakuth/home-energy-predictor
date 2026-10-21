@@ -96,7 +96,11 @@ Consumed by `run_often.py`, `predict_future.py`, `extract_data.py`, `analyze_per
 
 Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Description | Example | Unit / Notes |
 |----------|-------------|---------|--------------|
-| `GSHP_INITIAL_TEMP` | Starting accumulator / buffer temperature. | `50.0` | °C. Fallback when `sensor.mlp_varaajan_lampotila` is unavailable in HA. |
+| `GSHP_INITIAL_TEMP` | Starting accumulator / buffer temperature. | `50.0` | °C. Fallback when the physical accumulator sensor is unavailable in HA. |
+| `GSHP_ACCUMULATOR_TEMP_ENTITY` | HA entity ID for physical accumulator temperature. | `sensor.mlp_varaajan_lampotila` | °C. Preferred source for planning and runtime safety when the old accumulator instrumentation is restored. |
+| `GSHP_VIRTUAL_ACCUMULATOR_STATE_FILE` | Persisted virtual accumulator state file. | `state/gshp_virtual_acc.json` | Used only when the physical accumulator sensor is unavailable. |
+| `GSHP_SUPPLY_TEMP_ENTITY` | HA entity ID for heating-circuit supply temperature. | `sensor.gshp_supply_temp` | °C. Runtime fallback thermal reference if the physical accumulator is unavailable. |
+| `GSHP_RETURN_TEMP_ENTITY` | HA entity ID for heating-circuit return temperature. | `sensor.gshp_return_temp` | °C. Used for heating-circuit ΔT diagnostics only; no thermal power is calculated without a flow sensor. |
 | `GSHP_MIN_TEMP` | Hard minimum accumulator temperature. | `42.0` | °C. If the temperature drops to or below this, the heat pump **must** start regardless of price. |
 | `THERMAL_MIN_TEMP_MARGIN_C` | Thermal safety margin above the hard minimum. | `0.5` | °C. The joint planner penalizes any physical shortfall below `GSHP_MIN_TEMP + margin`. When bulk heating is enabled, real-time control runs the bulk element continuously below this floor. |
 | `GSHP_MAX_TEMP` | Hard maximum accumulator temperature. | `55.0` | °C. If the temperature reaches this, the heat pump **must** stop. |

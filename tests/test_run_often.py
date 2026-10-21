@@ -61,6 +61,13 @@ class TestRunOften(unittest.TestCase):
             return {'state': str(val)}
         return MagicMock(side_effect=side_effect)
 
+    def test_thermal_reference_prefers_restored_accumulator(self):
+        from run_often import _select_thermal_reference
+
+        self.assertEqual(_select_thermal_reference(50.0, 40.0, 45.0), 50.0)
+        self.assertEqual(_select_thermal_reference(None, 40.0, 45.0), 40.0)
+        self.assertEqual(_select_thermal_reference(None, None, 45.0), 45.0)
+
     @patch('run_often.call_ha_service')
     def test_resistive_heater_control_follows_on_intent(self, mock_service):
         from run_often import control_resistive_heater

@@ -635,7 +635,8 @@ def optimize() -> None:
     solar_array_p90 = np.array(prediction_solar_p90, dtype=float)
 
     # --- GSHP Optimization (Must run before battery) ---
-    acc_temp_state = get_ha_state('sensor.mlp_varaajan_lampotila')
+    accumulator_entity = os.getenv('GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila')
+    acc_temp_state = get_ha_state(accumulator_entity)
     current_acc_temp = 50.0
     if acc_temp_state is not None:
         try:
@@ -654,8 +655,8 @@ def optimize() -> None:
     is_fireplace_currently_on = False
     try:
         # Get recent accumulator temperature history (last 30 minutes)
-        acc_temp_history = fetch_states_history('sensor.mlp_varaajan_lampotila', hours=1)
-        acc_df = acc_temp_history.get('sensor.mlp_varaajan_lampotila', pd.DataFrame())
+        acc_temp_history = fetch_states_history(accumulator_entity, hours=1)
+        acc_df = acc_temp_history.get(accumulator_entity, pd.DataFrame())
         
         if len(acc_df) >= 2:
             # Calculate rate of change over the most recent data

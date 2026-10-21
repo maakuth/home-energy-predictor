@@ -35,6 +35,24 @@ def _get_float(state):
     return None
 
 
+def _select_thermal_reference(
+    accumulator_temp: float | None,
+    supply_temp: float | None,
+    virtual_acc_temp: float | None,
+) -> float | None:
+    """Choose a thermal reference without replacing restored instrumentation.
+
+    The physical accumulator is authoritative.  Supply temperature is useful
+    only as a fallback proxy, and the energy-balance estimate is the final
+    fallback when neither temperature sensor is available.
+    """
+    if accumulator_temp is not None:
+        return accumulator_temp
+    if supply_temp is not None:
+        return supply_temp
+    return virtual_acc_temp
+
+
 def _get_interval_minutes() -> int:
     try:
         return max(int(os.getenv('PLAN_INTERVAL_MINUTES', '15')), 1)
@@ -324,7 +342,9 @@ def main():
     grid_power = get_ha_state('sensor.sahkokauppa_20s')
     solar = get_ha_state(os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'))
     gshp = get_ha_state('sensor.mlp_teho')
-    accumulator = get_ha_state('sensor.mlp_varaajan_lampotila')
+    accumulator = get_ha_state(os.getenv('GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila'))
+    supply_temp_state = get_ha_state(os.getenv('GSHP_SUPPLY_TEMP_ENTITY', 'sensor.gshp_supply_temp'))
+    return_temp_state = get_ha_state(os.getenv('GSHP_RETURN_TEMP_ENTITY', 'sensor.gshp_return_temp'))
     outside_temp_state = get_ha_state(os.getenv('OUTSIDE_TEMP_ENTITY', 'sensor.outdoor_temperature'))
     leaf = get_ha_state('sensor.tasmota_energy_power_3')
     p1 = get_ha_state('sensor.current_phase_1')
@@ -343,11 +363,16 @@ def main():
     solar_kw = solar_raw if solar_raw is not None else 0.0
     gshp_kw = (_get_float(gshp) or 0.0) / 1000.0
     accumulator_temp = _get_float(accumulator)
+    supply_temp = _get_float(supply_temp_state)
+    return_temp = _get_float(return_temp_state)
     outside_temp = _get_float(outside_temp_state)
     try:
         virtual_acc_temp = update_virtual_accumulator_temp(gshp_kw, outside_temp if outside_temp is not None else 10.0)
     except Exception:
         virtual_acc_temp = None
+    accumulator_temp = _select_thermal_reference(
+        accumulator_temp, supply_temp, virtual_acc_temp,
+    )
     leaf_kw = (_get_float(leaf) or 0.0) / 1000.0
     i_p1 = _get_float(p1)
     i_p2 = _get_float(p2)
@@ -367,6 +392,14 @@ def main():
     print(f'Grid Power: {grid_w:.0f}W')
     print(f'Solar: {solar_kw:.2f}kW')
     print(f'GSHP: {gshp_kw:.2f}kW')
+    if supply_temp is not None:
+        if return_temp is None:
+            print(f'GSHP heating circuit: supply={supply_temp:.1f}°C')
+        else:
+            print(
+                f'GSHP heating circuit: supply={supply_temp:.1f}°C, '
+                f'return={return_temp:.1f}°C, ΔT={supply_temp - return_temp:.1f}°C'
+            )
     print(f'Leaf: {leaf_kw:.2f}kW')
 
     phase_str = f'L1: {i_p1 if i_p1 is not None else "?"}, L2: {i_p2 if i_p2 is not None else "?"}, L3: {i_p3 if i_p3 is not None else "?"}'

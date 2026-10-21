@@ -373,7 +373,7 @@ def predict() -> None:
     print(f"⚓ Anchors - 1h: {lag1h_val:.2f}kW, 24h: {lag24h_val:.2f}kW, Leaf 24h: {leaf_energy_24h:.1f}kWh")
 
         
-    acc_temp = get_ha_state('sensor.mlp_varaajan_lampotila')
+    acc_temp = get_ha_state(os.getenv('GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila'))
     acc_val = 45.0
     if acc_temp is not None:
         try:
