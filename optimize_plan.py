@@ -722,6 +722,10 @@ def optimize() -> None:
         gshp_power_state, resistive_state, bulk_state,
     )
 
+    accumulator_entity = os.getenv(
+        'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
+    ).strip()
+
     # Fireplace detection: check if accumulator temp is rising while GSHP is off
     is_fireplace_currently_on = False
     try:
@@ -736,7 +740,8 @@ def optimize() -> None:
             # Calculate rate of change over the most recent data
             acc_df = acc_df.sort_index()
             time_diff = (acc_df.index[-1] - acc_df.index[-2]).total_seconds() / 60.0  # in minutes
-            temp_diff = acc_df['state'].iloc[-1] - acc_df['state'].iloc[-2]
+            states = pd.to_numeric(acc_df['state'], errors='coerce')
+            temp_diff = states.iloc[-1] - states.iloc[-2]
             
             if time_diff > 0:
                 acc_roc = temp_diff / time_diff  # °C per minute
