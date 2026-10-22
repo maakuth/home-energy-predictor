@@ -9,7 +9,9 @@ from typing import Any
 def diagnose_feature_coverage(df, required_cols=None):
     """Report missingness and freshness for required processed signals."""
     if required_cols is None:
-        required_cols = ['total_home_power', 'outside_temp', 'accumulator_temp']
+        required_cols = ['total_home_power', 'outside_temp']
+        if 'accumulator_temp' in getattr(df, 'columns', []):
+            required_cols = required_cols + ['accumulator_temp']
     report = {}
     all_null = []
     missing_cols = []
