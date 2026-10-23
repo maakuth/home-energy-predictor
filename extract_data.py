@@ -20,7 +20,13 @@ ENTITIES: dict[str, str] = {
     'sensor.saikaan_olohuone_current_power': 'aahp_living_power',
     'sensor.mokkimokin_ilp_power': 'aahp_cabin_power',
     'sensor.mummun_energy': 'mummun_energy',
-    'sensor.mlp_varaajan_lampotila': 'accumulator_temp',
+}
+_accumulator_entity = os.getenv(
+    'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
+).strip()
+if _accumulator_entity:
+    ENTITIES[_accumulator_entity] = 'accumulator_temp'
+ENTITIES.update({
     os.getenv('GSHP_SUPPLY_TEMP_ENTITY', 'sensor.gshp_supply_temp'): 'gshp_supply_temp',
     os.getenv('GSHP_RETURN_TEMP_ENTITY', 'sensor.gshp_return_temp'): 'gshp_return_temp',
     'sensor.xpz_491_battery_level': 'ev_soc',
@@ -33,7 +39,7 @@ ENTITIES: dict[str, str] = {
     'sensor.mlp_pumpun_lampotla': 'gshp_pump_temp',
     'sensor.be_stat_batt_power': 'battery_power',  # Home battery power (Watts, positive=charging)
     'weather.home': 'wind_speed' # Special handling for attribute
-}
+})
 
 def get_metadata_ids(cur: psycopg2.extensions.cursor) -> dict[str, int]:
     query = "SELECT metadata_id, entity_id FROM states_meta WHERE entity_id IN %s"
@@ -80,7 +86,9 @@ def extract_attribute(cur: psycopg2.extensions.cursor, metadata_id: int, attr_na
 def diagnose_feature_coverage(df, required_cols=None):
     """Report missingness and freshness for required extracted signals."""
     if required_cols is None:
-        required_cols = ['outside_temp', 'gshp_power', 'accumulator_temp', 'total_power']
+        required_cols = ['outside_temp', 'gshp_power', 'total_power']
+        if 'accumulator_temp' in getattr(df, 'columns', []):
+            required_cols = required_cols + ['accumulator_temp']
     report = {}
     all_null = []
     missing_cols = []
