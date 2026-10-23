@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from typing import Any
 from utils.heating_benchmark import heating_regimes
+from utils.baseload_quality import baseload_targets
 
 
 def diagnose_feature_coverage(df, required_cols=None):
@@ -68,6 +69,8 @@ def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'sta
     # Fundamental step: Sort and deduplicate
     df = df.sort_index()
     df = df[~df.index.duplicated(keep='first')]
+    # Capture training truth BEFORE zero fills, solar substitution and medians.
+    quality_targets = baseload_targets(df)
     
     print('Denoising and filling gaps...')
     fill_zero_cols = ['gshp_power', 'resistive_heater_power', 'bulk_heater_power', 'aahp_living_power', 'aahp_cabin_power', 'mummun_power', 'solar_forecast', 'solar_actual', 'leaf_power']
@@ -246,8 +249,14 @@ def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'sta
     
     diagnose_feature_coverage(df)
 
-    critical_cols = ['total_home_power', 'outside_temp', 'accumulator_temp']
-    df = df.dropna(subset=[c for c in critical_cols if c in df.columns])
+    # Keep invalid intervals and their reasons for audit. Selection belongs to
+    # the trainer, not to a destructive drop of the historical timeline.
+    for column in quality_targets:
+        df[column] = quality_targets[column].reindex(df.index)
+    print(f"Baseload quality: {int(df['baseload_target_valid'].sum())}/{len(df)} valid targets (before lag eligibility)")
+    rejected = df.loc[~df['baseload_target_valid'], 'baseload_exclusion_reason']
+    if not rejected.empty:
+        print('Baseload exclusions:\n' + rejected.value_counts().to_string())
     
     output_dir = os.path.dirname(output_path)
     if output_dir:

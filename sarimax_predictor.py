@@ -35,10 +35,21 @@ def load_historical_data(
         
         # Select recent data
         cutoff = df.index.max() - pd.Timedelta(days=last_n_days)
-        ts_data = df.loc[df.index >= cutoff, target_col]
+        ts_data = pd.Series(df.loc[df.index >= cutoff, target_col])
+        if target_col == 'baseload_power' and 'baseload_target_valid' in df:
+            valid = df.baseload_target_valid.astype(str).str.lower().eq('true')
+            ts_data = ts_data.where(valid.reindex(ts_data.index).fillna(False))
         
         # Resample to ensure fixed frequency (crucial for SARIMA)
-        ts_data = ts_data.resample('15min').mean().ffill()
+        # Keep a regular grid but never fabricate missing/partial quarters.
+        step_seconds = float(df.index.to_series().diff().dt.total_seconds().median()) if len(df) > 1 else 900.0
+        if not np.isfinite(step_seconds) or step_seconds <= 0:
+            return None
+        expected = max(1, int(900 / step_seconds))
+        counts = ts_data.resample('15min').count()
+        ts_data = ts_data.resample('15min').mean().where(counts >= expected)
+        if not ts_data.notna().any():
+            return None
         
         return ts_data
     except Exception as e:

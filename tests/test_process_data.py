@@ -110,13 +110,11 @@ class TestProcessData(unittest.TestCase):
             os.path.join(self.test_dir, 'state', 'processed_data.csv'), index_col=0,
         )
 
-        expected = (
-            result['total_home_power']
-            - result['gshp_power'] / 1000.0
-            - result['leaf_power'] / 1000.0
-            - 6.0
-        ).clip(lower=0)
-        self.assertLess((result['baseload_power'] - expected).abs().max(), 1e-6)
+        from utils.baseload_quality import baseload_targets
+        raw.index = pd.to_datetime(raw.index, utc=True)
+        expected = baseload_targets(raw)['baseload_power']
+        result.index = pd.to_datetime(result.index, utc=True)
+        pd.testing.assert_series_equal(result.baseload_power, expected, check_freq=False)
 
     def test_shared_heating_meter_is_split_without_double_counting(self):
         raw_path = os.path.join(self.test_dir, 'state', 'raw_data.csv')

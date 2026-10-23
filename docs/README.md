@@ -16,6 +16,7 @@ Licensed under AGPL-3.0.
 - **Feedback Loop**: All predictions and optimization plans are archived in `hepo.db` (SQLite) for performance analysis.
 
 ### 2. Machine Learning
+- **[Baseload training quality](BASELOAD_TRAINING_QUALITY.md)**: Meter validity, missing-data handling, time-aware lags and the thermal-independent feature schema.
 - **XGBoost Regressor (`train_model.py`)**: Predicts total home consumption (gross load) using features like outside temp, solar forecast, accumulator temp, fireplace status, EV SOC/position, and temporal features.
 - **SARIMAX Benchmark (`train_sarima.py`, `sarimax_predictor.py`)**: Fits a SARIMAX model on historical baseload as a benchmark/ensemble comparison. Trained and saved separately from XGBoost.
 - **Model Versioning**: Semantic versioning stored in `VERSION` file (not tied to git). All predictions and analysis are tagged with the version for performance tracking.

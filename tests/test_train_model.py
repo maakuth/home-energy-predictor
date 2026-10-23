@@ -35,6 +35,7 @@ class TestTrainModel(unittest.TestCase):
         np.random.seed(42)
         df = pd.DataFrame(index=idx)
         df['baseload_power'] = 1.0 + 0.5 * np.sin(np.arange(n) * 2 * np.pi / 96) + 0.1 * np.random.randn(n)
+        df['baseload_target_valid'] = True
         df['outside_temp'] = 10.0 + 5.0 * np.sin(np.arange(n) * 2 * np.pi / 96)
         df['wind_speed'] = 3.0 + np.random.randn(n)
         df['solar_forecast'] = np.maximum(0, 2.0 * np.sin(np.arange(n) * 2 * np.pi / 96 - 2))
@@ -65,7 +66,7 @@ class TestTrainModel(unittest.TestCase):
     def test_training_writes_valid_model_and_feature_artifacts(self):
         """One real fit covers all persisted-artifact assertions."""
         from train_model import train
-        train()
+        train(min_coverage_days=1)
         model_path = os.path.join(self.test_dir, 'state', 'energy_model.json')
         features_path = os.path.join(self.test_dir, 'state', 'model_features.json')
         self.assertTrue(os.path.exists(model_path), "train() should create energy_model.json")
@@ -74,7 +75,6 @@ class TestTrainModel(unittest.TestCase):
             saved_features = json.load(f)
         expected_features = [
             'outside_temp', 'wind_speed', 'solar_forecast',
-            'accumulator_temp', 'gshp_pump_temp', 'is_gshp_pump_running', 'acc_roc', 'is_fireplace_lag1',
             'leaf_power_lag_1h', 'leaf_energy_24h',
             'baseload_lag_1h', 'baseload_lag_24h',
             'is_extended_complex',
@@ -91,7 +91,7 @@ class TestTrainModel(unittest.TestCase):
 
     def test_holdout_excludes_recent(self):
         from train_model import train
-        train(holdout_days=1)
+        train(holdout_days=1, min_coverage_days=1)
         model_path = os.path.join(self.test_dir, 'state', 'energy_model.json')
         self.assertTrue(os.path.exists(model_path))
 
@@ -105,6 +105,15 @@ class TestTrainModel(unittest.TestCase):
         result = train(data_path=os.path.join(train_dir, 'processed_data.csv'))
         self.assertIsNone(result)
         self.assertFalse(os.path.exists(os.path.join(self.test_dir, 'state', 'energy_model.json')))
+
+    def test_default_coverage_gate_preserves_existing_model(self):
+        from train_model import train
+        model_path = os.path.join(self.test_dir, 'state', 'energy_model.json')
+        with open(model_path, 'w') as f:
+            f.write('existing-model')
+        train()
+        with open(model_path) as f:
+            self.assertEqual(f.read(), 'existing-model')
 
 
 if __name__ == '__main__':

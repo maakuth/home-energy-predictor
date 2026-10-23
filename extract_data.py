@@ -189,6 +189,13 @@ def main() -> None:
                 converted = pd.to_numeric(extracted, errors='coerce')
             df[col_name] = converted
         
+        # Preserve invalid/unavailable source states BEFORE mean/forward fill
+        # can conceal them. No source update is distinct from an invalid update.
+        if col_name in {'total_power', 'solar_actual', 'battery_power', 'gshp_power', 'leaf_power'}:
+            valid_source = df[col_name].notna().resample(RESAMPLE_INTERVAL).min().ffill().astype('boolean')
+            valid_source.name = col_name + '_source_valid'
+            all_dfs.append(valid_source)
+
         # Resample to configured interval (default 15 minutes).
         if col_name == 'ev_position':
             # Is home if any state in the interval says 'home'.

@@ -17,7 +17,7 @@ def train_sarima(
     print(f"Loading last {days} days for SARIMA training...")
     ts_data = load_historical_data(file_path=data_path, last_n_days=days)
     
-    if ts_data is None or len(ts_data) < 192:
+    if ts_data is None or ts_data.notna().sum() < 192:
         print("❌ Not enough data for SARIMA training.")
         return
 
