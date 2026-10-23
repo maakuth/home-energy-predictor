@@ -1,5 +1,6 @@
 from __future__ import annotations
 import unittest
+import unittest.mock
 import os
 import tempfile
 import shutil
@@ -62,6 +63,17 @@ class TestProcessData(unittest.TestCase):
         process_data()
         output_path = os.path.join(self.test_dir, 'state', 'processed_data.csv')
         self.assertTrue(os.path.exists(output_path), "process_data() should create processed_data.csv")
+
+    def test_heating_regime_is_metadata_not_a_row_filter(self):
+        from process_data import process_data
+        raw_path = os.path.join(self.test_dir, 'state', 'raw_data.csv')
+        raw = pd.read_csv(raw_path, index_col=0)
+        raw.index = pd.date_range('2026-10-07', periods=len(raw), freq='15min', tz='Europe/Helsinki')
+        raw.to_csv(raw_path)
+        process_data()
+        result = pd.read_csv(os.path.join(self.test_dir, 'state', 'processed_data.csv'), index_col=0)
+        self.assertEqual(len(result), len(raw))
+        self.assertEqual(set(result.heating_regime), {'resistance_only'})
 
     def test_critical_columns_present(self):
         from process_data import process_data

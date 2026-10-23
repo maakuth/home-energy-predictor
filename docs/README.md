@@ -37,6 +37,7 @@ Pluggable architecture under `battery_planners/`:
 - **Factory pattern** (`factory.py`) selects planner via `BATTERY_PLANNER_TYPE` env var.
 
 ### 5. Performance Analysis
+- **[Heating-history benchmark](HEATING_BENCHMARK.md)**: Offline equipment-regime annotations, resistance-only energy accounting and conservative fireplace/storage uncertainty masks.
 - **`analyze_performance.py`**: Compares predictions vs. actual consumption, computes MAE/bias in 3-hour windows, calculates battery ROI (planned savings, spread), and stores results in `performance_analysis` table.
 - **`analyze_evolution.py`**: Tracks how plans evolve as target time approaches — MAE by lead time, stability (stddev of predictions, action flips), and planned cost evolution.
 - **Strategic Adaptation**: Historical metrics can guide tuning (e.g., positive bias → optimizer too conservative; decreasing spread → discharge thresholds need adjustment).

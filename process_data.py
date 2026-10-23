@@ -4,6 +4,7 @@ import argparse
 import pandas as pd
 import numpy as np
 from typing import Any
+from utils.heating_benchmark import heating_regimes
 
 
 def diagnose_feature_coverage(df, required_cols=None):
@@ -220,6 +221,8 @@ def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'sta
     print('Adding structural change features...')
     structural_change_date = pd.to_datetime('2025-10-01', utc=True)
     df['is_extended_complex'] = (df.index >= structural_change_date).astype(int)
+    # Equipment provenance only: not a predictor or a blanket baseload filter.
+    df['heating_regime'] = heating_regimes(pd.DatetimeIndex(df.index))
 
     print('Adding temporal features...')
     df['hour'] = df.index.hour
