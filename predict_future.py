@@ -64,7 +64,7 @@ def compute_baseload_at_lag(
         sensors_def = [
             ('sensor.sahkokauppa_nyt', 'total', 1.0),
             (os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 'solar', 1.0),
-            ('sensor.mlp_teho', 'gshp', 1 / 1000.0),
+            (os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'), 'gshp', 1 / 1000.0),
             (os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'), 'resistive', 1.0),
             (os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'), 'bulk_heater', 1.0),
             ('sensor.tasmota_energy_power_3', 'leaf', 1 / 1000.0),
@@ -333,7 +333,7 @@ def predict() -> None:
     anchor_entities = [
         'sensor.sahkokauppa_nyt', 
         os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'), 
-        'sensor.mlp_teho',
+        os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'),
         os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'),
         'sensor.tasmota_energy_power_3',
         'sensor.be_stat_batt_power'
@@ -421,7 +421,7 @@ def predict() -> None:
 
     # GSHP Pump Temperature logic
     gshp_pump_temp_state = get_ha_state('sensor.mlp_pumpun_lampotla')
-    gshp_power_state = get_ha_state('sensor.mlp_teho')
+    gshp_power_state = get_ha_state(os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'))
     p_temp_val = np.nan
     p_power_val = 0.0
     if gshp_pump_temp_state is not None and gshp_power_state is not None:
