@@ -341,7 +341,7 @@ def main():
     battery_power = get_ha_state('sensor.be_stat_batt_power')
     grid_power = get_ha_state('sensor.sahkokauppa_20s')
     solar = get_ha_state(os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'))
-    gshp = get_ha_state('sensor.mlp_teho')
+    gshp = get_ha_state(os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'))
     accumulator_entity = os.getenv(
         'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
     ).strip()

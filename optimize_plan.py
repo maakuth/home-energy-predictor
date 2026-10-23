@@ -715,7 +715,7 @@ def optimize() -> None:
     # --- GSHP Optimization (Must run before battery) ---
     current_acc_temp = get_gshp_initial_temp()
     
-    gshp_power_state = get_ha_state('sensor.mlp_teho')
+    gshp_power_state = get_ha_state(os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'))
     resistive_state = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
     bulk_state = get_ha_state(os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'))
     is_hp_currently_running = _is_gshp_compressor_running(
