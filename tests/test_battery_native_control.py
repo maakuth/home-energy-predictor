@@ -67,3 +67,16 @@ def test_follow_to_fixed_and_back_does_not_reset_requested_power():
     ]
     assert service.call_args_list[1].kwargs['service_data']['value'] == -2000
     assert service.call_args_list[2].kwargs['service_data']['value'] == 0
+
+
+@pytest.mark.parametrize('action', ['charge_solar', 'discharge_load'])
+def test_restricted_actions_use_native_only_when_explicitly_selected(action):
+    with patch('utils.battery_utils.is_battery_available', return_value=True), patch(
+        'utils.battery_utils.call_ha_service', return_value={}
+    ) as service:
+        assert push_battery_control(1000, action, native_load_following=True)
+    service.assert_called_once_with(
+        domain='mqtt', service='publish',
+        service_data={'topic': 'hoymiles/battery/set_mode', 'payload': 'self_consumption'},
+        return_response=False,
+    )

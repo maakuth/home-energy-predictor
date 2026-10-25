@@ -455,7 +455,8 @@ class TestRunOften(unittest.TestCase):
             main()
 
         args = mock_push.call_args.kwargs
-        self.assertEqual(args['battery_action'], 'net_metering')
+        self.assertEqual(args['battery_action'], 'charge_solar')
+        self.assertTrue(args['native_load_following'])
         self.assertEqual(args['battery_power_w'], -4000)
 
     @patch('run_often.push_ha_state')

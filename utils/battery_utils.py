@@ -2,8 +2,9 @@ from __future__ import annotations
 """Battery control utilities for HEPO.
 
 Handles pushing battery control setpoint to Hoymiles inverter via Home Assistant.
-Uses native self-consumption mode for load following and number.set_value
-for fixed power without modifying entity structure or MQTT subscriptions.
+Uses guarded native self-consumption for load following, solar charging and
+load discharging, and number.set_value for fixed power without modifying
+entity structure or MQTT subscriptions.
 
 Gracefully handles battery unavailability - if the entity doesn't exist,
 silently continues without error (degradation mode for testing).
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 from utils.ha_utils import call_ha_service, get_ha_state
 from utils.type_defs import BatteryAction
 from utils.plan_time import current_plan_entry
+from utils.native_follow import NATIVE_FOLLOW_ACTIONS
 
 load_dotenv(override=True)
 
@@ -53,7 +55,7 @@ def push_battery_control(
     battery_action: BatteryAction = 'follow',
     battery_soc_pct: Optional[float] = None,
     *,
-    native_load_following: bool = True,
+    native_load_following: bool | None = None,
 ) -> bool:
     """
     Push battery control setpoint to Hoymiles inverter.
@@ -62,17 +64,18 @@ def push_battery_control(
         battery_power_w (int): Control setpoint in Watts
             Positive = discharge (provide power to home)
             Negative = charge (draw from grid/solar)
-        battery_action (str): Current planned action; follow selects native mode.
+        battery_action (str): Current planned action; follow defaults to native mode.
         battery_soc_pct (float): Current battery SoC percentage (for logging)
-        native_load_following (bool): False forces numeric control for safety caps.
+        native_load_following (bool): Explicit guarded selection for directional
+            actions. False forces fixed power; None defaults to native for follow only.
     
     Returns:
         bool: True if successful, False otherwise (still True if battery unavailable - degradation mode)
     
     Note:
-        Follow publishes self_consumption to the inverter's mode command topic.
+        Native control publishes self_consumption to the mode command topic.
         No power command may follow it: set_power switches back to fixed mode.
-        Other actions use number.set_value (the bridge's signed set_power command),
+        Fixed control uses number.set_value (the bridge's signed set_power command),
         which also exits native mode, including at zero watts.
         
         If battery entity is unavailable, silently skips push (degradation mode).
@@ -92,7 +95,8 @@ def push_battery_control(
         return True  # Still return True to not break the plan
     
     try:
-        if battery_action == 'follow' and native_load_following:
+        use_native = battery_action == 'follow' if native_load_following is None else native_load_following
+        if battery_action in NATIVE_FOLLOW_ACTIONS and use_native:
             result = call_ha_service(
                 domain='mqtt',
                 service='publish',
@@ -103,7 +107,7 @@ def push_battery_control(
                 return_response=False,
             )
             if result is not None:
-                print('✅ Battery Control: native self_consumption (follow)')
+                print(f'✅ Battery Control: native self_consumption ({battery_action})')
                 return True
             return False
 

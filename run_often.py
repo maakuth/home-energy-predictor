@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import math
 import os
 from datetime import datetime
 from dotenv import load_dotenv
@@ -9,12 +10,17 @@ from utils.type_defs import BatteryAction
 from utils.gshp_health import health_attributes, update_gshp_health
 from utils.sg_ready import update_virtual_accumulator_temp, derive_sg_ready_bits, derive_sg_ready_mode
 from utils.plan_time import slot_start
+from utils.native_follow import (
+    NATIVE_FOLLOW_ACTIONS,
+    choose_native_following,
+    load_native_follow_state,
+    save_native_follow_state,
+)
 from utils.battery_utils import (
     push_battery_control,
     compute_load_following_setpoint,
     compute_net_metering_setpoint,
     get_current_plan_entry,
-    adjust_charge_solar_for_real_time,
     adjust_idle_for_cheap_export,
     smooth_planned_setpoint,
     apply_ramp_rate,
@@ -29,7 +35,8 @@ load_dotenv(override=True)
 def _get_float(state):
     if state and state.get('state') not in ['unknown', 'unavailable', None]:
         try:
-            return float(state['state'])
+            value = float(state['state'])
+            return value if math.isfinite(value) else None
         except (ValueError, TypeError):
             pass
     return None
@@ -578,6 +585,9 @@ def main():
                 planned_battery_kw = 0.0
             print(f'Manual battery override: {planned_action}')
 
+    # Directional actions must respect the actual plan cap, not a smoothed
+    # carry-over from the preceding interval.
+    directional_planned_kw = planned_battery_kw
     # Smooth setpoint across interval boundaries using prior interval's average
     planned_battery_kw = smooth_planned_setpoint(
         planned_battery_kw=planned_battery_kw,
@@ -587,16 +597,6 @@ def main():
         max_battery_kw=max_battery_kw,
         plan_mtime=plan_mtime,
         override_mode=override_mode,
-    )
-
-    planned_battery_kw, planned_action = adjust_charge_solar_for_real_time(
-        planned_battery_kw=planned_battery_kw,
-        planned_action=planned_action,
-        solar_kw=solar_kw,
-        grid_w=grid_w,
-        battery_w=battery_w,
-        battery_soc_pct=soc_pct,
-        min_soc_pct=min_soc_pct,
     )
 
     if not manual_override:
@@ -613,13 +613,23 @@ def main():
 
     net_metering = os.getenv('BATTERY_NET_METERING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
-    native_load_following = planned_action == 'follow'
+    native_candidate = planned_action in NATIVE_FOLLOW_ACTIONS
+    native_load_following = False
+    native_slot_id = str(current['timestamp'])
     # Native following owns instantaneous power. Estimate its response only for
     # budget/fuse safety checks below; this estimate is not sent to the inverter
     # unless a constraint requires fixed power.
-    if native_load_following:
-        adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, (battery_w - grid_w) / 1000.0))
-        log_msg = 'native self_consumption'
+    if native_candidate:
+        grid_observed_kw = _get_float(grid_power)
+        native_load_following, adjusted_battery_kw, log_msg = choose_native_following(
+            planned_action,
+            directional_planned_kw,
+            _get_float(battery_power),
+            grid_observed_kw * 1000.0 if grid_observed_kw is not None else None,
+            was_native=load_native_follow_state(native_slot_id, planned_action, override_mode),
+            max_charge_kw=max_battery_kw,
+            max_discharge_kw=float(os.getenv('BATTERY_MAX_DISCHARGE_KW', '10.0')),
+        )
     # Battery control: net metering PI only when applicable and not manually overridden
     elif net_metering and import_kwh is not None and export_kwh is not None and not manual_override:
         now = datetime.now()
@@ -698,7 +708,9 @@ def main():
     if log_msg:
         print(f'Load follow: {log_msg}')
 
-    if not native_load_following:
+    # Do not let ramping prolong wrong-direction flow or exceed a directional
+    # plan cap when leaving native mode. Other actions retain normal ramping.
+    if not native_candidate:
         ramp_rate = float(os.getenv('BATTERY_RAMP_RATE_KW_PER_MIN', '3.0'))
         adjusted_battery_kw = apply_ramp_rate(
             target_setpoint_kw=adjusted_battery_kw,
@@ -744,7 +756,7 @@ def main():
 
     # Native mode cannot enforce a software SoC floor. Keep fixed power until
     # the battery is above it (or telemetry is restored), even during surplus.
-    if planned_action == 'follow' and (soc_pct is None or soc_pct <= floor_pct):
+    if native_candidate and (soc_pct is None or soc_pct <= floor_pct):
         native_load_following = False
         adjusted_battery_kw = max(0.0, adjusted_battery_kw) if soc_pct is not None else 0.0
         print(f'Native following blocked: SoC {soc_str}% (floor {floor_pct:.0f}%)')
@@ -797,12 +809,14 @@ def main():
         print(f'Fuse cap: {fuse_msg}')
 
     battery_control_w = int(-adjusted_battery_kw * 1000)
-    push_battery_control(
+    pushed = push_battery_control(
         battery_power_w=battery_control_w,
         battery_action=cast(BatteryAction, planned_action),
         battery_soc_pct=planned_soc,
         native_load_following=native_load_following,
     )
+    if pushed:
+        save_native_follow_state(native_slot_id, planned_action, override_mode, native_load_following)
 
 
 if __name__ == '__main__':

@@ -19,7 +19,31 @@ PI controller while native mode is active. The command is reasserted on each
 run; the retained `hoymiles/battery/mode_state` reports the last successfully
 requested mode, not independently verified inverter state.
 
-Other actions retain the existing Home Assistant `number.set_value` path to
+`charge_solar` and `discharge_load` also prefer native mode when both measured
+battery power and the estimated native response agree with the requested
+direction. The estimated response is `battery_power - grid_power` (positive
+means charging). A clearly wrong measured direction forces fixed control even
+when that estimate has already returned to the correct direction.
+
+- `charge_solar` falls back to charge-only fixed power, or zero without surplus.
+  It no longer automatically changes to `discharge_load` when solar falls short.
+- `discharge_load` falls back to discharge-only fixed power capped by the
+  current plan's unsmoothed discharge power and interval discharge budget.
+- A 200 W deadband avoids mode flapping near zero: native mode is entered on a
+  clear allowed-direction signal, retained through small zero crossings, and
+  left on a clear reversal. Re-entry after a discharge-power cap requires
+  200 W of headroom below the cap. Very small planned discharges use fixed power.
+- Hysteresis records the last successful control request in
+  `state/native_follow_control.json` (`HEPO_NATIVE_FOLLOW_STATE_FILE` overrides
+  the path), scoped to the plan slot, action, and manual override mode. It does
+  not treat that record as confirmation of actual inverter state.
+
+These three actions bypass the net-metering PI controller, including while
+using fixed fallback. Directional fallback also bypasses ramping so a stop or
+power cap takes effect immediately. Missing/non-finite battery or grid
+telemetry disables native mode and requests zero power, subject to fuse safety.
+
+Other actions and fixed fallbacks retain the Home Assistant `number.set_value` path to
 the bridge's signed `hoymiles/battery/set_power` command. Every successful power
 command switches the bridge to `fixed`, including zero watts for `idle`; no
 separate `fixed` mode command should follow a nonzero power command, because it
@@ -32,6 +56,8 @@ telemetry), native mode is also disabled to avoid uncontrolled discharge.
 Normal native following resumes when those constraints no longer apply.
 Inverter/BMS hardware limits still apply; native mode cannot enforce HEPO's
 software follow-power limit or ramp rate between the 20-second checks.
+Direction restrictions are likewise best-effort: brief wrong-direction flow
+can occur between checks, and fuse protection may override a directional cap.
 
 ## systemd Timer Examples
 

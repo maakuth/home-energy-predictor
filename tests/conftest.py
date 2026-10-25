@@ -45,6 +45,7 @@ def isolated_test_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TEST_SARIMA_CSV", str(test_dir / "processed_data.csv"))
     monkeypatch.setenv("TEST_TMP_DIR", str(test_dir))
     monkeypatch.setenv("GSHP_HEALTH_STATE_FILE", str(test_dir / "gshp_health.json"))
+    monkeypatch.setenv("HEPO_NATIVE_FOLLOW_STATE_FILE", str(test_dir / "native_follow_control.json"))
     
     # Also set for backward compatibility with code that might check these
     monkeypatch.setenv("DB_PATH", str(test_dir / "test_hepo.db"))
