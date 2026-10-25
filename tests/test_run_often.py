@@ -653,7 +653,96 @@ class TestRunOften(unittest.TestCase):
         self.assertLess(battery_w, 2500,
                         "Should discharge ~1 kW to follow load, NOT 4 kW")
         self.assertGreater(battery_w, 500,
-                           "Should discharge at least 0.5 kW to follow load")
+                            "Should discharge at least 0.5 kW to follow load")
+        self.assertEqual(args.kwargs['battery_action'], 'follow')
+        self.assertTrue(args.kwargs['native_load_following'])
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_native_follow_bypasses_software_controller_and_ramp(self, mock_get_ha, mock_push):
+        self._make_plan_file(os.path.join(self.test_dir, 'state'), {
+            'battery_action': 'follow', 'battery_power_kw': 0.0,
+        })
+        mock_get_ha.side_effect = self._mock_ha_state({
+            'sensor.be_soc': '50', 'sensor.sahkokauppa_20s': '5',
+        })
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '0'}), patch(
+            'run_often.compute_load_following_setpoint'
+        ) as controller, patch('run_often.apply_ramp_rate') as ramp:
+            from run_often import main
+            main()
+        controller.assert_not_called()
+        ramp.assert_not_called()
+        self.assertTrue(mock_push.call_args.kwargs['native_load_following'])
+
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_native_follow_falls_back_for_safety_constraints(self, mock_get_ha, mock_push):
+        for constraint in ('floor', 'missing_soc', 'budget', 'fuse'):
+            with self.subTest(constraint=constraint):
+                fields = {'battery_action': 'follow', 'battery_power_kw': 0.0}
+                if constraint == 'budget':
+                    fields['discharge_budget_kwh'] = 0.0
+                self._make_plan_file(os.path.join(self.test_dir, 'state'), fields)
+                mock_get_ha.side_effect = self._mock_ha_state({
+                    'sensor.be_soc': '10' if constraint == 'floor' else (
+                        'unavailable' if constraint == 'missing_soc' else '50'),
+                    'sensor.sahkokauppa_20s': '2',
+                    'sensor.current_phase_1': '-25' if constraint == 'fuse' else '0',
+                })
+                with patch.dict(os.environ, {
+                    'BATTERY_NET_METERING': '0', 'BATTERY_MIN_SOC_PCT': '10',
+                    'BATTERY_RESERVE_SOC_PCT': '10', 'MAIN_FUSE_SIZE_A': '25',
+                }):
+                    from run_often import main
+                    main()
+                self.assertFalse(mock_push.call_args.kwargs['native_load_following'])
+                self.assertEqual(mock_push.call_args.kwargs['battery_power_w'], 0)
+
+    @patch('run_often.call_ha_service')
+    @patch('run_often.push_ha_state')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_manual_follow_uses_native_mode_with_solar_surplus(
+        self, mock_get_ha, mock_push, mock_push_state, mock_service,
+    ):
+        self._make_plan_file(os.path.join(self.test_dir, 'state'), {
+            'battery_action': 'idle', 'battery_power_kw': 0.0,
+            'discharge_budget_kwh': 0.0,
+        })
+        mock_get_ha.side_effect = self._mock_ha_state({
+            'sensor.be_soc': '50', 'sensor.sahkokauppa_20s': '-3',
+            'input_select.hepo_battery_action': 'follow',
+        })
+        with patch.dict(os.environ, {'BATTERY_NET_METERING': '1'}):
+            from run_often import main
+            main()
+        self.assertEqual(mock_push.call_args.kwargs['battery_action'], 'follow')
+        self.assertTrue(mock_push.call_args.kwargs['native_load_following'])
+
+    @patch('run_often.call_ha_service')
+    @patch('run_often.push_ha_state')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.get_ha_state')
+    def test_native_follow_resumes_after_floor_constraint_clears(
+        self, mock_get_ha, mock_push, mock_push_state, mock_service,
+    ):
+        self._make_plan_file(os.path.join(self.test_dir, 'state'), {
+            'battery_action': 'follow', 'battery_power_kw': 0.0,
+        })
+        with patch.dict(os.environ, {
+            'BATTERY_NET_METERING': '0', 'BATTERY_RESERVE_SOC_PCT': '20',
+        }):
+            from run_often import main
+            for soc in ('15', '50'):
+                mock_get_ha.side_effect = self._mock_ha_state({
+                    'sensor.be_soc': soc, 'sensor.sahkokauppa_20s': '1',
+                })
+                main()
+        self.assertEqual(
+            [c.kwargs['native_load_following'] for c in mock_push.call_args_list],
+            [False, True],
+        )
 
     @patch('run_often.apply_discharge_budget', return_value=(-1.0, ''))
     @patch('run_often.accumulate_interval_discharge', return_value=0.0)

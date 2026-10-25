@@ -613,8 +613,15 @@ def main():
 
     net_metering = os.getenv('BATTERY_NET_METERING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
+    native_load_following = planned_action == 'follow'
+    # Native following owns instantaneous power. Estimate its response only for
+    # budget/fuse safety checks below; this estimate is not sent to the inverter
+    # unless a constraint requires fixed power.
+    if native_load_following:
+        adjusted_battery_kw = max(-max_battery_kw, min(max_battery_kw, (battery_w - grid_w) / 1000.0))
+        log_msg = 'native self_consumption'
     # Battery control: net metering PI only when applicable and not manually overridden
-    if net_metering and import_kwh is not None and export_kwh is not None and not manual_override:
+    elif net_metering and import_kwh is not None and export_kwh is not None and not manual_override:
         now = datetime.now()
         interval_minutes = _get_interval_minutes()
         elapsed_minutes = now.minute % interval_minutes + now.second / 60.0
@@ -622,32 +629,18 @@ def main():
         planned_grid_import_kwh = current.get('grid_import_kwh', 0.0) if current else 0.0
         planned_grid_export_kwh = current.get('grid_export_kwh', 0.0) if current else 0.0
 
-        if planned_action == 'follow':
-            adjusted_battery_kw, log_msg = compute_load_following_setpoint(
-                planned_battery_kw=planned_battery_kw,
-                planned_action=planned_action,
-                solar_kw=solar_kw,
-                grid_w=grid_w,
-                battery_w=battery_w,
-                gshp_kw=gshp_kw,
-                leaf_kw=leaf_kw,
-                phase_currents=[i_p1, i_p2, i_p3],
-                battery_soc_pct=soc_pct,
-                min_soc_pct=min_soc_pct,
-            )
-        else:
-            adjusted_battery_kw, log_msg = compute_net_metering_setpoint(
-                planned_battery_kw=planned_battery_kw,
-                planned_action=planned_action,
-                planned_grid_import_kwh=planned_grid_import_kwh,
-                planned_grid_export_kwh=planned_grid_export_kwh,
-                cumulative_import_kwh=import_kwh,
-                cumulative_export_kwh=export_kwh,
-                elapsed_minutes=elapsed_minutes,
-                interval_minutes=interval_minutes,
-                battery_soc_pct=soc_pct,
-                min_soc_pct=min_soc_pct,
-            )
+        adjusted_battery_kw, log_msg = compute_net_metering_setpoint(
+            planned_battery_kw=planned_battery_kw,
+            planned_action=planned_action,
+            planned_grid_import_kwh=planned_grid_import_kwh,
+            planned_grid_export_kwh=planned_grid_export_kwh,
+            cumulative_import_kwh=import_kwh,
+            cumulative_export_kwh=export_kwh,
+            elapsed_minutes=elapsed_minutes,
+            interval_minutes=interval_minutes,
+            battery_soc_pct=soc_pct,
+            min_soc_pct=min_soc_pct,
+        )
         planned_action = 'net_metering'
     else:
         adjusted_battery_kw, log_msg = compute_load_following_setpoint(
@@ -705,12 +698,13 @@ def main():
     if log_msg:
         print(f'Load follow: {log_msg}')
 
-    ramp_rate = float(os.getenv('BATTERY_RAMP_RATE_KW_PER_MIN', '3.0'))
-    adjusted_battery_kw = apply_ramp_rate(
-        target_setpoint_kw=adjusted_battery_kw,
-        actual_battery_kw=battery_w / 1000.0,
-        ramp_rate_kw_per_min=ramp_rate,
-    )
+    if not native_load_following:
+        ramp_rate = float(os.getenv('BATTERY_RAMP_RATE_KW_PER_MIN', '3.0'))
+        adjusted_battery_kw = apply_ramp_rate(
+            target_setpoint_kw=adjusted_battery_kw,
+            actual_battery_kw=battery_w / 1000.0,
+            ramp_rate_kw_per_min=ramp_rate,
+        )
 
     # Per-interval discharge budget: cap load-following discharge so the battery
     # doesn't drain faster than planned during cheap intervals (e.g. EV charging
@@ -726,12 +720,15 @@ def main():
         discharge_used_kwh = accumulate_interval_discharge(
             battery_w, interval_minutes=interval_minutes,
         )
+        before_budget_kw = adjusted_battery_kw
         adjusted_battery_kw, budget_msg = apply_discharge_budget(
             adjusted_battery_kw=adjusted_battery_kw,
             discharge_budget_kwh=discharge_budget_kwh,
             discharge_used_kwh=discharge_used_kwh,
             interval_minutes=interval_minutes,
         )
+        if adjusted_battery_kw != before_budget_kw:
+            native_load_following = False
         if budget_msg:
             print(f'Discharge budget: {budget_msg}')
 
@@ -742,6 +739,15 @@ def main():
     # when the non-battery load alone already exceeds the fuse.
     adjusted_battery_kw, fuse_msg = apply_phase_current_cap(
         adjusted_battery_kw, battery_w, [i_p1, i_p2, i_p3], max_battery_kw)
+    if fuse_msg:
+        native_load_following = False
+
+    # Native mode cannot enforce a software SoC floor. Keep fixed power until
+    # the battery is above it (or telemetry is restored), even during surplus.
+    if planned_action == 'follow' and (soc_pct is None or soc_pct <= floor_pct):
+        native_load_following = False
+        adjusted_battery_kw = max(0.0, adjusted_battery_kw) if soc_pct is not None else 0.0
+        print(f'Native following blocked: SoC {soc_str}% (floor {floor_pct:.0f}%)')
 
     # SoC floor guard: never discharge below the configured minimum, even if the
     # fuse cap would otherwise force a discharge.
@@ -795,6 +801,7 @@ def main():
         battery_power_w=battery_control_w,
         battery_action=cast(BatteryAction, planned_action),
         battery_soc_pct=planned_soc,
+        native_load_following=native_load_following,
     )
 
 
