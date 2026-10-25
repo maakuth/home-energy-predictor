@@ -56,6 +56,7 @@ def push_battery_control(
     battery_soc_pct: Optional[float] = None,
     *,
     native_load_following: bool | None = None,
+    command_result: dict[str, str] | None = None,
 ) -> bool:
     """
     Push battery control setpoint to Hoymiles inverter.
@@ -68,6 +69,8 @@ def push_battery_control(
         battery_soc_pct (float): Current battery SoC percentage (for logging)
         native_load_following (bool): Explicit guarded selection for directional
             actions. False forces fixed power; None defaults to native for follow only.
+        command_result (dict): Optional diagnostic output; distinguishes service
+            acceptance from an unavailable-battery skip without changing the bool return.
     
     Returns:
         bool: True if successful, False otherwise (still True if battery unavailable - degradation mode)
@@ -81,9 +84,14 @@ def push_battery_control(
         If battery entity is unavailable, silently skips push (degradation mode).
     """
     entity_id = BATTERY_CONTROL_ENTITY_ID
+    if command_result is not None:
+        command_result.update(command_status='failed', command_error='service_failed')
     
     # Check if battery is available before attempting push
     if not is_battery_available():
+        if command_result is not None:
+            command_result.clear()
+            command_result['command_status'] = 'skipped_unavailable'
         # Degradation mode: battery not available, skip gracefully
         action_str = f"({battery_action})" if battery_action != 'idle' else ""
         if battery_soc_pct is not None:
@@ -107,6 +115,9 @@ def push_battery_control(
                 return_response=False,
             )
             if result is not None:
+                if command_result is not None:
+                    command_result.clear()
+                    command_result['command_status'] = 'accepted'
                 print(f'✅ Battery Control: native self_consumption ({battery_action})')
                 return True
             return False
@@ -126,6 +137,9 @@ def push_battery_control(
         # With return_response=False, the service call either succeeds (returns dict/json)
         # or fails (returns None from the except/error handlers)
         if result is not None:
+            if command_result is not None:
+                command_result.clear()
+                command_result['command_status'] = 'accepted'
             action_str = f"({battery_action})" if battery_action != 'idle' else ""
             if battery_soc_pct is not None:
                 bat_dir = 'discharging' if battery_power_w >= 0 else 'charging'
@@ -139,6 +153,8 @@ def push_battery_control(
             return False
             
     except Exception as e:
+        if command_result is not None:
+            command_result.update(command_status='failed', command_error='exception')
         print(f'❌ Error pushing battery control: {e}')
         return False
 

@@ -73,3 +73,23 @@ def test_native_follow_state_is_scoped_and_handles_bad_files(tmp_path, monkeypat
     for text in ('{broken', 'null', '[]'):
         path.write_text(text)
         assert not load_native_follow_state('slot', 'charge_solar', 'auto')
+
+
+@pytest.mark.parametrize('action,planned,battery,grid,was_native,reason', [
+    ('charge_solar', 3, -1000, -3000, False, 'observed_wrong_direction'),
+    ('charge_solar', 3, 0, 1000, False, 'expected_wrong_direction'),
+    ('charge_solar', 3, 0, -100, False, 'direction_hysteresis'),
+    ('discharge_load', -2, -3000, -2000, False, 'observed_discharge_cap'),
+    ('discharge_load', -2, 0, 3000, False, 'expected_discharge_cap'),
+    ('discharge_load', -2, 0, 1900, False, 'power_cap_hysteresis'),
+    ('discharge_load', 0, 0, 1000, False, 'zero_discharge_cap'),
+    ('charge_solar', 3, None, -1000, False, 'battery_telemetry_missing'),
+    ('charge_solar', 3, 0, None, False, 'grid_telemetry_missing'),
+])
+def test_precise_reasons_do_not_change_selection(action, planned, battery, grid, was_native, reason):
+    diagnostics = {}
+    args = (action, planned, battery, grid)
+    original = choose_native_following(*args, was_native=was_native)
+    assert choose_native_following(*args, was_native=was_native, diagnostics=diagnostics) == original
+    assert reason in diagnostics['decision_reasons']
+    assert not diagnostics['native_selected_before_guards']

@@ -59,6 +59,11 @@ software follow-power limit or ramp rate between the 20-second checks.
 Direction restrictions are likewise best-effort: brief wrong-direction flow
 can occur between checks, and fuse protection may override a directional cap.
 
+Each completed cycle also emits a `HEPO_BATTERY_CONTROL` compact JSON record
+with signed telemetry, plan context, exact decision reasons, final requested
+mode and command result. See [battery diagnostics](BATTERY_DIAGNOSTICS.md) for
+the schema, grep/jq examples, and measurement/request timing caveats.
+
 ## systemd Timer Examples
 
 ### run_often (every 20 seconds)

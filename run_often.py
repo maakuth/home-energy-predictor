@@ -10,10 +10,12 @@ from utils.type_defs import BatteryAction
 from utils.gshp_health import health_attributes, update_gshp_health
 from utils.sg_ready import update_virtual_accumulator_temp, derive_sg_ready_bits, derive_sg_ready_mode
 from utils.plan_time import slot_start
+from utils.battery_diagnostics import new_battery_diagnostic, emit_battery_diagnostic
 from utils.native_follow import (
     NATIVE_FOLLOW_ACTIONS,
     choose_native_following,
     load_native_follow_state,
+    read_native_follow_state,
     save_native_follow_state,
 )
 from utils.battery_utils import (
@@ -27,6 +29,7 @@ from utils.battery_utils import (
     apply_discharge_budget,
     accumulate_interval_discharge,
     apply_phase_current_cap,
+    get_env_float,
 )
 
 load_dotenv(override=True)
@@ -403,6 +406,30 @@ def main():
     import_kwh = _get_float(import_meter)
     export_kwh = _get_float(export_meter)
 
+    # Measurements are a pre-command snapshot. Keep missing values null rather
+    # than copying the controller's zero defaults into the diagnostic stream.
+    measured_battery_w = _get_float(battery_power)
+    measured_grid_kw = _get_float(grid_power)
+    measured_grid_w = measured_grid_kw * 1000.0 if measured_grid_kw is not None else None
+    previous_request = read_native_follow_state()
+    previous_native = previous_request.get('native')
+    diagnostic = new_battery_diagnostic(
+        timestamp=now.isoformat(), battery_power_w=measured_battery_w,
+        grid_power_w=measured_grid_w, solar_power_w=solar_raw * 1000.0 if solar_raw is not None else None,
+        battery_last_updated=(battery_power or {}).get('last_updated'),
+        grid_last_updated=(grid_power or {}).get('last_updated'),
+        soc_pct=soc_pct, phase_currents_a=[i_p1, i_p2, i_p3],
+        import_meter_kwh=import_kwh, export_meter_kwh=export_kwh,
+        native_estimate_w=(measured_battery_w - measured_grid_w
+                           if measured_battery_w is not None and measured_grid_w is not None else None),
+        previous_requested_mode=('self_consumption' if previous_native is True else
+                                 'fixed' if previous_native is False else None),
+        previous_request_slot_id=previous_request.get('slot_id'),
+        previous_request_action=previous_request.get('action'),
+        previous_request_at=previous_request.get('requested_at'),
+        previous_command_status=previous_request.get('command_status'),
+    )
+
     soc_str = f'{soc_pct:.1f}' if soc_pct is not None else 'unavailable'
     print(f'Battery SoC: {soc_str}%')
     direction = 'charging' if battery_w >= 0 else 'discharging'
@@ -431,6 +458,7 @@ def main():
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         print('No readable optimization_plan.json found')
         plan = None
+    diagnostic['plan_mtime'] = plan_mtime
 
     manual_leaf_state = get_ha_state(
         os.getenv('LEAF_MANUAL_CHARGING_ENTITY', 'input_boolean.leaf_manuaalinen_lataus')
@@ -459,6 +487,8 @@ def main():
                 return_response=False,
             )
         control_leaf_charger(None, manual_charging=manual_leaf_charging)
+        diagnostic['decision_reasons'] = ['no_plan']
+        emit_battery_diagnostic(diagnostic)
         return
 
     interval_minutes = _get_interval_minutes()
@@ -486,7 +516,18 @@ def main():
                 return_response=False,
             )
         control_leaf_charger(None, manual_charging=manual_leaf_charging, now=now)
-        push_battery_control(battery_power_w=0, battery_action='idle', battery_soc_pct=soc_pct)
+        command_result = {'command_status': 'unknown'}
+        push_battery_control(
+            battery_power_w=0, battery_action='idle', battery_soc_pct=soc_pct,
+            command_result=command_result,
+        )
+        diagnostic.update(
+            command_result, effective_action='idle', control_action='idle', mode_requested='fixed',
+            command_completed_at=datetime.now().astimezone().isoformat(),
+            guarded_target_w=0, fixed_setpoint_w=0, bridge_set_power_w=0,
+            decision_reasons=['no_current_plan_entry'],
+        )
+        emit_battery_diagnostic(diagnostic)
         return
 
     element_kw = (
@@ -548,6 +589,10 @@ def main():
     planned_budget_kwh = current.get('discharge_budget_kwh') if current else None
     if planned_budget_kwh is not None:
         print(f'Period budget: {planned_budget_kwh:.2f} kWh')
+    diagnostic.update(
+        plan_slot_id=str(current['timestamp']), planned_action=planned_action,
+        planned_power_w=planned_battery_kw * 1000.0, discharge_budget_kwh=planned_budget_kwh,
+    )
 
     solar_fallback_enabled = os.getenv('SOLAR_FALLBACK_TO_FORECAST', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
     if solar_raw is None and solar_fallback_enabled and current:
@@ -598,6 +643,7 @@ def main():
         plan_mtime=plan_mtime,
         override_mode=override_mode,
     )
+    diagnostic['smoothed_planned_power_w'] = planned_battery_kw * 1000.0
 
     if not manual_override:
         planned_battery_kw, planned_action = adjust_idle_for_cheap_export(
@@ -616,19 +662,29 @@ def main():
     native_candidate = planned_action in NATIVE_FOLLOW_ACTIONS
     native_load_following = False
     native_slot_id = str(current['timestamp'])
+    diagnostic.update(
+        effective_action=planned_action, override_mode=override_mode,
+        directional_planned_power_w=directional_planned_kw * 1000.0,
+        solar_used_w=solar_kw * 1000.0, max_charge_w=max_battery_kw * 1000.0,
+        max_discharge_w=get_env_float('BATTERY_MAX_DISCHARGE_KW', 10.0) * 1000.0,
+        soc_floor_pct=floor_pct, main_fuse_a=get_env_float('MAIN_FUSE_SIZE_A', 25.0),
+    )
     # Native following owns instantaneous power. Estimate its response only for
     # budget/fuse safety checks below; this estimate is not sent to the inverter
     # unless a constraint requires fixed power.
     if native_candidate:
         grid_observed_kw = _get_float(grid_power)
+        was_native = load_native_follow_state(native_slot_id, planned_action, override_mode)
+        diagnostic['was_native_for_hysteresis'] = was_native
         native_load_following, adjusted_battery_kw, log_msg = choose_native_following(
             planned_action,
             directional_planned_kw,
             _get_float(battery_power),
             grid_observed_kw * 1000.0 if grid_observed_kw is not None else None,
-            was_native=load_native_follow_state(native_slot_id, planned_action, override_mode),
+            was_native=was_native,
             max_charge_kw=max_battery_kw,
             max_discharge_kw=float(os.getenv('BATTERY_MAX_DISCHARGE_KW', '10.0')),
+            diagnostics=diagnostic,
         )
     # Battery control: net metering PI only when applicable and not manually overridden
     elif net_metering and import_kwh is not None and export_kwh is not None and not manual_override:
@@ -652,6 +708,7 @@ def main():
             min_soc_pct=min_soc_pct,
         )
         planned_action = 'net_metering'
+        diagnostic['decision_reasons'].append('net_metering')
     else:
         adjusted_battery_kw, log_msg = compute_load_following_setpoint(
             planned_battery_kw=planned_battery_kw,
@@ -665,6 +722,8 @@ def main():
             battery_soc_pct=soc_pct,
             min_soc_pct=min_soc_pct,
         )
+        diagnostic['decision_reasons'].append('fixed_action')
+    diagnostic.update(control_action=planned_action, decision_detail=log_msg)
 
     # Period balance reporting: always publish when meter data is available
     if import_kwh is not None and export_kwh is not None:
@@ -712,11 +771,13 @@ def main():
     # plan cap when leaving native mode. Other actions retain normal ramping.
     if not native_candidate:
         ramp_rate = float(os.getenv('BATTERY_RAMP_RATE_KW_PER_MIN', '3.0'))
+        diagnostic['ramp_before_w'] = adjusted_battery_kw * 1000.0
         adjusted_battery_kw = apply_ramp_rate(
             target_setpoint_kw=adjusted_battery_kw,
             actual_battery_kw=battery_w / 1000.0,
             ramp_rate_kw_per_min=ramp_rate,
         )
+        diagnostic['ramp_after_w'] = adjusted_battery_kw * 1000.0
 
     # Per-interval discharge budget: cap load-following discharge so the battery
     # doesn't drain faster than planned during cheap intervals (e.g. EV charging
@@ -733,6 +794,11 @@ def main():
             battery_w, interval_minutes=interval_minutes,
         )
         before_budget_kw = adjusted_battery_kw
+        diagnostic.update(
+            discharge_budget_active=True, discharge_used_kwh=discharge_used_kwh,
+            discharge_remaining_kwh=max(0.0, discharge_budget_kwh - discharge_used_kwh),
+            budget_before_w=before_budget_kw * 1000.0,
+        )
         adjusted_battery_kw, budget_msg = apply_discharge_budget(
             adjusted_battery_kw=adjusted_battery_kw,
             discharge_budget_kwh=discharge_budget_kwh,
@@ -741,6 +807,11 @@ def main():
         )
         if adjusted_battery_kw != before_budget_kw:
             native_load_following = False
+            diagnostic['decision_reasons'].append(
+                'discharge_budget_exhausted' if diagnostic['discharge_remaining_kwh'] <= 1e-9
+                else 'discharge_budget_cap'
+            )
+        diagnostic['budget_after_w'] = adjusted_battery_kw * 1000.0
         if budget_msg:
             print(f'Discharge budget: {budget_msg}')
 
@@ -749,14 +820,18 @@ def main():
     # corrections, ramping, budgets) can push the setpoint back over the fuse.
     # Reduces charge when a phase is near the import limit and forces discharge
     # when the non-battery load alone already exceeds the fuse.
+    diagnostic['fuse_before_w'] = adjusted_battery_kw * 1000.0
     adjusted_battery_kw, fuse_msg = apply_phase_current_cap(
         adjusted_battery_kw, battery_w, [i_p1, i_p2, i_p3], max_battery_kw)
     if fuse_msg:
         native_load_following = False
+        diagnostic['decision_reasons'].append('phase_current_cap')
+    diagnostic['fuse_after_w'] = adjusted_battery_kw * 1000.0
 
     # Native mode cannot enforce a software SoC floor. Keep fixed power until
     # the battery is above it (or telemetry is restored), even during surplus.
     if native_candidate and (soc_pct is None or soc_pct <= floor_pct):
+        diagnostic['decision_reasons'].append('soc_telemetry_missing' if soc_pct is None else 'soc_floor')
         native_load_following = False
         adjusted_battery_kw = max(0.0, adjusted_battery_kw) if soc_pct is not None else 0.0
         print(f'Native following blocked: SoC {soc_str}% (floor {floor_pct:.0f}%)')
@@ -764,6 +839,7 @@ def main():
     # SoC floor guard: never discharge below the configured minimum, even if the
     # fuse cap would otherwise force a discharge.
     if soc_pct is not None and adjusted_battery_kw < 0 and soc_pct <= floor_pct:
+        diagnostic['decision_reasons'].append('soc_floor')
         adjusted_battery_kw = 0.0
         guard_msg = f"soc guard: discharge blocked at SoC {soc_pct:.1f}% (floor {floor_pct:.0f}%)"
         fuse_msg = f"{fuse_msg}; {guard_msg}" if fuse_msg else guard_msg
@@ -784,6 +860,7 @@ def main():
             return_response=False,
         )
         priority_msg = 'resistive heater shed after battery fuse response'
+        diagnostic['decision_reasons'].append('resistive_heater_shed')
         fuse_msg = f"{fuse_msg}; {priority_msg}" if fuse_msg else priority_msg
 
     if (
@@ -803,20 +880,35 @@ def main():
             return_response=False,
         )
         priority_msg = 'bulk heater shed after battery fuse response'
+        diagnostic['decision_reasons'].append('bulk_heater_shed')
         fuse_msg = f"{fuse_msg}; {priority_msg}" if fuse_msg else priority_msg
 
     if fuse_msg:
         print(f'Fuse cap: {fuse_msg}')
 
     battery_control_w = int(-adjusted_battery_kw * 1000)
+    command_result = {'command_status': 'unknown'}
     pushed = push_battery_control(
         battery_power_w=battery_control_w,
         battery_action=cast(BatteryAction, planned_action),
         battery_soc_pct=planned_soc,
         native_load_following=native_load_following,
+        command_result=command_result,
     )
+    diagnostic.update(
+        command_result, mode_requested='self_consumption' if native_load_following else 'fixed',
+        command_completed_at=datetime.now().astimezone().isoformat(),
+        guarded_target_w=adjusted_battery_kw * 1000.0,
+        fixed_setpoint_w=None if native_load_following else -battery_control_w,
+        bridge_set_power_w=None if native_load_following else battery_control_w,
+    )
+    emit_battery_diagnostic(diagnostic)
     if pushed:
-        save_native_follow_state(native_slot_id, planned_action, override_mode, native_load_following)
+        save_native_follow_state(
+            native_slot_id, planned_action, override_mode, native_load_following,
+            command_status=command_result['command_status'],
+            requested_at=diagnostic['command_completed_at'],
+        )
 
 
 if __name__ == '__main__':

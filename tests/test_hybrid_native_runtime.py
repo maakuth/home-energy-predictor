@@ -122,3 +122,127 @@ def test_return_to_native_is_checked_against_new_direction(controller):
     result = run('discharge_load', grid=-100, planned=-3)
     assert not result['native_load_following']
     assert result['battery_power_w'] == 0
+
+
+def _diagnostic_lines(capsys):
+    from utils.battery_diagnostics import parse_battery_diagnostic
+    return [record for line in capsys.readouterr().out.splitlines()
+            if (record := parse_battery_diagnostic(line)) is not None]
+
+
+def test_cycle_diagnostic_has_signed_snapshot_plan_limits_and_no_fake_native_setpoint(controller, capsys):
+    run, _ = controller
+    run('discharge_load', battery=-1000, grid=1000, planned=-3)
+    records = _diagnostic_lines(capsys)
+    assert len(records) == 1
+    record = records[0]
+    assert record['battery_power_w'] == -1000
+    assert record['grid_power_w'] == 1000
+    assert record['native_estimate_w'] == -2000
+    assert record['planned_power_w'] == -3000
+    assert record['discharge_cap_w'] == 3000
+    assert record['mode_requested'] == 'self_consumption'
+    assert record['fixed_setpoint_w'] is None
+    assert record['bridge_set_power_w'] is None
+    assert record['inverter_mode_verified'] is False
+    assert record['model_version']
+    assert datetime.fromisoformat(record['timestamp']).tzinfo is not None
+
+
+def test_final_diagnostic_does_not_claim_native_after_budget_override(controller, capsys):
+    run, _ = controller
+    run('discharge_load', grid=2000, budget=0)
+    record, = _diagnostic_lines(capsys)
+    assert record['native_selected_before_guards'] is True
+    assert record['mode_requested'] == 'fixed'
+    assert record['fixed_setpoint_w'] == 0
+    assert 'discharge_budget_exhausted' in record['decision_reasons']
+    assert record['discharge_used_kwh'] == 0
+
+
+def test_diagnostics_keep_unavailable_telemetry_null(controller, capsys):
+    run, _ = controller
+    run('charge_solar', grid=float('nan'), planned=3)
+    record, = _diagnostic_lines(capsys)
+    assert record['grid_power_w'] is None
+    assert record['native_estimate_w'] is None
+    assert 'grid_telemetry_missing' in record['decision_reasons']
+
+
+def test_exact_fuse_and_soc_reason_codes(controller, capsys):
+    run, _ = controller
+    run('charge_solar', grid=-2000, planned=3, phase=25)
+    record, = _diagnostic_lines(capsys)
+    assert 'phase_current_cap' in record['decision_reasons']
+    assert record['mode_requested'] == 'fixed'
+    run('discharge_load', grid=2000, soc='10')
+    record, = _diagnostic_lines(capsys)
+    assert 'soc_floor' in record['decision_reasons']
+
+
+def test_missing_plan_cycle_is_logged_without_adding_a_command(controller, tmp_path, capsys):
+    run, push = controller
+    run('charge_solar', grid=-2000, planned=3)
+    _diagnostic_lines(capsys)
+    (tmp_path / 'state' / 'optimization_plan.json').unlink()
+    push.reset_mock()
+    from run_often import main
+    main()
+    record, = _diagnostic_lines(capsys)
+    assert record['command_status'] == 'not_attempted'
+    assert record['mode_requested'] is None
+    assert record['decision_reasons'] == ['no_plan']
+    push.assert_not_called()
+
+
+def test_previous_request_and_failed_command_are_not_reported_as_observed_modes(controller, capsys):
+    run, push = controller
+
+    def command(**kwargs):
+        kwargs['command_result']['command_status'] = 'accepted'
+        return True
+
+    push.side_effect = command
+    run('charge_solar', grid=-2000, planned=3)
+    _diagnostic_lines(capsys)
+
+    def failed_command(**kwargs):
+        kwargs['command_result'].update(command_status='failed', command_error='service_failed')
+        return False
+
+    push.side_effect = failed_command
+    run('charge_solar', grid=1000, planned=3)
+    record, = _diagnostic_lines(capsys)
+    assert record['previous_requested_mode'] == 'self_consumption'
+    assert record['previous_command_status'] == 'accepted'
+    assert record['mode_requested'] == 'fixed'
+    assert record['command_status'] == 'failed'
+    assert record['command_error'] == 'service_failed'
+    assert record['inverter_mode_verified'] is False
+
+
+def test_no_current_plan_cycle_logs_safe_fixed_command(controller, tmp_path, capsys):
+    run, push = controller
+    run('charge_solar', grid=-2000, planned=3)
+    _diagnostic_lines(capsys)
+    path = tmp_path / 'state' / 'optimization_plan.json'
+    plan = json.loads(path.read_text())
+    plan[0]['timestamp'] = '2000-01-01T00:00:00+00:00'
+    path.write_text(json.dumps(plan))
+    push.reset_mock()
+    from run_often import main
+    main()
+    record, = _diagnostic_lines(capsys)
+    assert record['decision_reasons'] == ['no_current_plan_entry']
+    assert record['mode_requested'] == 'fixed'
+    assert record['fixed_setpoint_w'] == 0
+    push.assert_called_once()
+
+
+def test_manual_override_logging_keeps_original_plan_action(controller, capsys):
+    run, _ = controller
+    run('idle', grid=-2000, planned=0, manual='charge_solar')
+    record, = _diagnostic_lines(capsys)
+    assert record['planned_action'] == 'idle'
+    assert record['effective_action'] == 'charge_solar'
+    assert record['override_mode'] == 'charge_solar'
