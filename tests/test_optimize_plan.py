@@ -364,6 +364,40 @@ class LoadPredictionsTests(unittest.TestCase):
         self.assertAlmostEqual(float(p10[0]), 0.5, places=5)
         self.assertAlmostEqual(float(p90[0]), 0.5, places=5)
 
+    def test_load_predictions_uses_xgboost_not_sarima_mean(self):
+        from optimize_plan import load_predictions
+        import os
+        self._write([
+            {
+                "timestamp": "2026-04-05T13:15:00+03:00",
+                "predicted_baseload": 2.0,
+                "solar_forecast": 0.5,
+                "outside_temp": 5.0,
+                "is_sauna_active": 0,
+                "is_fallback_price": 0,
+            }
+        ])
+        sarima_path = os.environ['TEST_SARIMA_FILE']
+        with open(sarima_path, 'w') as f:
+            json.dump([
+                {
+                    "timestamp": "2026-04-05T13:15:00+03:00",
+                    "predicted_baseload": 9.9,
+                    "lower_95": 1.0,
+                    "upper_95": 2.0,
+                    "model": "SARIMA",
+                }
+            ], f)
+        xgb_data, predictions, timestamps, solar, lo, hi, p10, p90 = load_predictions(
+            file_path=self.predictions_file,
+            sarima_path=sarima_path,
+        )
+        # Planning load must follow XGBoost, not the SARIMA mean.
+        self.assertAlmostEqual(float(predictions[0]), 2.0, places=5)
+        # SARIMA confidence intervals are still propagated for diagnostics.
+        self.assertAlmostEqual(float(lo.iloc[0]), 1.0, places=5)
+        self.assertAlmostEqual(float(hi.iloc[0]), 2.0, places=5)
+
 
 @contextmanager
 def patched_env(overrides):

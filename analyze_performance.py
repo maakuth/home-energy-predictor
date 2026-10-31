@@ -337,10 +337,20 @@ def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
         # Load processed features
         df_proc = pd.read_csv(processed_path, index_col=0)
         df_proc.index = pd.to_datetime(df_proc.index, utc=True)
+
+        # The processed-data schema may have changed (e.g. quality-aware
+        # baseload features). Only backtest when every trained feature is
+        # still present; otherwise skip with an explicit log line so both
+        # model results remain visible in the logs.
+        missing_features = [f for f in features if f not in df_proc.columns]
+        if missing_features:
+            print(f"⚠️ XGBoost hindsight backtest skipped: missing features {missing_features}")
+            return pd.DataFrame()
         
         # Only predict for timestamps we have actuals for
         common_idx = df_proc.index.intersection(df_actual.index)
         if common_idx.empty:
+            print("⚠️ XGBoost hindsight backtest skipped: no overlapping timestamps with actuals.")
             return pd.DataFrame()
             
         X = df_proc.loc[common_idx, features]
@@ -465,14 +475,17 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
                 h_mae = h_res_3h['error'].abs().mean()
                 h_bias = h_res_3h['error'].mean()
                 
-                print(f"\nHINDSIGHT PERFORMANCE (XGBoost on same history):")
+                print(f"\nHINDSIGHT PERFORMANCE (XGBoost):")
                 print(f"  MAE:  {h_mae:.3f} kW")
                 print(f"  Bias: {h_bias:+.3f} kW")
                 
                 if not comparison.empty and not res_3h.empty:
                     improvement = ((mae - h_mae) / mae) * 100 if mae > 0 else 0
                     print(f"  Improvement vs Real-time: {improvement:+.1f}%")
-
+            else:
+                print("  (no overlapping 3h buckets)")
+        else:
+            print("  (skipped - see reason above)")
     # 2b. SARIMA Backtest (Archived SARIMA predictions vs actuals)
     if do_backtest:
         df_sarima_bt = backtest_sarima_model(df_actual)
@@ -484,9 +497,13 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
                 s_mae = s_res_3h['error'].abs().mean()
                 s_bias = s_res_3h['error'].mean()
                 
-                print(f"\nHINDSIGHT PERFORMANCE (Archived SARIMA predictions):")
+                print(f"\nHINDSIGHT PERFORMANCE (SARIMA benchmark):")
                 print(f"  MAE:  {s_mae:.3f} kW")
                 print(f"  Bias: {s_bias:+.3f} kW")
+            else:
+                print("  (no overlapping 3h buckets)")
+        else:
+            print("  (skipped - see reason above)")
 
     print("\n✅ Analysis complete.")
 

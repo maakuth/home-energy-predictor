@@ -177,7 +177,9 @@ def load_predictions(
     df_xgb['timestamp'] = pd.to_datetime(df_xgb['timestamp'], utc=True)
     df_xgb = df_xgb.set_index('timestamp')
 
-    # Default to 100% XGBoost if SARIMA is missing
+    # XGBoost is the primary planning model. SARIMA is retained only as a
+    # benchmark/diagnostic series (its mean no longer overrides planning load),
+    # because missing measurements are common and make the SARIMA fit unstable.
     final_baseload = df_xgb['predicted_baseload'].copy()
     sarima_lower = pd.Series(np.nan, index=df_xgb.index)
     sarima_upper = pd.Series(np.nan, index=df_xgb.index)
@@ -191,21 +193,18 @@ def load_predictions(
             df_sarima['timestamp'] = pd.to_datetime(df_sarima['timestamp'], utc=True)
             df_sarima = df_sarima.set_index('timestamp')
             
-            # Align SARIMA (15min) to XGBoost (1min) using interpolation
+            # Align SARIMA (15min) to XGBoost (15min) using interpolation. Only
+            # its confidence intervals are used for diagnostics; its mean is NOT
+            # used for planning.
             common_idx = df_xgb.index.union(df_sarima.index).sort_values()
             df_sarima_resampled = df_sarima[['predicted_baseload', 'lower_95', 'upper_95']].reindex(common_idx).interpolate(method='time').reindex(df_xgb.index)
             
-            # Use 100% SARIMA as primary prediction model (lower bias, lower MAE)
-            # Fall back to XGBoost for intervals beyond SARIMA's 24h horizon
-            print(f"Using SARIMA as primary prediction model (XGBoost fill beyond {len(df_sarima)} intervals)...")
-            final_baseload = df_sarima_resampled['predicted_baseload'].copy()
-            final_baseload = final_baseload.fillna(df_xgb['predicted_baseload'])
-            
+            print(f"Using XGBoost as primary planning model (SARIMA retained as benchmark, {len(df_sarima)} intervals)...")
             sarima_lower = df_sarima_resampled['lower_95']
             sarima_upper = df_sarima_resampled['upper_95']
             
         except Exception as e:
-            print(f"⚠️ Error blending SARIMA: {e}. Falling back to 100% XGBoost.")
+            print(f"⚠️ Error loading SARIMA benchmark: {e}. Continuing with XGBoost only.")
 
     predictions = final_baseload.values.astype(float)
     prediction_timestamps = df_xgb.index.to_pydatetime()
