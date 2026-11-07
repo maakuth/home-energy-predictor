@@ -24,6 +24,7 @@ from utils.db_utils import fetch_states_history
 from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPlannerContext
 from battery_planners.joint_linprog import JointLinprogPlanner, leaf_charging_allowed
 from utils.plan_time import current_plan_entry
+from utils.uncontrolled_heating import load_uncontrolled_heating_forecast
 
 load_dotenv(override=True)
 
@@ -832,7 +833,8 @@ def optimize() -> None:
     
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.
-    battery_optimization_load_kw = predictions + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw
+    uncontrolled_heating_kw = load_uncontrolled_heating_forecast(prediction_timestamps)
+    battery_optimization_load_kw = predictions + uncontrolled_heating_kw + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw
 
     # NOTE: planned_ev_kw is NOT included in total_planned_load_kw.
     # The ML baseload training target (total_power - gshp - leaf) already
@@ -897,7 +899,7 @@ def optimize() -> None:
         planner = BatteryPlannerFactory.create()
         is_joint = isinstance(planner, JointLinprogPlanner)
         if is_joint:
-            planner_load_kwh = predictions * get_plan_interval_hours()
+            planner_load_kwh = (predictions + uncontrolled_heating_kw) * get_plan_interval_hours()
             planner_committed_kwh = planned_ev_kw * get_plan_interval_hours()
         else:
             planner_load_kwh = predictions_kwh
@@ -927,7 +929,7 @@ def optimize() -> None:
                 if b_entry.planned_leaf_kw is not None:
                     planned_leaf_kw[i] = b_entry.planned_leaf_kw
                     leaf_intents[i] = b_entry.leaf_intent or 'OFF'
-            total_planned_load_kw = predictions + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw + planned_leaf_kw
+            total_planned_load_kw = predictions + uncontrolled_heating_kw + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw + planned_leaf_kw
     else:
         battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
 
@@ -975,6 +977,7 @@ def optimize() -> None:
         entry = {
             'timestamp': ts.isoformat(),
             'predicted_baseload_kw': p_baseload_kw,
+            'uncontrolled_heating_kw': float(uncontrolled_heating_kw[i]),
             'sarima_lower_95': float(sarima_lower.iloc[i]) if not np.isnan(sarima_lower.iloc[i]) else None,
             'sarima_upper_95': float(sarima_upper.iloc[i]) if not np.isnan(sarima_upper.iloc[i]) else None,
             'planned_gshp_kw': p_gshp_kw,

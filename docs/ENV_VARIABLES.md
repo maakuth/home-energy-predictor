@@ -94,6 +94,17 @@ Consumed by `run_often.py`, `predict_future.py`, `extract_data.py`, `analyze_per
 
 ## GSHP (Ground Source Heat Pump) Settings
 
+When `GSHP_OPTIMIZE_ENABLED`, `RESISTIVE_HEATER_OPTIMIZE_ENABLED`, and
+`BULK_HEATER_OPTIMIZE_ENABLED` are all false, the optimizer still accounts for
+autonomous heating electricity. It uses the source-valid shared-meter mean from
+the preceding 24 hours of `state/raw_data.csv` as a constant persistence forecast.
+This is added to battery/grid load, not to heater dispatch: no heater is enabled
+by this forecast. `uncontrolled_heating_kw` in the plan distinguishes it from
+scheduled heating and ML baseload. Observed coverage is logged. Missing history
+produces an explicit warning and no added forecast; it is not proof of zero load.
+This baseline is not weather-adjusted and is not used when any heating dispatch
+is enabled, to avoid double-counting managed heat sources.
+
 Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Description | Example | Unit / Notes |
 |----------|-------------|---------|--------------|
 | `GSHP_INITIAL_TEMP` | Starting accumulator / buffer temperature. | `50.0` | °C. Fallback when the physical accumulator sensor is unavailable in HA. |
