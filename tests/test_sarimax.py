@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from sarimax_predictor import _get_safe_forecast, load_historical_data, predict_sarimax, save_benchmark_results
+from statsmodels.tsa.statespace.sarimax import SARIMAX as RealSARIMAX
 
 
 def _series(days: int = 3) -> pd.Series:
@@ -70,9 +71,69 @@ class TestSARIMAPredictor:
         assert np.isfinite(ci.to_numpy()).all()
         assert sarimax.return_value.fit.call_count == 2
 
+    def test_cold_fit_requests_production_model_specification(self):
+        """Keep the real-fit test small without losing coverage of default orders."""
+        with patch('sarimax_predictor.SARIMAX') as constructor:
+            constructor.return_value.fit.return_value.get_forecast.return_value = _forecast()
+            predict_sarimax(_series(), forecast_steps=2,
+                           params_path=os.path.join(os.environ['TEST_TMP_DIR'], 'missing.pkl'))
+        assert constructor.call_args.kwargs == {
+            'order': (1, 1, 1), 'seasonal_order': (1, 1, 0, 96),
+            'enforce_stationarity': False, 'enforce_invertibility': False,
+        }
+        constructor.return_value.fit.assert_called_once_with(disp=False)
+
+    def test_small_real_cold_fit_preserves_forecast_contract(self):
+        """Exercise real fitting/safety/output, not comparative forecast quality.
+
+        Eight-slot seasons reduce the state dimension from 194 to 18. Only the
+        constructor's seasonal period is substituted; fitting and prediction
+        still run through the production functions and real statsmodels code.
+        """
+        index = pd.date_range('2026-04-01', periods=96, freq='15min', tz='UTC')
+        n = np.arange(len(index))
+        data = pd.Series(2 + .5 * np.sin(2 * np.pi * n / 8)
+                         + np.random.default_rng(42).normal(0, .03, len(n)), index=index)
+        train, actual = data.iloc[:80], data.iloc[80:]
+        fits = []
+
+        def small_model(*args, **kwargs):
+            kwargs['seasonal_order'] = (1, 1, 0, 8)
+            model = RealSARIMAX(*args, **kwargs)
+            original_fit = model.fit
+
+            def bounded_fit(**fit_kwargs):
+                result = original_fit(maxiter=100, **fit_kwargs)
+                fits.append(result)
+                return result
+
+            model.fit = bounded_fit
+            return model
+
+        with patch('sarimax_predictor.SARIMAX', side_effect=small_model):
+            with patch('sarimax_predictor._get_safe_forecast', wraps=_get_safe_forecast) as safe:
+                predicted, ci = predict_sarimax(train, forecast_steps=len(actual),
+                    params_path=os.path.join(os.environ['TEST_TMP_DIR'], 'missing.pkl'))
+        assert safe.call_count == len(fits) == 1
+        # Do not let the safety fallback make this real-fit test pass.
+        assert not np.allclose(predicted, train.mean())
+        pd.testing.assert_index_equal(predicted.index, actual.index)
+        pd.testing.assert_index_equal(ci.index, actual.index)
+        assert np.isfinite(predicted.to_numpy()).all()
+        assert np.isfinite(ci.to_numpy()).all()
+        assert (ci.iloc[:, 0] <= predicted).all()
+        assert (ci.iloc[:, 1] >= predicted).all()
+        assert fits[0].mle_retvals['iterations'] <= 100
+        assert fits[0].mle_retvals['converged']
+
     @pytest.mark.slow
-    def test_real_sarima_forecast_beats_flat_baseline_on_high_signal_period(self):
-        """A fitted seasonal model must beat the historical mean on an unseen day."""
+    @pytest.mark.cold_fit_benchmark
+    def test_production_seasonality_cold_fit_accuracy_benchmark(self, record_property):
+        """Opt-in cold-fit diagnostic on easy synthetic data, not a model ranking.
+
+        Repeating yesterday is effectively perfect here. Beating the flat mean
+        establishes seasonality recovery, not superiority to seasonal naive.
+        """
         all_data = _series(days=4)
         train, actual = all_data.iloc[:288], all_data.iloc[288:]
         safe_results = []
@@ -91,6 +152,11 @@ class TestSARIMAPredictor:
         assert len(predicted) == len(actual) == len(ci) == 96
         mae = float(np.mean(np.abs(predicted.to_numpy() - actual.to_numpy())))
         baseline_mae = float(np.mean(np.abs(train.mean() - actual.to_numpy())))
+        seasonal_naive_mae = float(np.mean(np.abs(train.iloc[-96:].to_numpy() - actual.to_numpy())))
+        record_property('sarima_mae_kw', mae)
+        record_property('flat_mean_mae_kw', baseline_mae)
+        record_property('seasonal_naive_mae_kw', seasonal_naive_mae)
+        pd.testing.assert_index_equal(predicted.index, actual.index)
         assert mae < 0.20
         assert mae < baseline_mae * 0.5
         assert abs(float((predicted.to_numpy() - actual.to_numpy()).mean())) < 0.10

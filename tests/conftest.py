@@ -20,6 +20,19 @@ import dotenv
 dotenv.load_dotenv = lambda *args, **kwargs: False
 
 
+def pytest_addoption(parser):
+    parser.addoption('--run-cold-fit-benchmark', action='store_true', default=False,
+                     help='Run the expensive production-sized SARIMA cold-fit benchmark')
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption('--run-cold-fit-benchmark'):
+        skip = pytest.mark.skip(reason='Opt in with --run-cold-fit-benchmark (can take hours)')
+        for item in items:
+            if 'cold_fit_benchmark' in item.keywords:
+                item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
 def isolated_test_env(monkeypatch, tmp_path):
     """
