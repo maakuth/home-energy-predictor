@@ -6,6 +6,7 @@ import shutil
 import json
 import pandas as pd
 import numpy as np
+import pytest
 from datetime import datetime, timezone
 
 
@@ -63,6 +64,7 @@ class TestTrainModel(unittest.TestCase):
 
         df.to_csv(os.path.join(state_dir, 'processed_data.csv'))
 
+    @pytest.mark.slow
     def test_training_writes_valid_model_and_feature_artifacts(self):
         """One real fit covers all persisted-artifact assertions."""
         from train_model import train
@@ -89,6 +91,7 @@ class TestTrainModel(unittest.TestCase):
                       "Learner should have 'feature_names'")
         self.assertIn('version', model_json, "XGBoost JSON should have 'version' key")
 
+    @pytest.mark.slow
     def test_holdout_excludes_recent(self):
         from train_model import train
         train(holdout_days=1, min_coverage_days=1)
