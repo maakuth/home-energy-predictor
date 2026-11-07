@@ -190,10 +190,12 @@ def summarize_battery_performance(df_merged: pd.DataFrame) -> dict[str, Any]:
         cost_with_batt = (active['grid_import_kwh'] * active['import_price']) - (active['grid_export_kwh'] * active['export_price'])
         
         # Savings = (Cost No Batt - Cost With Batt) summed over active hours
-        planned_savings = ((cost_no_batt - cost_with_batt) * interval_hours).sum()
+        # Only the no-battery baseline is power-based. Archived grid flows
+        # are already interval energy, so do not scale their cost a second time.
+        planned_savings = (cost_no_batt * interval_hours - cost_with_batt).sum()
     else:
         # Fallback to old less-accurate logic if columns are missing
-        planned_savings = (active['import_price'] * (active['predicted_usage'] - active['grid_import_kwh']) * interval_hours).sum()
+        planned_savings = (active['import_price'] * (active['predicted_usage'] * interval_hours - active['grid_import_kwh'])).sum()
     
     # Calculate Weighted Average Charge Price
     if 'charge_from_grid_kwh' in active.columns and 'charge_from_solar_kwh' in active.columns:
