@@ -25,7 +25,7 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
         'sensor.be_stat_batt_power': 'battery_actual_w'
     }
     
-    hist_data = fetch_states_history(list(entities.keys()), hours=days*24)
+    hist_data = fetch_states_history(list(entities.keys()), hours=days*24, preserve_invalid_states=True)
     
     all_resampled = []
     for eid, col_name in entities.items():
@@ -34,20 +34,28 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
             df = df.rename(columns={'state': col_name})
             if not isinstance(df.index, pd.DatetimeIndex):
                 df = df.set_index('timestamp')
-            all_resampled.append(df.resample('15min').mean())
+            values = pd.to_numeric(df[col_name], errors='coerce')
+            valid = pd.Series(np.isfinite(values), index=values.index)
+            if col_name in {'solar_actual', 'gshp_actual_w'}:
+                valid &= values.ge(0)
+            # A quarter containing an explicitly invalid state is unknown,
+            # not the mean of whichever valid readings happen to remain.
+            quarter = values.where(valid).resample('15min').mean()
+            quarter = quarter.where(valid.resample('15min').min().eq(True))
+            all_resampled.append(quarter.rename(col_name))
     
     if not all_resampled:
         print("⚠️ No data fetched from PostgreSQL.")
         return pd.DataFrame(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw'])
 
-    df_actual = pd.concat(all_resampled, axis=1).fillna(0)
+    df_actual = pd.concat(all_resampled, axis=1).reindex(columns=list(entities.values()))
     # Total home power is grid_meter + solar_production - battery_net_power
-    battery_kw = df_actual.get('battery_actual_w', 0) / 1000.0
-    df_actual['actual_usage'] = df_actual.get('total_power', 0) + df_actual.get('solar_actual', 0) - battery_kw
+    battery_kw = df_actual['battery_actual_w'] / 1000.0
+    df_actual['actual_usage'] = df_actual['total_power'] + df_actual['solar_actual'] - battery_kw
     # GSHP_POWER_ENTITY is the shared electrical meter for compressor and
     # elements. Adding nominal relay power would count the same load twice.
-    df_actual['gshp_actual_kw'] = df_actual.get('gshp_actual_w', 0) / 1000.0
-    return df_actual.reindex(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw']).fillna(0)
+    df_actual['gshp_actual_kw'] = df_actual['gshp_actual_w'] / 1000.0
+    return df_actual.reindex(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw'])
 
 def get_archived_predictions(
     version: Optional[str] = None,
@@ -413,9 +421,12 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
     else:
         # Filter out fallback prices
         comparison_clean: pd.DataFrame = cast(pd.DataFrame, comparison[comparison.get('is_fallback_price', 0) == 0])
+        # Align known predictions and observations BEFORE averaging. Otherwise
+        # the two means could represent different quarters of the same bucket.
+        comparison_clean = comparison_clean.dropna(subset=['predicted_usage', 'actual_usage'])
         
         # 3-Hour Analysis
-        res_3h = comparison_clean.resample('3h').mean(numeric_only=True).dropna()
+        res_3h = comparison_clean.resample('3h').mean(numeric_only=True).dropna(subset=['predicted_usage', 'actual_usage'])
         if not res_3h.empty:
             res_3h['error'] = res_3h['predicted_usage'] - res_3h['actual_usage']
             mae = float(res_3h['error'].abs().mean())

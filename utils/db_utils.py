@@ -20,10 +20,13 @@ def fetch_states_history(
     entity_ids: str | list[str],
     hours: int | float = 1,
     start_time: Optional[datetime] = None,
+    preserve_invalid_states: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """
     Fetch history for multiple entities from PostgreSQL.
     Returns a dictionary of DataFrames, keyed by entity_id.
+    Evaluation callers can retain invalid numeric states to avoid silently
+    averaging across an explicit sensor outage. Other callers keep legacy behavior.
     """
     if isinstance(entity_ids, str):
         entity_ids = [entity_ids]
@@ -81,7 +84,9 @@ def fetch_states_history(
             else:
                 df['state'] = pd.to_numeric(df['state'], errors='coerce')
             # Set timestamp as index to ensure proper datetime-based filtering
-            results[eid] = df.dropna().sort_values('timestamp').set_index('timestamp').drop(columns=['ts'])
+            if not preserve_invalid_states:
+                df = df.dropna()
+            results[eid] = df.sort_values('timestamp').set_index('timestamp').drop(columns=['ts'])
 
         return results
 
