@@ -204,6 +204,7 @@ class TestBacktestSarimaModel(unittest.TestCase):
             'actual_usage': [1.1, 1.2, 1.3, 1.4],
             'solar_actual': [0.0, 0.1, 0.2, 0.3],
             'gshp_actual_kw': [0.5, 0.5, 0.5, 0.5],
+            'baseload_actual_kw': [0.6, 0.7, 0.8, 0.9],
         }, index=idx)
 
         with patch('compare_models.get_archived_sarima_predictions', return_value=sarima_df):
@@ -211,6 +212,7 @@ class TestBacktestSarimaModel(unittest.TestCase):
 
         self.assertEqual(list(result.columns), ['hindsight_usage', 'actual_usage'])
         self.assertEqual(len(result), 4)
+        np.testing.assert_allclose(result['actual_usage'], [0.6, 0.7, 0.8, 0.9])
 
 
 if __name__ == '__main__':

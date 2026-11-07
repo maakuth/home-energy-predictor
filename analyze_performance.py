@@ -12,6 +12,7 @@ from utils.ha_utils import push_ha_state
 from utils.db_utils import fetch_states_history
 from utils.sqlite_utils import get_db_connection, db_exists
 from utils.git_utils import get_model_version
+from utils.baseload_quality import select_training_rows
 
 load_dotenv(override=True)
 
@@ -22,7 +23,8 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
         'sensor.sahkokauppa_nyt': 'total_power',
         os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw'): 'solar_actual',
         os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'): 'gshp_actual_w',
-        'sensor.be_stat_batt_power': 'battery_actual_w'
+        'sensor.be_stat_batt_power': 'battery_actual_w',
+        'sensor.tasmota_energy_power_3': 'leaf_actual_w',
     }
     
     hist_data = fetch_states_history(list(entities.keys()), hours=days*24, preserve_invalid_states=True)
@@ -36,7 +38,7 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
                 df = df.set_index('timestamp')
             values = pd.to_numeric(df[col_name], errors='coerce')
             valid = pd.Series(np.isfinite(values), index=values.index)
-            if col_name in {'solar_actual', 'gshp_actual_w'}:
+            if col_name in {'solar_actual', 'gshp_actual_w', 'leaf_actual_w'}:
                 valid &= values.ge(0)
             # A quarter containing an explicitly invalid state is unknown,
             # not the mean of whichever valid readings happen to remain.
@@ -46,7 +48,7 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
     
     if not all_resampled:
         print("⚠️ No data fetched from PostgreSQL.")
-        return pd.DataFrame(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw'])
+        return pd.DataFrame(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw', 'baseload_actual_kw'])
 
     df_actual = pd.concat(all_resampled, axis=1).reindex(columns=list(entities.values()))
     # Total home power is grid_meter + solar_production - battery_net_power
@@ -55,7 +57,11 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
     # GSHP_POWER_ENTITY is the shared electrical meter for compressor and
     # elements. Adding nominal relay power would count the same load twice.
     df_actual['gshp_actual_kw'] = df_actual['gshp_actual_w'] / 1000.0
-    return df_actual.reindex(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw'])
+    df_actual['baseload_actual_kw'] = (
+        df_actual['actual_usage'] - df_actual['gshp_actual_kw'] - df_actual['leaf_actual_w'] / 1000.0
+    )
+    df_actual['baseload_actual_kw'] = df_actual['baseload_actual_kw'].where(df_actual['baseload_actual_kw'].ge(0))
+    return df_actual.reindex(columns=['actual_usage', 'solar_actual', 'gshp_actual_kw', 'baseload_actual_kw'])
 
 def get_archived_predictions(
     version: Optional[str] = None,
@@ -308,7 +314,10 @@ def backtest_sarima_model(df_actual: pd.DataFrame) -> pd.DataFrame:
         print("⚠️ No archived SARIMA predictions found. Skipping SARIMA backtest.")
         return pd.DataFrame()
 
-    df_hindsight = sarima_df[['predicted_baseload']].join(df_actual[['actual_usage']], how='inner')
+    if 'baseload_actual_kw' not in df_actual:
+        print('⚠️ No measured baseload actuals. Skipping SARIMA backtest.')
+        return pd.DataFrame()
+    df_hindsight = sarima_df[['predicted_baseload']].join(df_actual[['baseload_actual_kw']], how='inner').dropna()
     if df_hindsight.empty:
         print("⚠️ No overlapping data between SARIMA predictions and actuals.")
         return pd.DataFrame()
@@ -350,32 +359,25 @@ def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
             print(f"⚠️ XGBoost hindsight backtest skipped: missing features {missing_features}")
             return pd.DataFrame()
         
-        # Only predict for timestamps we have actuals for
-        common_idx = df_proc.index.intersection(df_actual.index)
-        if common_idx.empty:
+        df_proc = df_proc.sort_index()
+        if df_proc.index.has_duplicates:
+            print('⚠️ XGBoost hindsight backtest skipped: duplicate feature timestamps.')
+            return pd.DataFrame()
+        step_seconds = float(df_proc.index.to_series().diff().dt.total_seconds().median())
+        if not np.isfinite(step_seconds) or step_seconds <= 0 or step_seconds > 900:
+            print('⚠️ XGBoost hindsight backtest skipped: invalid feature resolution.')
+            return pd.DataFrame()
+        # Use every eligible minute, not only the first sample of each quarter.
+        eligible = select_training_rows(df_proc)
+        eligible = eligible.loc[eligible.index.floor('15min').isin(df_actual.index)]
+        if eligible.empty:
             print("⚠️ XGBoost hindsight backtest skipped: no overlapping timestamps with actuals.")
             return pd.DataFrame()
             
-        X = df_proc.loc[common_idx, features]
-        # In HEPO, the model predicts Baseload (Power - GSHP). 
-        # But analyze_performance compares against Total Power.
-        # So we must add the GSHP power back if we want to compare against the 'total actual'.
-        # However, for pure model accuracy backtesting, it's cleaner to just compare Baseload vs Baseload.
-        # But hepo.db stores the *entire planned usage* (baseload + gshp).
-        # Let's stick to comparing what was ARCHIVED in hepo.db vs what the NEW model would ARCHIVE.
-        
-        preds = model.predict(X)
-        
-        # For simplicity, we assume GSHP usage was exactly as it happened in history
-        # (Since we're evaluating the ML model, not the optimization strategy here)
-        gshp_col = 'gshp_power'
-        gshp_val = (df_proc.loc[common_idx, gshp_col] / 1000.0) if gshp_col in df_proc.columns else 0.0
-        
-        df_hindsight = pd.DataFrame({
-            'hindsight_usage': preds + gshp_val
-        }, index=common_idx)
-        
-        return df_hindsight
+        predictions = pd.Series(model.predict(eligible[features]), index=eligible.index)
+        expected = max(1, int(900 / step_seconds))
+        quarters = predictions.resample('15min').mean().where(predictions.resample('15min').count() >= expected)
+        return quarters.dropna().to_frame('hindsight_usage')
     except Exception as e:
         print(f"Error during hindsight backtest: {e}")
         return pd.DataFrame()
@@ -473,7 +475,10 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
     if do_backtest:
         df_hindsight = backtest_current_model(df_actual)
         if not df_hindsight.empty:
-            hindsight_comp = df_hindsight.join(df_actual, how='inner')
+            hindsight_comp = df_hindsight.join(
+                df_actual[['baseload_actual_kw']].rename(columns={'baseload_actual_kw': 'actual_usage'}),
+                how='inner',
+            ).dropna()
             h_res_3h = hindsight_comp.resample('3h').mean(numeric_only=True).dropna()
             
             if not h_res_3h.empty:
@@ -481,13 +486,11 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
                 h_mae = h_res_3h['error'].abs().mean()
                 h_bias = h_res_3h['error'].mean()
                 
-                print(f"\nHINDSIGHT PERFORMANCE (XGBoost):")
+                print(f"\nHINDSIGHT PERFORMANCE (XGBoost baseload):")
                 print(f"  MAE:  {h_mae:.3f} kW")
                 print(f"  Bias: {h_bias:+.3f} kW")
                 
-                if not comparison.empty and not res_3h.empty:
-                    improvement = ((mae - h_mae) / mae) * 100 if mae > 0 else 0
-                    print(f"  Improvement vs Real-time: {improvement:+.1f}%")
+                print('  Baseload only; not directly comparable with real-time total-load MAE.')
             else:
                 print("  (no overlapping 3h buckets)")
         else:
@@ -503,7 +506,7 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
                 s_mae = s_res_3h['error'].abs().mean()
                 s_bias = s_res_3h['error'].mean()
                 
-                print(f"\nHINDSIGHT PERFORMANCE (SARIMA benchmark):")
+                print(f"\nHINDSIGHT PERFORMANCE (SARIMA baseload benchmark):")
                 print(f"  MAE:  {s_mae:.3f} kW")
                 print(f"  Bias: {s_bias:+.3f} kW")
             else:
