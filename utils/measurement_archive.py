@@ -40,6 +40,16 @@ class MeasurementArchive:
                     start REAL NOT NULL, end REAL NOT NULL,
                     CHECK(start < end), PRIMARY KEY(source_id, start, end)
                 );
+                CREATE TABLE IF NOT EXISTS legacy_imports (
+                    id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE,
+                    source_path TEXT NOT NULL, interval_seconds INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS legacy_intervals (
+                    import_id INTEGER NOT NULL REFERENCES legacy_imports(id),
+                    timestamp REAL NOT NULL, measurement TEXT NOT NULL,
+                    value TEXT, provenance TEXT NOT NULL,
+                    PRIMARY KEY(import_id, timestamp, measurement)
+                );
                 PRAGMA user_version=1;
             ''')
             self.db.execute('PRAGMA foreign_keys=ON')
