@@ -1,0 +1,17 @@
+# Boundaries are timezone-aware and half-open: from included, to excluded.
+# No from means available history; no to means the ingestion run's cutoff.
+outside_temp:
+  - entity: sensor.ulkona_temperature_2
+    to: "2026-10-19T00:00:00+03:00"
+  - entity: sensor.ulkolampotila
+    from: "2026-10-19T00:00:00+03:00"
+
+# Both meters measure shared heating electricity, including resistive elements.
+# The old unit was removed around October 7 at 08:00 Helsinki time, but its
+# meter continued recording the intervening resistive-only heating period.
+# Equipment removal is therefore NOT the source-mapping boundary.
+gshp_power:
+  - entity: sensor.mlp_teho
+    to: "2026-10-20T08:30:00+03:00"
+  - entity: sensor.instantaneous_used_power_32167
+    from: "2026-10-20T08:30:00+03:00"

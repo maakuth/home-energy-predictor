@@ -3,6 +3,7 @@ scipy>=1.9
 pandas>=3.0
 requests>=2.32
 python-dotenv>=1.2
+PyYAML>=6.0
 psycopg2-binary>=2.9
 xgboost>=3.0
 scikit-learn>=1.8
