@@ -56,14 +56,9 @@ def diagnose_feature_coverage(df, required_cols=None):
 check_feature_coverage = diagnose_feature_coverage
 feature_coverage = diagnose_feature_coverage
 
-def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'state/processed_data.csv') -> None:
-    print('Loading raw data...')
-    try:
-        df = pd.read_csv(input_path, index_col=0, low_memory=False)
-    except FileNotFoundError:
-        print(f'Error: {input_path} not found.')
-        return
-    
+def process_frame(raw: pd.DataFrame) -> pd.DataFrame:
+    """Generate existing features in memory without writing or mutating input."""
+    df = raw.copy(deep=True)
     df.index = pd.to_datetime(df.index, utc=True)
     
     # Fundamental step: Sort and deduplicate
@@ -258,6 +253,17 @@ def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'sta
     if not rejected.empty:
         print('Baseload exclusions:\n' + rejected.value_counts().to_string())
     
+    return df
+
+
+def process_data(input_path: str = 'state/raw_data.csv', output_path: str = 'state/processed_data.csv') -> None:
+    print('Loading raw data...')
+    try:
+        raw = pd.read_csv(input_path, index_col=0, low_memory=False)
+    except FileNotFoundError:
+        print(f'Error: {input_path} not found.')
+        return
+    df = process_frame(raw)
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
