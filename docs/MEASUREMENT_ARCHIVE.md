@@ -126,5 +126,51 @@ eight remained unresolved. All were still labelled legacy/unverified. Bounded
 primary-key queries avoid scanning the entire 1.59 GB archive for this small
 window. The staging database and source CSVs were not changed by the audit.
 
-Archive-backed feature generation and production consumer migration are still
-pending. These reader APIs do not switch the scheduled pipelines away from CSV.
+These reader APIs do not switch the scheduled pipelines away from CSV.
+
+## In-memory feature windows and opt-in XGBoost training
+
+`process_data.process_frame(raw)` generates the existing feature set without
+writing files or mutating the input. The CSV entry point uses the same function.
+
+`utils.archive_features.load_archive_raw` reads bounded time chunks under a
+single read-only snapshot. It returns values plus source-validity, coverage,
+provenance and conflict columns. Default entity definitions match the existing
+extractor and are evaluated at call time; the dated YAML overrides those defaults.
+The initial default selection is the eight baseload inputs: outdoor temperature,
+wind, solar forecast, grid, solar production, battery, shared heating and Leaf.
+Numeric optional sensors and heater relays can be explicitly selected. Category
+and cumulative-energy policies are not implemented yet and are rejected rather
+than silently interpreted as numeric power.
+
+`load_archive_features` includes the preceding 24 hours for lag/rolling context,
+then returns only the requested window. Feature generation uses the existing
+imputation and filtering rules, while archive quality metadata is kept separate
+and restored unchanged. Missing required observations can therefore prevent
+feature generation, and invalid meter truth remains ineligible for training.
+Legacy opt-in does not relax the source-validity gate. The default one-minute
+aggregation of original recorder events is time-weighted, unlike legacy event
+means; archive-trained models are associated with model version 1.44.0.
+
+XGBoost can now train without reading or producing raw/processed CSV files:
+
+```sh
+venv/bin/python3 train_model.py \
+  --archive state/measurement_history.sqlite \
+  --sources config/measurement_sources.yaml \
+  --from '2026-10-21T00:00:00+03:00' \
+  --to '2026-11-09T00:00:00+02:00'
+```
+
+This is an operational example, not a development command: it writes model
+artifacts under `state/` if the unchanged coverage gate passes. Missing archive
+files, malformed windows and missing sources never silently fall back to CSV.
+`--allow-legacy` and repeatable `--preferred-import` enable explicit legacy
+reading/selection, but do not make unverified legacy targets eligible for fitting.
+The existing CSV training arguments remain supported and are still the scheduled
+default. No models have been trained against staging data as part of development.
+
+The remaining SARIMA, inference, optimization and evaluation consumers and the
+scheduled pipelines still need migration. Historical import eligibility policy,
+energy/category handling, archive backup/restore tooling and operational cutover
+validation remain outstanding.

@@ -6,11 +6,14 @@ import argparse
 from sklearn.metrics import mean_absolute_error
 import json
 import os
+from datetime import datetime
 from utils.baseload_quality import BASELOAD_FEATURES, select_training_rows
+from utils.archive_features import load_archive_features
 
-def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', min_coverage_days: float = 14.0) -> None:
+def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', min_coverage_days: float = 14.0,
+          frame: pd.DataFrame | None = None) -> None:
     print('Loading processed data...')
-    df = pd.read_csv(data_path, index_col=0)
+    df = pd.read_csv(data_path, index_col=0) if frame is None else frame.copy(deep=True)
     df.index = pd.to_datetime(df.index, utc=True)
     df = df.sort_index()
     if df.index.has_duplicates:
@@ -118,10 +121,43 @@ def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', mi
         json.dump(features, f)
     print('Model saved to energy_model.json')
 
-if __name__ == '__main__':
+def _epoch(value: str) -> float:
+    try:
+        date = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError('Expected ISO timestamp with timezone') from error
+    if date.tzinfo is None or date.utcoffset() is None:
+        raise argparse.ArgumentTypeError('Timestamp must have a timezone')
+    return date.timestamp()
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--holdout-days', type=int, default=0, help='Number of recent days to exclude from training')
-    parser.add_argument('--data-path', default='state/processed_data.csv', help='Processed training-data CSV path')
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--data-path', default='state/processed_data.csv', help='Processed training-data CSV path')
+    source.add_argument('--archive', help='Explicit read-only measurement archive; requires --from and --to')
+    parser.add_argument('--sources', help='Dated source YAML for archive mode; merges with extraction defaults')
+    parser.add_argument('--from', dest='start', type=_epoch)
+    parser.add_argument('--to', dest='end', type=_epoch)
+    parser.add_argument('--interval-seconds', type=int, default=60)
+    parser.add_argument('--allow-legacy', action='store_true', help='Read unverified legacy inputs; does not relax target quality gates')
+    parser.add_argument('--preferred-import', type=int, action='append', help='Explicit legacy precedence in archive mode')
     parser.add_argument('--min-coverage-days', type=float, default=14.0, help='Minimum eligible sample-days before fitting (default 14)')
-    args = parser.parse_args()
-    train(holdout_days=args.holdout_days, data_path=args.data_path, min_coverage_days=args.min_coverage_days)
+    args = parser.parse_args(argv)
+    frame = None
+    if args.archive:
+        if args.start is None or args.end is None or args.start >= args.end:
+            parser.error('archive mode requires increasing --from and --to timestamps')
+        options = {'sources_path': args.sources} if args.sources else {}
+        frame = load_archive_features(args.archive, args.start, args.end,
+            interval_seconds=args.interval_seconds, allow_legacy=args.allow_legacy,
+            preferred_imports=args.preferred_import, **options)
+    elif args.start is not None or args.end is not None or args.sources or args.allow_legacy or args.preferred_import:
+        parser.error('source/window/legacy options require --archive')
+    train(holdout_days=args.holdout_days, data_path=args.data_path,
+          min_coverage_days=args.min_coverage_days, frame=frame)
+
+
+if __name__ == '__main__':
+    main()
