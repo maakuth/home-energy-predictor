@@ -64,26 +64,32 @@ class MeasurementReader:
         priority = preferred_imports or []
         if len(priority) != len(set(priority)):
             raise ValueError('Duplicate import precedence')
-        available = {row[0] for row in self.db.execute('SELECT id FROM legacy_imports')}
+        metadata = self.db.execute('SELECT id, interval_seconds FROM legacy_imports ORDER BY id').fetchall()
+        available = {row[0] for row in metadata}
         if any(import_id not in available for import_id in priority):
             raise ValueError('Unknown import precedence ID')
-        rows = self.db.execute('''SELECT v.timestamp, v.import_id, v.value,
+        groups: dict[float, dict[int, float]] = {}
+        # Bind import_id explicitly so the primary-key range scan stays bounded
+        # on large archives; joining all imports can scan millions of cells.
+        for import_id, resolution in metadata:
+            if resolution != interval_seconds:
+                continue
+            rows = self.db.execute('''SELECT v.timestamp, v.import_id, v.value,
                     f.measurement AS flag_present, f.value AS flag_value
-                FROM legacy_intervals v JOIN legacy_imports i ON i.id=v.import_id
+                FROM legacy_intervals v
                 LEFT JOIN legacy_intervals f ON f.import_id=v.import_id
                     AND f.timestamp=v.timestamp AND f.measurement=?
-                WHERE v.measurement=? AND i.interval_seconds=?
+                WHERE v.measurement=? AND v.import_id=?
                     AND v.timestamp>=? AND v.timestamp<?
                 ORDER BY v.timestamp, v.import_id''',
-                (measurement + '_source_valid', measurement, interval_seconds, start, end))
-        groups: dict[float, dict[int, float]] = {}
-        for row in rows:
-            if row['timestamp'] % interval_seconds:
-                raise ValueError('Legacy samples are not aligned to their declared interval')
-            value = numeric(row['value'])
-            if row['flag_present'] is not None and str(row['flag_value']).lower() != 'true':
-                value = math.nan
-            groups.setdefault(row['timestamp'], {})[row['import_id']] = value
+                (measurement + '_source_valid', measurement, import_id, start, end))
+            for row in rows:
+                if row['timestamp'] % interval_seconds:
+                    raise ValueError('Legacy samples are not aligned to their declared interval')
+                value = numeric(row['value'])
+                if row['flag_present'] is not None and str(row['flag_value']).lower() != 'true':
+                    value = math.nan
+                groups.setdefault(row['timestamp'], {})[row['import_id']] = value
         result = []
         for timestamp in index:
             candidates = groups.get(timestamp.timestamp(), {})
@@ -98,7 +104,7 @@ class MeasurementReader:
                 'source_valid': False,
                 'provenance': 'legacy_resampled' if candidates else 'missing',
                 'conflict': conflict,
-                'import_ids': tuple(candidates),
+                'import_ids': tuple(sorted(candidates)),
                 'selected_import_id': selected,
             })
         return pd.DataFrame(result, index=index)

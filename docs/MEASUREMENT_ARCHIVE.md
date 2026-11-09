@@ -65,3 +65,66 @@ failure, not a successful empty historical query.
 These two mappings are not yet a complete ingestion inventory for all training
 and inference features. Archive-backed resampling, legacy conflict resolution,
 and consumer migration must be completed before scheduled pipelines can switch.
+
+## Read-only interval access
+
+`MeasurementReader` opens an existing archive in SQLite read-only mode and holds
+a consistent snapshot until the context exits. It cannot create missing files,
+initialize a schema, or write data. Release the context before model fitting.
+
+`reader.legacy_numeric(measurement, start, end, interval_seconds=60)` reads
+native-resolution numeric legacy intervals. Bounds must be UTC-epoch aligned.
+Equivalent numeric representations agree; different values or missing-vs-valid
+values are conflicts and return NaN by default. `preferred_imports=[id, ...]`
+is an explicit per-read precedence order, not a persisted rewrite. The first
+listed import present at a timestamp wins even when its value is missing, so
+selection cannot silently fill its outage from another import. Unknown IDs are
+rejected. Conflict flags and contributing IDs remain visible after selection.
+Legacy source-validity flags, when present, can invalidate filled numeric values.
+No legacy reading is ever promoted to source-verified truth.
+
+`utils.measurement_resampling.resample_numeric` integrates raw state durations
+for numeric power/temperature or explicit relay-state mappings. It applies the
+dated source configuration before integration and reports:
+
+- `value`: time-weighted mean, NaN unless the full output interval is valid;
+- `coverage_fraction`: fraction of elapsed time with usable readings;
+- `source_valid`: true only for complete original-recorder coverage;
+- `provenance`, `conflict`, contributing `import_ids` and `entities`.
+
+Recorder values take precedence within successful fetch coverage. Explicitly
+unavailable values and queried intervals without a known state block legacy
+fallback. States do not carry across mapping boundaries or unqueried gaps.
+An optional positive `max_age_seconds` bounds unchanged-state carry. Relay
+integration preserves short on/off runs instead of treating absent data as off.
+All weighting uses elapsed UTC time, including on Helsinki DST-change days.
+
+Legacy fallback is disabled unless `allow_legacy=True`. Its native resolution
+must divide the requested output interval. Legacy interval means are integrated
+over their declared duration, not treated as original state-change events.
+Partial coverage is reported, never interpolated into a complete measurement.
+This resampler does not yet implement cumulative-energy reset/delta handling or
+categorical feature policies; those require separate measurement definitions.
+
+## October snapshot overlap audit
+
+The staging archive contains two legacy imports from the October 8 snapshot.
+Their common interval is October 4, 2026, 21:00–23:03 UTC inclusive (124 minute
+samples). Across 16 common measurement columns, the import audit found 113
+different non-null cells and 145 cells missing in only one import.
+
+The differences are not all harmless rounding: for example, the resistive-heater
+column disagrees at 15 timestamps (6000 W vs 0 W). Shared heating power differs
+at three final timestamps, while outdoor temperature differs at eight samples.
+Several differences occur near extraction boundaries, but the source snapshots
+alone do not establish which values are correct. No blanket newer-file or
+non-null-wins rule has been applied.
+
+A read-only audit using the reader/resampler retained 121 agreeing shared-heating
+samples and marked three unresolved; for outdoor temperature, 116 agreed and
+eight remained unresolved. All were still labelled legacy/unverified. Bounded
+primary-key queries avoid scanning the entire 1.59 GB archive for this small
+window. The staging database and source CSVs were not changed by the audit.
+
+Archive-backed feature generation and production consumer migration are still
+pending. These reader APIs do not switch the scheduled pipelines away from CSV.
