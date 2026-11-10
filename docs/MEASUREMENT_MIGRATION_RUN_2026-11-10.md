@@ -115,3 +115,14 @@ preceded implementation. The policy suite passed 45 tests. Full repository
 validation on the correction branch passed **962 tests**, with one skipped and
 four passing subtests, including slow tests. Repository-wide Pyright was clean.
 These isolated tests do not constitute live-rollout approval.
+
+## Forward shadow preparation
+
+The user approved non-actuating forward shadow validation. The frozen
+pre-September candidate is pinned in `forward-shadow/protocol.json`, together
+with its source/policy bytes and archive identity. `host-forward-shadow.sh`
+performs explicit HA forecast reads, staging-only recorder refresh, generation
+and later scoring in unique shadow directories. No active artifact replacement,
+planner execution or publication is included. See
+[forward shadow contracts](FORWARD_SHADOW.md). Preparation/dry-run is not a
+claim that a live forecast vintage has already been captured.
