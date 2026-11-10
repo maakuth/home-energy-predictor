@@ -8,6 +8,26 @@ from typing import Any
 from utils.measurement_archive import Event
 
 
+def recorder_predecessor(connection: Any, entity: str, start: float) -> Event | None:
+    """Latest actual state before a successful range's left boundary."""
+    if not entity or not math.isfinite(start):
+        raise ValueError('Invalid predecessor query')
+    cursor = connection.cursor()
+    try:
+        cursor.execute('SELECT metadata_id FROM states_meta WHERE entity_id = %s', (entity,))
+        metadata = cursor.fetchone()
+        if metadata is None:
+            raise ValueError(f'Recorder entity not found: {entity}')
+        cursor.execute('''SELECT s.state_id, s.last_updated_ts, s.state, a.shared_attrs
+            FROM states s LEFT JOIN state_attributes a ON s.attributes_id = a.attributes_id
+            WHERE s.metadata_id = %s AND s.last_updated_ts < %s
+            ORDER BY s.last_updated_ts DESC, s.state_id DESC LIMIT 1''', (metadata[0], start))
+        row = cursor.fetchone()
+        return None if row is None else (int(row[0]), float(row[1]), row[2], row[3])
+    finally:
+        cursor.close()
+
+
 def recorder_events(connection: Any, entity: str, start: float, end: float,
                     batch_size: int = 2000) -> Iterator[Event]:
     if (not entity or not math.isfinite(start) or not math.isfinite(end)

@@ -107,7 +107,7 @@ def test_manifest_fails_closed_and_inventory_does_not_scan_cells(tmp_path):
         report = archive_inventory(reader)
     assert report['imports'][0]['first_timestamp'] == 0
     assert report['imports'][0]['last_timestamp'] == 60
-    assert report['schema_version'] == 1
+    assert report['schema_version'] == 2
     assert report['cell_counts'] == 'not_scanned'
 
 

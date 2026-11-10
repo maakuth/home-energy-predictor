@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 
 import pandas as pd
+from utils.measurement_archive import validate_archive
 
 
 def numeric(value: object) -> float:
@@ -37,8 +38,7 @@ class MeasurementReader:
         try:
             self.db.execute('PRAGMA query_only=ON')
             self.db.execute('BEGIN')
-            if self.db.execute('PRAGMA user_version').fetchone()[0] != 1:
-                raise ValueError('Unsupported measurement archive version')
+            self.version = validate_archive(self.db)
             self.db.execute('SELECT id FROM legacy_imports LIMIT 0')
         except Exception:
             self.db.close()
@@ -49,6 +49,15 @@ class MeasurementReader:
 
     def __exit__(self, *args: object) -> None:
         self.db.close()
+
+    def carry_supported(self, source_id: int, event_timestamp: float, coverage_start: float) -> bool:
+        if event_timestamp >= coverage_start:
+            return True
+        if self.version < 2:
+            return False
+        return self.db.execute('''SELECT 1 FROM predecessor_evidence
+            WHERE source_id=? AND start=? AND timestamp=?''',
+            (source_id, coverage_start, event_timestamp)).fetchone() is not None
 
     def legacy_numeric(self, measurement: str, start: float, end: float,
                        interval_seconds: int = 60,
