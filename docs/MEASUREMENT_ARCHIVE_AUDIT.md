@@ -3,7 +3,7 @@
 This command reports evidence, **not migration approval**. It never opens the
 archive writable, imports data, loads recorder credentials, calls HA/PostgreSQL,
 or changes pipelines. `migration_ready` remains false: source/unit evidence,
-target/lag eligibility, consumer integration and shadow validation are separate
+consumer integration and shadow validation are separate
 requirements. No model behavior or version is changed.
 
 ## Commands
@@ -40,7 +40,7 @@ venv/bin/python3 -m utils.measurement_audit_cli inventory \
 
 JSON goes to stdout. Missing archives fail without creating a database. Invalid
 arguments/schema/manifests fail closed. Source YAML is explicit; unlike the
-feature loader the audit does not merge environment-dependent source defaults.
+feature loader the numeric audit does not merge environment-dependent source defaults.
 For additional measurements supply an audited YAML containing those mappings.
 
 ### Interpreting coverage and policy
@@ -60,7 +60,9 @@ source flags and known recorder outages remain unavailable. All conflicts stay
 excluded, including explicitly resolved conflicts. This does **not** calculate
 five-meter baseload targets, weather gates, time-aware lag eligibility, contiguous
 training windows or training sample counts. `target_and_lag_eligibility` is
-reported as `not_evaluated`; use the integrated feature policy for those gates.
+reported as `not_evaluated` unless `--training-eligibility` is also selected.
+The integrated training audit uses the feature loader's runtime source defaults
+with the explicitly supplied dated YAML overrides.
 
 No unit conversions, relay ratings, category/counter rules, freshness thresholds
 or pre-installation zeros are inferred. Known counter/category/relay logical
@@ -112,8 +114,12 @@ Memory does not grow with CSV rows. Consequently duplicate detection is exact
 for sorted input via nonincreasing timestamps; unsorted input is blocked rather
 than maintaining a huge exact timestamp set. Empty/non-numeric cells remain
 missing. Structural validity is **not** source identity, unit correctness or
-import authorization. The existing importer has not been hardened by this work;
-always review the dry-run inventory first. A stable stat is not a filesystem
+import authorization. The importer now transactionally rejects duplicate
+timestamps/headers, empty headers/files, malformed row widths and timestamps
+unaligned to the declared positive integer resolution. It preserves source-flag
+cells separately as metadata and verifies that parsed bytes match the recorded
+hash, rolling back on content changes. Always review the dry-run inventory
+first. A stable stat is not a filesystem
 snapshot; inventory static snapshot copies for stronger consistency.
 
 `--root /workspace/old-state` recursively streams all `raw_data*.csv`; this is
@@ -191,6 +197,28 @@ eligible prerequisites only, not baseload or lag training rows. Under default
 `verified-only`, legacy measurement eligibility is zero.
 
 Remaining blockers: review newer CSV source/unit/flag evidence and overlap
-precedence; harden importer validation; audit integrated target/lag policy;
-complete consumers, shadow comparisons and operational approval. Nothing here
+precedence; complete remaining consumers, representative shadow comparisons
+and operational approval. Nothing here
 authorizes a live cutover.
+## Integrated target/lag audit
+
+Add `--training-eligibility` to a scoped `archive` audit to evaluate the shared
+five-meter target policy, predictor inputs, exact 1h/24h lags and full-day Leaf
+energy. `--measurement` is optional in this mode. This uses a separate single
+read snapshot including the preceding day, identified in the returned metadata;
+it does not fit a model or require feature imputation to handle missing history.
+
+```sh
+venv/bin/python3 -m utils.measurement_audit_cli archive \
+  --archive /workspace/state/measurement_history.staging.sqlite \
+  --sources config/measurement_sources.yaml \
+  --from 2026-10-05T00:00:00Z --to 2026-10-06T00:00:00Z \
+  --interval-seconds 900 --legacy-policy complete-legacy --training-eligibility
+```
+
+Read-only execution on 2026-11-10: 96 quarters, **2 eligible targets, 0 verified
+targets, 0 eligible XGBoost training rows**. Leaf's complete previous-day energy
+had zero eligible windows; solar and Leaf availability excluded 94 targets.
+This one-day check diagnoses missingness, not model quality or full-history
+training coverage. No precedence was selected, imports performed, or live
+pipeline changed. The archive remains **not migration-ready**.

@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 
 from utils.measurement_audit import (
-    archive_inventory, audit_measurements, backfill_plan, inventory_csv, resolve_precedence,
+    archive_inventory, audit_measurements, audit_training_eligibility, backfill_plan, inventory_csv, resolve_precedence,
 )
 from utils.measurement_reader import MeasurementReader
 from utils.measurement_sources import load_sources
@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> None:
     audit.add_argument('--legacy-policy', choices=['verified-only', 'complete-legacy'], default='verified-only')
     audit.add_argument('--precedence-manifest', type=Path)
     audit.add_argument('--dry-run-backfill', action='store_true', help='Only mapped/query-coverage gap plan; no resampling')
+    audit.add_argument('--training-eligibility', action='store_true',
+                       help='Also audit all baseload meters, predictor inputs and exact lag eligibility')
     args = parser.parse_args(argv)
     try:
         if args.command == 'inventory':
@@ -65,9 +67,13 @@ def main(argv: list[str] | None = None) -> None:
                         item['import_plan'] = 'skip: content hash already imported'
             report = {'dry_run': True, 'migration_ready': False, 'files': reports}
         else:
-            scoped = any(value is not None for value in (args.start, args.end, args.measurement)) or args.dry_run_backfill
-            if scoped and (args.start is None or args.end is None or not args.sources or not args.measurement):
+            preferred = None
+            scoped = any(value is not None for value in (args.start, args.end, args.measurement)) or args.dry_run_backfill or args.training_eligibility
+            if scoped and (args.start is None or args.end is None or not args.sources
+                           or (not args.measurement and not args.training_eligibility)):
                 raise ValueError('Scoped audit requires --sources, --measurement, --from and --to')
+            if args.training_eligibility and args.dry_run_backfill:
+                raise ValueError('Training eligibility cannot be combined with dry-run backfill only')
             if args.precedence_manifest and not scoped:
                 raise ValueError('Precedence manifest requires a scoped audit')
             with MeasurementReader(args.archive) as reader:
@@ -75,14 +81,19 @@ def main(argv: list[str] | None = None) -> None:
                 report['dry_run'] = True
                 if scoped:
                     sources = load_sources(args.sources)
-                    preferred = None
                     if args.precedence_manifest:
                         preferred = resolve_precedence(reader, json.loads(args.precedence_manifest.read_text()))
                     report['backfill_plan'] = backfill_plan(reader, sources, args.start, args.end, args.measurement)
-                    if not args.dry_run_backfill:
+                    if not args.dry_run_backfill and args.measurement:
                         report.update(audit_measurements(reader, sources, args.start, args.end, args.measurement,
                             interval_seconds=args.interval_seconds, legacy_policy=args.legacy_policy,
-                            preferred_imports=preferred, max_bins=args.max_bins))
+                             preferred_imports=preferred, max_bins=args.max_bins))
+            if args.training_eligibility:
+                report['training_eligibility'] = audit_training_eligibility(
+                    args.archive, args.start, args.end, sources_path=args.sources,
+                    interval_seconds=args.interval_seconds, legacy_policy=args.legacy_policy,
+                    preferred_imports=preferred, max_bins=args.max_bins)
+                report['target_and_lag_eligibility'] = 'evaluated_in_separate_consistent_snapshot'
         print(json.dumps(report, indent=2, allow_nan=False))
     except (OSError, ValueError, sqlite3.Error, csv.Error) as error:
         parser.error(str(error))

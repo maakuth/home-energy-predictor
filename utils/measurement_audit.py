@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from utils.measurement_reader import MeasurementReader, interval_index, numeric
 from utils.measurement_resampling import resample_numeric
 from utils.measurement_sources import MeasurementSource, mapped_ranges
@@ -96,6 +98,46 @@ def inventory_csv(path: str | Path, interval_seconds: int = 60) -> dict[str, Any
                                        'unaligned_timestamps', 'nonincreasing_timestamps')))
     report['import_plan'] = 'review source/unit associations and overlap precedence before explicit import'
     return report
+
+
+def audit_training_eligibility(path: str | Path, start: float, end: float, *,
+                               legacy_policy: str = 'verified-only',
+                               interval_seconds: int = 60, max_bins: int = 10080,
+                               **options: Any) -> dict[str, Any]:
+    """Evaluate the shared target/lag contract without processing or fitting.
+
+    Uses one separate read snapshot (identified in returned metadata), including
+    the preceding day. Unlike feature generation, all-missing histories remain
+    reportable; nothing is filled just to satisfy a feature diagnostic.
+    """
+    from utils.archive_features import BASELOAD_INPUTS, load_archive_raw
+    from utils.archive_quality import apply_training_policy
+    from utils.baseload_quality import select_training_rows
+
+    if interval_seconds < 60 or interval_seconds % 60 or 86400 % interval_seconds:
+        raise ValueError('Training audit resolution must be whole minutes dividing a day')
+    if (end - start) / interval_seconds > max_bins:
+        raise ValueError('Audit bin limit exceeded')
+    interval_index(start, end, interval_seconds)
+    raw = load_archive_raw(path, start - 86400, end, interval_seconds=interval_seconds,
+                           measurements=list(BASELOAD_INPUTS), allow_legacy=True, **options)
+    eligible = apply_training_policy(raw, pd.DataFrame(index=raw.index), legacy_policy)
+    eligible = eligible.loc[eligible.index >= pd.Timestamp(start, unit='s', tz='UTC')]
+    selected = select_training_rows(eligible)
+    return {
+        'migration_ready': False, 'legacy_policy': legacy_policy,
+        'start': start, 'end': end, 'bins': len(eligible),
+        'eligible_targets': int(eligible.baseload_training_eligible.sum()),
+        'source_verified_targets': int(eligible.baseload_target_valid.sum()),
+        'eligible_training_rows': len(selected),
+        'eligible_unverified_training_rows': int((~selected.baseload_target_valid).sum()),
+        'inputs': {name: int(eligible[name + '_training_eligible'].sum()) for name in BASELOAD_INPUTS},
+        'lag_eligibility': {name: int(eligible[name + '_training_eligible'].sum()) for name in
+                            ('baseload_lag_1h', 'baseload_lag_24h', 'leaf_power_lag_1h', 'leaf_energy_24h')},
+        'target_exclusion_reasons': eligible.baseload_training_exclusion_reason.value_counts().to_dict(),
+        'snapshot_metadata': eligible.attrs['archive_training'],
+        'note': 'Eligibility is not coverage-gate approval, source/unit verification or operational readiness',
+    }
 
 
 def archive_inventory(reader: MeasurementReader) -> dict[str, Any]:
