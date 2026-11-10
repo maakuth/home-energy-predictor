@@ -78,3 +78,69 @@ def test_invalid_chunk_size_is_rejected(tmp_path, chunk):
     path, sources = build(tmp_path)
     with pytest.raises(ValueError):
         load_archive_raw(path, START, START + 120, sources=sources, chunk_seconds=chunk)
+
+
+def test_complete_legacy_policy_preserves_source_flags_and_hash_provenance(tmp_path):
+    from utils.measurement_legacy import import_legacy_csv
+    from utils.baseload_quality import select_training_rows
+    path, sources = build(tmp_path)
+    sources['battery_power'] = parse_sources({'battery_power': [{'entity': 'sensor.missing'}]})['battery_power']
+    csv = tmp_path / 'raw.csv'
+    index = pd.date_range(pd.Timestamp(START - 86400, unit='s', tz='UTC'), periods=1442, freq='min')
+    pd.DataFrame({'battery_power': 0}, index=index).to_csv(csv, index_label='timestamp')
+    with MeasurementArchive(path) as archive:
+        import_legacy_csv(archive, csv, 60)
+    out = load_archive_features(path, START, START + 120, sources=sources,
+                                allow_legacy=True, legacy_policy='complete-legacy')
+    assert out.baseload_power.eq(2).all()
+    assert out.baseload_training_eligible.all()
+    assert not out.baseload_target_valid.any()
+    assert not out.battery_power_source_valid.any()
+    assert out.battery_power_import_ids.tolist() == [(1,), (1,)]
+    assert len(out.attrs['archive_training']['imports'][0]['sha256']) == 64
+    assert len(select_training_rows(out)) == 2
+
+
+def test_legacy_policy_requires_explicit_legacy_reading(tmp_path):
+    path, sources = build(tmp_path)
+    with pytest.raises(ValueError, match='allow_legacy'):
+        load_archive_features(path, START, START + 120, sources=sources,
+                              legacy_policy='complete-legacy')
+
+
+@pytest.mark.parametrize('selected', [None, 1, 2])
+def test_null_overlap_conflict_stays_ineligible_even_with_precedence(tmp_path, selected):
+    from utils.measurement_legacy import import_legacy_csv
+    path, sources = build(tmp_path)
+    sources['battery_power'] = parse_sources({'battery_power': [{'entity': 'sensor.missing'}]})['battery_power']
+    with MeasurementArchive(path) as archive:
+        archive.ingest('sensor.missing', None, START - 86400, START,
+                       [(99, START - 86400, '0', None)])
+    for i, value in enumerate(['0', '']):
+        csv = tmp_path / f'{i}.csv'
+        csv.write_text(f'timestamp,battery_power\n2026-10-21T00:00:00Z,{value}\n')
+        with MeasurementArchive(path) as archive:
+            import_legacy_csv(archive, csv, 60)
+    out = load_archive_features(path, START, START + 120, sources=sources,
+        allow_legacy=True, legacy_policy='complete-legacy',
+        preferred_imports=[selected] if selected else None)
+    assert out.battery_power_conflict.iloc[0]
+    assert not out.baseload_training_eligible.any()
+    assert out.baseload_power.isna().all()
+
+
+def test_explicit_invalid_legacy_flag_cannot_become_eligible(tmp_path):
+    from utils.measurement_legacy import import_legacy_csv
+    path, sources = build(tmp_path)
+    sources['battery_power'] = parse_sources({'battery_power': [{'entity': 'sensor.missing'}]})['battery_power']
+    with MeasurementArchive(path) as archive:
+        archive.ingest('sensor.missing', None, START - 86400, START,
+                       [(99, START - 86400, '0', None)])
+    csv = tmp_path / 'invalid.csv'
+    csv.write_text('timestamp,battery_power,battery_power_source_valid\n2026-10-21T00:00:00Z,0,False\n')
+    with MeasurementArchive(path) as archive:
+        import_legacy_csv(archive, csv, 60)
+    out = load_archive_features(path, START, START + 120, sources=sources,
+                                allow_legacy=True, legacy_policy='complete-legacy')
+    assert out.battery_power.isna().all()
+    assert not out.baseload_training_eligible.any()

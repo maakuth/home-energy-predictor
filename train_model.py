@@ -9,6 +9,8 @@ import os
 from datetime import datetime
 from utils.baseload_quality import BASELOAD_FEATURES, select_training_rows
 from utils.archive_features import load_archive_features
+from utils.archive_quality import LEGACY_POLICIES
+from utils.git_utils import get_model_version
 
 def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', min_coverage_days: float = 14.0,
           frame: pd.DataFrame | None = None) -> None:
@@ -119,6 +121,13 @@ def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', mi
     model.save_model('state/energy_model.json')
     with open('state/model_features.json', 'w') as f:
         json.dump(features, f)
+    with open('state/model_training_metadata.json', 'w') as f:
+        json.dump({'model_version': get_model_version(),
+                   'archive_training': df.attrs.get('archive_training'),
+                   'input_mode': 'archive' if 'archive_training' in df.attrs else 'processed-frame-or-csv',
+                   'eligible_rows': len(df), 'holdout_days': holdout_days,
+                   'first_eligible': str(df.index.min()), 'last_eligible': str(df.index.max()),
+                   'eligible_verified_targets': int(df.baseload_target_valid.astype(str).str.lower().eq('true').sum())}, f, indent=2)
     print('Model saved to energy_model.json')
 
 def _epoch(value: str) -> float:
@@ -141,7 +150,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--from', dest='start', type=_epoch)
     parser.add_argument('--to', dest='end', type=_epoch)
     parser.add_argument('--interval-seconds', type=int, default=60)
-    parser.add_argument('--allow-legacy', action='store_true', help='Read unverified legacy inputs; does not relax target quality gates')
+    parser.add_argument('--allow-legacy', action='store_true', help='Read unverified legacy inputs')
+    parser.add_argument('--legacy-policy', choices=LEGACY_POLICIES, default='verified-only',
+                        help='Explicit target eligibility policy; source verification is never changed')
     parser.add_argument('--preferred-import', type=int, action='append', help='Explicit legacy precedence in archive mode')
     parser.add_argument('--min-coverage-days', type=float, default=14.0, help='Minimum eligible sample-days before fitting (default 14)')
     args = parser.parse_args(argv)
@@ -149,11 +160,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.archive:
         if args.start is None or args.end is None or args.start >= args.end:
             parser.error('archive mode requires increasing --from and --to timestamps')
+        if args.legacy_policy != 'verified-only' and not args.allow_legacy:
+            parser.error('--legacy-policy complete-legacy requires --allow-legacy')
         options = {'sources_path': args.sources} if args.sources else {}
         frame = load_archive_features(args.archive, args.start, args.end,
             interval_seconds=args.interval_seconds, allow_legacy=args.allow_legacy,
-            preferred_imports=args.preferred_import, **options)
-    elif args.start is not None or args.end is not None or args.sources or args.allow_legacy or args.preferred_import:
+            preferred_imports=args.preferred_import, legacy_policy=args.legacy_policy, **options)
+    elif (args.start is not None or args.end is not None or args.sources or args.allow_legacy
+          or args.preferred_import or args.legacy_policy != 'verified-only'):
         parser.error('source/window/legacy options require --archive')
     train(holdout_days=args.holdout_days, data_path=args.data_path,
           min_coverage_days=args.min_coverage_days, frame=frame)

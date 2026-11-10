@@ -1,7 +1,7 @@
 """Read measurement windows and generate existing features without CSV files.
 
 Archive mode is explicit. This module never ingests, contacts HA/SQL, or falls
-back to operational CSVs. Legacy values remain ineligible as verified targets.
+back to operational CSVs. Legacy eligibility never implies source verification.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from process_data import process_frame
+from utils.archive_quality import LEGACY_POLICIES, apply_training_policy
 from utils.measurement_reader import MeasurementReader, interval_index
 from utils.measurement_resampling import resample_numeric
 from utils.measurement_sources import MeasurementSource, load_sources, parse_sources
@@ -20,7 +21,7 @@ from utils.measurement_sources import MeasurementSource, load_sources, parse_sou
 BASELOAD_INPUTS = ('outside_temp', 'wind_speed', 'solar_forecast', 'total_power',
                    'solar_actual', 'battery_power', 'gshp_power', 'leaf_power')
 _CONFIG = Path(__file__).resolve().parents[1] / 'config' / 'measurement_sources.yaml'
-_QUALITY_SUFFIXES = ('_source_valid', '_coverage_fraction', '_provenance', '_conflict')
+_QUALITY_SUFFIXES = ('_source_valid', '_coverage_fraction', '_provenance', '_conflict', '_import_ids', '_entities')
 
 
 def default_sources() -> dict[str, list[MeasurementSource]]:
@@ -83,6 +84,8 @@ def load_archive_raw(
         raise ValueError('Category/energy-counter resampling policy is not implemented')
     frames = []
     with MeasurementReader(path) as reader:
+        imports = [dict(row) for row in reader.db.execute(
+            'SELECT id, sha256, source_path, interval_seconds FROM legacy_imports ORDER BY id')]
         left = start
         while left < end:
             right = min(end, left + chunk_seconds)
@@ -105,23 +108,35 @@ def load_archive_raw(
                     columns[name + suffix] = result[suffix[1:]]
             frames.append(pd.DataFrame(columns))
             left = right
-    return pd.concat(frames)
+    out = pd.concat(frames)
+    out.attrs['archive'] = {'archive_path': str(Path(path).resolve()),
+                            'start': start, 'end': end, 'interval_seconds': interval_seconds,
+                            'allow_legacy': allow_legacy, 'preferred_imports': preferred_imports or [],
+                            'imports': imports}
+    return out
 
 
 def load_archive_features(path: str | Path, start: float, end: float, *,
-                          interval_seconds: int = 60, **options) -> pd.DataFrame:
+                          interval_seconds: int = 60, legacy_policy: str = 'verified-only',
+                          **options) -> pd.DataFrame:
     """Include a full preceding day for exact lags, then trim the output window."""
     interval_index(start, end, interval_seconds)
+    if legacy_policy not in LEGACY_POLICIES:
+        raise ValueError('Unknown legacy training policy')
+    if legacy_policy != 'verified-only' and not options.get('allow_legacy', False):
+        raise ValueError('Legacy training policy requires allow_legacy=True')
     if interval_seconds < 60 or 86400 % interval_seconds:
         raise ValueError('Feature resolution must be whole minutes dividing a day')
     if interval_seconds % 60:
         raise ValueError('Feature resolution must be whole minutes')
     raw = load_archive_raw(path, start - 86400, end, interval_seconds=interval_seconds, **options)
-    metadata = [name for name in raw if name.endswith(('_coverage_fraction', '_provenance', '_conflict'))]
+    metadata = [name for name in raw if name.endswith(_QUALITY_SUFFIXES) and not name.endswith('_source_valid')]
     features = process_frame(raw.drop(columns=metadata))
     # Generic numeric processing must not smooth or fabricate archive metadata.
     for name in raw:
         if name.endswith(_QUALITY_SUFFIXES):
             features[name] = raw[name]
+    features = apply_training_policy(raw, features, legacy_policy)
+    features.attrs['archive_training'].update({'start': start, 'end': end, 'context_start': start - 86400})
     lower, upper = pd.to_datetime(start, unit='s', utc=True), pd.to_datetime(end, unit='s', utc=True)
     return features.loc[(features.index >= lower) & (features.index < upper)].copy()

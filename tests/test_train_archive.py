@@ -51,3 +51,37 @@ def test_archive_failure_never_falls_back_to_csv(tmp_path):
             main(['--archive', str(tmp_path / 'absent.sqlite'),
                   '--from', '2026-10-21T00:00:00Z', '--to', '2026-10-22T00:00:00Z'])
     read.assert_not_called()
+
+
+def test_archive_cli_declares_legacy_policy_and_requires_opt_in():
+    window = ['--archive', 'archive.sqlite', '--from', '2026-10-21T00:00:00Z',
+              '--to', '2026-10-22T00:00:00Z']
+    with patch('train_model.load_archive_features', return_value=pd.DataFrame()) as load, \
+         patch('train_model.train'):
+        with pytest.raises(SystemExit):
+            main([*window, '--legacy-policy', 'complete-legacy'])
+        load.assert_not_called()
+        main([*window, '--legacy-policy', 'complete-legacy', '--allow-legacy'])
+        assert load.call_args.kwargs['legacy_policy'] == 'complete-legacy'
+
+
+def test_legacy_policy_saved_with_model_without_claiming_verification(tmp_path, monkeypatch):
+    import json
+    from tests.test_archive_eligibility import raw_frame
+    from utils.archive_quality import apply_training_policy
+    monkeypatch.chdir(tmp_path)
+    raw = raw_frame()
+    values = raw[[name for name in raw if not name.endswith(('_provenance', '_coverage_fraction', '_conflict'))]]
+    frame = apply_training_policy(raw, process_frame(values), 'complete-legacy')
+    model = MagicMock()
+    model.predict.side_effect = lambda features: np.full(len(features), 2.)
+    # More than ten eligible samples after the 24h lag.
+    frame = pd.concat([frame.iloc[-4:]] * 4, ignore_index=True)
+    frame.index = pd.date_range('2026-10-22', periods=len(frame), freq='15min', tz='UTC')
+    with patch('train_model.xgb.XGBRegressor', return_value=model):
+        train(frame=frame, min_coverage_days=.1)
+    model.fit.assert_called_once()
+    metadata = json.loads((tmp_path / 'state/model_training_metadata.json').read_text())
+    assert metadata['archive_training']['legacy_policy'] == 'complete-legacy'
+    assert metadata['archive_training']['legacy_is_source_verified'] is False
+    assert metadata['eligible_rows'] == 16

@@ -69,6 +69,20 @@ def baseload_targets(raw: pd.DataFrame) -> pd.DataFrame:
 
 def select_training_rows(frame: pd.DataFrame) -> pd.DataFrame:
     """Require new target provenance; never silently fit a legacy processed CSV."""
+    policy = frame.attrs.get('archive_training')
+    if policy is not None:
+        if (policy.get('contract_version') != 1
+                or policy.get('legacy_policy') not in {'verified-only', 'complete-legacy'}):
+            raise ValueError('Unsupported archive training policy metadata')
+        required = ['baseload_training_eligible', 'baseload_lag_1h_training_eligible',
+                    'baseload_lag_24h_training_eligible', 'leaf_power_lag_1h_training_eligible',
+                    'leaf_energy_24h_training_eligible', 'outside_temp_training_eligible',
+                    'wind_speed_training_eligible', 'solar_forecast_training_eligible']
+        if any(name not in frame for name in required):
+            raise ValueError('Missing archive eligibility metadata')
+        good = frame[required].astype(str).apply(lambda s: s.str.lower().eq('true')).all(axis=1)
+        good &= np.isfinite(pd.to_numeric(frame.baseload_power, errors='coerce')) & frame.baseload_power.ge(0)
+        return frame.loc[good].sort_index()
     if 'baseload_target_valid' not in frame:
         raise ValueError('Missing baseload quality metadata; regenerate processed data')
     valid = frame.baseload_target_valid.astype(str).str.lower().eq('true')
