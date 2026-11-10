@@ -9,6 +9,21 @@ This app runs as a number of scripts scheduled as systemd units:
 | `run_slow.sh` | At :57 of every hour | SARIMA benchmark prediction (does not affect active plan) |
 | `run_weekly.sh` | 02:00 every Monday | Extracts 730 days, retrains XGBoost + SARIMA, runs analysis for last 14 days |
 
+The table describes deployed no-argument **CSV compatibility** jobs. Explicit
+`--archive` invocations of frequent/weekly instead preview incremental ingestion,
+archive consumers and local training with a single fixed UTC-minute cutoff.
+They do not execute until both `--execute --approve-publish` are provided with
+audited source/policy configuration and a confirmed recorder namespace. The
+same frequent/weekly lock and metering-boundary housekeeping are preserved.
+Training/ingestion/consumer failures stop the archive route without CSV fallback;
+artifact sidecars prevent publishing stale outputs. Returning to no arguments
+selects explicit CSV rollback. See [archive pipelines](ARCHIVE_PIPELINES.md).
+No deployed timer/service was switched by this implementation.
+
+Writing the active plan is itself an actuation boundary: `run_often.py` consumes
+it without needing `push_to_ha.py`. Use isolated shadow tools, not a pipeline
+execution with the final publisher removed, for non-actuating validation.
+
 ## Battery runtime control
 
 The plan's `follow` action (including a manual `follow` override) publishes
@@ -107,8 +122,8 @@ synchronization and the separate slow-task lock. No timer/service is switched
 by this code change. See [SARIMA archive mode](SARIMA_ARCHIVE.md) before invoking
 it; the benchmark normally writes predictions to SQLite unless
 `--no-archive-results` is passed. Never run operational jobs against live state
-as a development test. Frequent/weekly pipelines remain CSV-backed and are not
-archive-ready.
+as a development test. Frequent/weekly scheduled defaults remain CSV-backed;
+their explicit archive routes still require data/evidence and rollout approval.
 
 ```
 # /etc/systemd/system/hepo-slow.timer

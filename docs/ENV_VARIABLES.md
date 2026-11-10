@@ -94,10 +94,22 @@ Consumed by `run_often.py`, `predict_future.py`, `extract_data.py`, `analyze_per
 
 ## GSHP (Ground Source Heat Pump) Settings
 
+Historical archive mode is selected explicitly with CLI flags, not a silent
+environment toggle. Prediction/optimization/evaluation use `--archive PATH
+--cutoff ISO`, with optional dated source and measurement-policy files. Existing
+HA entity knobs continue to configure current telemetry and runtime source
+defaults; they do not retroactively establish historical units, sign, freshness
+or equipment absence. See [archive pipelines](ARCHIVE_PIPELINES.md) and
+[measurement policies](MEASUREMENT_POLICIES.md). No new production environment
+variables are required by the migration.
+
 When `GSHP_OPTIMIZE_ENABLED`, `RESISTIVE_HEATER_OPTIMIZE_ENABLED`, and
 `BULK_HEATER_OPTIMIZE_ENABLED` are all false, the optimizer still accounts for
 autonomous heating electricity. It uses the source-valid shared-meter mean from
-the preceding 24 hours of `state/raw_data.csv` as a constant persistence forecast.
+the preceding 24 hours of `state/raw_data.csv` as a constant persistence forecast
+in CSV compatibility mode. Explicit archive mode uses eligible original shared
+meter bins in the day preceding its fixed cutoff, logs observed coverage and
+fails if none are available; it never retries a CSV or silently assumes zero.
 This is added to battery/grid load, not to heater dispatch: no heater is enabled
 by this forecast. `uncontrolled_heating_kw` in the plan distinguishes it from
 scheduled heating and ML baseload. Observed coverage is logged. Missing history

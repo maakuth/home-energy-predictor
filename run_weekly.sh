@@ -2,10 +2,22 @@
 set -e
 
 # Change to the project directory
-cd "."
+cd "$(dirname "$0")"
 
 # Activate virtual environment
 source .venv/bin/activate
+
+# No-argument scheduled execution keeps the existing CSV rollback route.
+# Explicit archive mode requires independent execution/publication approvals.
+for arg in "$@"; do
+  case "$arg" in
+    --archive|--archive=*) exec python3 -m utils.archive_pipeline --mode weekly "$@" ;;
+  esac
+done
+if [ "$#" -ne 0 ]; then
+  echo "Use --archive PATH for archive mode, or no arguments for CSV rollback." >&2
+  exit 2
+fi
 
 # Use a lockfile to prevent race conditions with run_frequent.sh
 (

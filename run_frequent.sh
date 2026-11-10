@@ -8,6 +8,18 @@ cd "$(dirname "$0")"
 # Activate virtual environment
 source .venv/bin/activate
 
+# Explicit archive mode is dry-run by default. The Python runner owns the same
+# lock and requires --execute plus separate --approve-publish for live controls.
+for arg in "$@"; do
+  case "$arg" in
+    --archive|--archive=*) exec python3 -m utils.archive_pipeline --mode frequent "$@" ;;
+  esac
+done
+if [ "$#" -ne 0 ]; then
+  echo "Use --archive PATH for archive mode, or no arguments for CSV rollback." >&2
+  exit 2
+fi
+
 # Use a lockfile to prevent race conditions with run_daily.sh
 (
   flock -n 200 || { echo "⚠️ Another HEPO process is running. Skipping frequent update."; exit 1; }
