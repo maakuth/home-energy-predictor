@@ -28,6 +28,14 @@ def test_identity_namespace_and_unrelated_database(tmp_path):
         MeasurementArchive(tmp_path / 'hepo.db')
 
 
+def test_sqlite_internal_statistics_do_not_invalidate_archive_identity(tmp_path):
+    path = tmp_path / 'archive.sqlite'
+    with MeasurementArchive(path) as archive:
+        archive.db.execute('ANALYZE')
+    with MeasurementReader(path) as reader:
+        assert reader.version == 2
+
+
 def test_predecessor_evidence_only_commits_with_successful_range(tmp_path):
     path = tmp_path / 'archive.sqlite'
     previous = (1, 5., '10', None)

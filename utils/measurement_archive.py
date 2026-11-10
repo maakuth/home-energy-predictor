@@ -26,7 +26,7 @@ def validate_archive(db: sqlite3.Connection) -> int:
     """Validate identity before any write, including journal-mode changes."""
     version = db.execute('PRAGMA user_version').fetchone()[0]
     app = db.execute('PRAGMA application_id').fetchone()[0]
-    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     if version not in (1, 2):
         raise ValueError(f'Unsupported measurement archive version: {version}')
     expected = set(V1_COLUMNS) | ({'archive_identity', 'predecessor_evidence', 'ingestion_runs'} if version == 2 else set())
