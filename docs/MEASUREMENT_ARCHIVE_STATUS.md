@@ -3,7 +3,13 @@
 Implementation branch: `task/measurement-archive-finish` (extends
 `task/measurement-archive-reader`, preserving all prior archive work). Nothing
 has been merged into `master` or enabled in the live pipeline. Model version:
-1.47.0. No production models were retrained.
+1.47.1. No production models were retrained. Subsequent authorized staging
+imports, recorder backfill, operator confirmations and the isolated candidate
+evaluation are recorded in the [migration run](MEASUREMENT_MIGRATION_RUN_2026-11-10.md).
+The original pre-migration findings below describe the retained original archive;
+the separate migration candidate now contains newer CSV and recorder data.
+Physical-bound support and the migration record extend the implementation on
+`task/measurement-battery-bounds`; neither branch is merged into `master`.
 
 ## Available for explicit offline use
 

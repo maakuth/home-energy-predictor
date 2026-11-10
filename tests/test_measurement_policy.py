@@ -251,3 +251,55 @@ def test_required_units_do_not_accept_unverifiable_legacy_intervals(tmp_path):
         measurements=['test'], policies={'test': policy()}, allow_legacy=True)
     assert out.test.isna().all()
     assert not out.test_unit_verified.any()
+
+
+@pytest.mark.parametrize('bounds', [
+    {'min_value': True}, {'max_value': '10'}, {'min_value': float('nan')},
+    {'max_value': float('inf')}, {'min_value': 10, 'max_value': -10},
+])
+def test_numeric_bounds_require_finite_ordered_numbers(bounds):
+    with pytest.raises(ValueError, match='bound'):
+        parse_policies({'test': policy(**bounds)})
+
+
+def test_physical_bounds_are_inclusive_after_conversion_and_sign():
+    spec = parse_policies({'test': policy(sign=-1, min_value=-10, max_value=10)})['test']
+    attrs = '{"unit_of_measurement":"W"}'
+    assert spec.observation('10000', attrs) == (-10., True)
+    assert spec.observation('-10000', attrs) == (10., True)
+    assert pd.isna(spec.observation('10001', attrs)[0])
+    assert spec.observation('10001', attrs)[1] is False
+    assert pd.isna(spec.observation('-10001', attrs)[0])
+    one_sided = parse_policies({'test': policy(min_value=0)})['test']
+    assert pd.isna(one_sided.observation('-1', attrs)[0])
+
+
+def test_bound_rejection_preserves_raw_events_and_invalidates_partial_bins(tmp_path):
+    attrs = '{"unit_of_measurement":"W"}'
+    events = [(1, 0, '1000', attrs), (2, 30, '1125207', attrs), (3, 60, '0', attrs)]
+    out = load(tmp_path, events, policy(min_value=-10, max_value=10))
+    assert pd.isna(out.test.iloc[0])  # Not a false verified zero/partial-bin mean.
+    assert out.test_coverage_fraction.tolist() == [.5, 1.]
+    assert out.test_source_valid.tolist() == [False, True]
+    assert out.test_unit_verified.tolist() == [False, True]
+    from utils.measurement_reader import MeasurementReader
+    with MeasurementReader(tmp_path / 'archive.sqlite') as reader:
+        assert reader.db.execute('SELECT state FROM observations WHERE recorder_id=2').fetchone()[0] == '1125207'
+    large = load_archive_raw(tmp_path / 'archive.sqlite', 0, 120,
+        sources=parse_sources({'test': [{'entity': 'sensor.test'}]}), measurements=['test'],
+        chunk_seconds=120, policies={'test': policy(min_value=-10, max_value=10)})
+    pd.testing.assert_frame_equal(out, large)
+
+
+def test_omitted_bounds_preserve_existing_numeric_behavior(tmp_path):
+    out = load(tmp_path, [(1, 0, '1125207', '{"unit_of_measurement":"W"}')], policy())
+    assert out.test.tolist() == [1125.207, 1125.207]
+
+
+@pytest.mark.parametrize('kind', ['counter', 'state', 'presence'])
+def test_physical_bounds_cannot_be_used_on_other_policy_kinds(kind):
+    spec = (policy(kind='counter', input_unit='kWh', min_value=0) if kind == 'counter' else
+            policy(kind=kind, input_unit='state', canonical_unit='1', min_value=0,
+                   state_values={'home': 1, 'away': 0}))
+    with pytest.raises(ValueError, match='bound'):
+        parse_policies({'test': spec})

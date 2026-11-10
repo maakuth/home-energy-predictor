@@ -38,7 +38,8 @@ APIs still return materialized frames. See
 Every entry requires `kind`, `input_unit`, `canonical_unit`, and integer `sign`
 (`1` or `-1`). Optional fields are `require_unit` (false), `attribute` (null),
 `unit_attribute` (`unit_of_measurement`), `max_age_seconds` (null),
-`nonnegative` (false), `state_values`, and `aggregation` (`duration`).
+`nonnegative` (false), `state_values`, `aggregation` (`duration`), and numeric-only
+`min_value` / `max_value` (both null).
 The attribute must exactly match every source mapping for the measurement.
 Weather's `wind_speed` must explicitly name `unit_attribute: wind_speed_unit`:
 the entity's generic unit does not verify an attribute's unit.
@@ -59,6 +60,16 @@ numeric conversion or state mapping. `nonnegative` rejects negatives rather
 than clipping them. No freshness threshold is inferred. When supplied, expiry
 uses original observation timestamps, including predecessor observations.
 
+Optional physical bounds are inclusive, finite numbers in **canonical units
+after conversion and sign**. A lower bound must not exceed an upper bound.
+They are explicitly configured from equipment evidence, not learned from a
+replay. An out-of-range observation becomes missing for resampling and target
+eligibility; it is not clipped, averaged away or bridged by CSV fallback inside
+queried recorder coverage. Raw observations remain immutable. A separately
+requested zero-valued correction must retain invalid/source-unverified status;
+it must not be used as a verified zero-battery training label. Bounds do not
+apply implicitly from planner power limits or to category/counter policies.
+
 ## Compatibility conventions and unresolved evidence
 
 Without a policy, numeric behavior is unchanged, **unverified for units**, and
@@ -67,7 +78,8 @@ has no invented expiry. Processor canonical conventions are:
 | Measurements | Canonical convention |
 | --- | --- |
 | total_power | kW, import positive/export negative |
-| solar_actual / solar_forecast | kW, production positive |
+| solar_actual | kW, production positive |
+| solar_forecast | Optional raw daily energy in kWh; excluded from baseload ML |
 | battery_power | W, charging positive/discharging negative |
 | gshp_power | W, full shared meter including resistive elements |
 | leaf_power, AAHP and relay powers | W, consumption positive |

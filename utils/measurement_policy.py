@@ -48,6 +48,8 @@ class MeasurementPolicy:
     nonnegative: bool = False
     state_values: dict[str, float] | None = None
     aggregation: str = 'duration'
+    min_value: float | None = None
+    max_value: float | None = None
 
     def observation(self, state: object, attributes: object) -> tuple[float, bool]:
         """Invalid states/attributes/units are missing, not zero or verified."""
@@ -75,6 +77,11 @@ class MeasurementPolicy:
                 value, self.input_unit, self.canonical_unit)
             value *= self.sign
         if self.nonnegative and value < 0:
+            value = math.nan
+        # Inclusive physical bounds use canonical units after sign conversion.
+        # Preserve raw archive events; a correction is not verified meter truth.
+        if ((self.min_value is not None and value < self.min_value)
+                or (self.max_value is not None and value > self.max_value)):
             value = math.nan
         return value, bool(verified and math.isfinite(value))
 
@@ -109,6 +116,13 @@ def parse_policies(config: dict[str, Any]) -> dict[str, MeasurementPolicy]:
         age = entry.get('max_age_seconds')
         if age is not None and (type(age) not in (int, float) or not math.isfinite(age) or age <= 0):
             raise ValueError('State expiry must be positive and finite')
+        minimum, maximum = entry.get('min_value'), entry.get('max_value')
+        for bound in (minimum, maximum):
+            if bound is not None and (type(bound) not in (int, float) or not math.isfinite(bound)):
+                raise ValueError('Physical bounds must be finite numbers')
+        if minimum is not None or maximum is not None:
+            if entry['kind'] != 'numeric' or (minimum is not None and maximum is not None and minimum > maximum):
+                raise ValueError('Physical bounds require numeric kind and min_value <= max_value')
         mapping = entry.get('state_values')
         categorical = entry['kind'] in {'state', 'presence'}
         if categorical:
