@@ -1,9 +1,9 @@
 # Measurement archive migration status — 2026-11-10
 
-Implementation branch: `task/measurement-archive-migration-next` (extends
+Implementation branch: `task/measurement-archive-finish` (extends
 `task/measurement-archive-reader`, preserving all prior archive work). Nothing
 has been merged into `master` or enabled in the live pipeline. Model version:
-1.45.0. No production models were retrained.
+1.46.0. No production models were retrained.
 
 ## Available for explicit offline use
 
@@ -25,6 +25,22 @@ has been merged into `master` or enabled in the live pipeline. Model version:
 * SQL-LIMIT/keyset-bounded recorder result pages (including equal-time IDs).
 * Transactional legacy import validation of timestamps/alignment, headers,
   duplicate timestamps, malformed rows, empty files and parsed-byte checksums.
+* Fixed-cutoff prediction anchors, Leaf/sauna history, autonomous shared-heating
+  persistence and optimizer thermal observations, without replacing current HA
+  telemetry: [consumer contracts](ARCHIVE_PREDICTION_OPTIMIZER.md).
+* Performance/evolution actuals and diagnostic consumers using the same original
+  five-meter target semantics: [evaluation inventory](ARCHIVE_EVALUATION.md).
+* Explicit category/presence and strict counter-delta policies, unit/sign/
+  attribute validation and configurable expiry: [registry](MEASUREMENT_POLICIES.md).
+* Transactional v1→v2 migrations, archive UUID/application identity, recorder
+  namespace checks, proven predecessors, bounded retry/resume, through-now
+  ingestion and verified SQLite backup/restore: [storage](MEASUREMENT_ARCHIVE_STORAGE.md).
+* Frequent/weekly archive routes with fixed cutoffs, incremental ingestion,
+  local training, failure/sidecar/config-hash checks, locks and explicit rollback:
+  [pipeline contracts](ARCHIVE_PIPELINES.md). Execution also requires rollout
+  approval because active plan writes can actuate without the HA publisher.
+* Single-snapshot feature streaming and early projected training frames. The
+  final fit matrix remains O(rows), not constant-memory model fitting.
 
 ## Evidence, not readiness
 
@@ -38,24 +54,43 @@ The staging archive was not modified. A shared-policy audit of October 5 at
 source-verified targets and zero eligible XGBoost training rows. This small
 window diagnoses missingness; it is not a full-history model evaluation.
 
-## Still required before migration readiness
+The full 733-day two-signal raw profile and real matched legacy shadow are
+recorded in [validation evidence](MEASUREMENT_ARCHIVE_VALIDATION.md). The profile
+processed 1,055,520 rows with bounded day chunks and indexed queries. The real
+72-hour shadow had 459 eligible legacy actuals, zero verified actuals and only
+33 matched previous-day forecast/actual pairs. Agreement of imported CSV bytes
+is not proof of original sensor fidelity or a model ranking.
 
-1. Establish newer CSV source/unit/flag provenance and any approved conflict
-   precedence; only then explicitly import/backfill staging history.
-2. Migrate prediction anchors, sauna/Leaf histories, uncontrolled heating,
-   optimizer thermal observations and performance/evolution actuals. Do not
-   replace immediate-control telemetry with archive history.
-3. Implement energy-counter/category policies, validated unit/sign conversions
-   and evidence-based per-measurement freshness policies.
-4. Finish predecessor ingestion, recorder identity/schema migrations,
-   through-now checkpoints/retries, SQLite-aware backup/restore and large-window
-   memory/query profiling. Keyset paging alone does not solve these concerns.
-5. Run representative full-window shadow comparisons separating verified and
-   legacy-eligible evidence; the new synthetic tests are not model rankings.
-6. Integrate frequent/weekly pipelines with fixed cutoffs, ingestion, locking,
-   failure handling and explicit CSV rollback. They remain CSV-backed today.
-7. Obtain operational rollout approval separately from merging code. Never
-   infer it from this branch or from an audit report.
+## Open evidence/authorization questions
+
+1. **Recorder access and identity:** read-only HA/PostgreSQL metadata/history
+   inspection requires permission. Confirm the stable recorder namespace and
+   whether a database rebuild changed state-ID identity before first binding.
+2. **Measurement dimensions/sign/freshness:** historical wind units and the
+   solar forecast entity's dimension are unresolved. Inference uses hourly
+   `pv_estimate` power; a daily forecast energy sensor cannot be relabelled kW.
+   Supply/verify correct per-period entity/attribute/unit associations, battery
+   sign and evidence-based expiry limits. No thresholds are guessed to obtain
+   coverage. The example registry is intentionally incomplete.
+3. **Recovery imports/backfills:** newer CSVs remain unimported pending source/
+   unit/flag provenance review and explicit staging-write authorization. Existing
+   conflicts stay excluded; no universal file precedence has been selected.
+4. **Physical instrumentation:** confirm active accumulator/tank instrumentation
+   and equipment changeover evidence. Fireplace savings are explicitly blocked
+   in archive mode until audited tank/fireplace features exist, rather than
+   manufacturing zero activity or claiming measured wood heat.
+5. **Representative evaluation and deployment:** authorized verified recorder
+   data, full model-fit resource/quality evaluation, operational WAL/writer
+   profiling, backup scheduling and rollout approval remain operational gates.
+   No timer/service was installed or switched; scheduled defaults remain CSV.
+
+The remaining work depends on these answers/data, not another implicit fallback
+or fabricated eligibility rule. Merge and operational rollout are distinct.
+
+Final integrated validation: **870 non-slow tests passed**, 55 slow tests
+deselected, four passing subtests; repository-wide Pyright and shell syntax
+checks passed. Slow model/planner fits were not rerun. All task commits remain
+unmerged; only the intentional `.pruner` workspace aid is left untracked.
 
 **The system is not migration-ready.** Do not delete source CSVs, snapshots or
 the staging archive, and do not switch schedules as part of code validation.

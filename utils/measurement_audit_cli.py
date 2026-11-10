@@ -37,6 +37,7 @@ def main(argv: list[str] | None = None) -> None:
     audit = commands.add_parser('archive', help='Cheap metadata unless bounded measurements are selected')
     audit.add_argument('--archive', type=Path, required=True)
     audit.add_argument('--sources', type=Path)
+    audit.add_argument('--measurement-policy', type=Path)
     audit.add_argument('--measurement', action='append')
     audit.add_argument('--from', dest='start', type=_timestamp)
     audit.add_argument('--to', dest='end', type=_timestamp)
@@ -86,12 +87,13 @@ def main(argv: list[str] | None = None) -> None:
                     report['backfill_plan'] = backfill_plan(reader, sources, args.start, args.end, args.measurement)
                     if not args.dry_run_backfill and args.measurement:
                         report.update(audit_measurements(reader, sources, args.start, args.end, args.measurement,
-                            interval_seconds=args.interval_seconds, legacy_policy=args.legacy_policy,
-                             preferred_imports=preferred, max_bins=args.max_bins))
+                             interval_seconds=args.interval_seconds, legacy_policy=args.legacy_policy,
+                             preferred_imports=preferred, policy_path=args.measurement_policy, max_bins=args.max_bins))
             if args.training_eligibility:
                 report['training_eligibility'] = audit_training_eligibility(
                     args.archive, args.start, args.end, sources_path=args.sources,
                     interval_seconds=args.interval_seconds, legacy_policy=args.legacy_policy,
+                    policy_path=args.measurement_policy, require_policies=args.measurement_policy is not None,
                     preferred_imports=preferred, max_bins=args.max_bins)
                 report['target_and_lag_eligibility'] = 'evaluated_in_separate_consistent_snapshot'
         print(json.dumps(report, indent=2, allow_nan=False))

@@ -27,9 +27,11 @@ Raw `attrs['archive']` includes `policy_path`, exact-file `policy_sha256` (or
 default-expanded sorted JSON registry, full `policies`, and
 `implicit_policy_measurements`. File parsing and hashing use the same bytes.
 Feature `attrs['archive_training']` retains these fields for model metadata.
-An empty/partial registry must not be called migration-ready. No loader iterator
-was added: the API remains a materialized frame under one read-only snapshot;
-`chunk_seconds` bounds the internal numeric queries, not final-frame memory.
+An empty/partial registry must not be called migration-ready. The integration
+adds `iter_archive_features` for single-snapshot bounded construction and
+`load_archive_training_features` for early training projection; ordinary loader
+APIs still return materialized frames. See
+[memory and snapshot evidence](MEASUREMENT_ARCHIVE_VALIDATION.md).
 
 ## Fields and observation validation
 

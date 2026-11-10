@@ -34,7 +34,9 @@ def setup_inputs(tmp_path, monkeypatch):
     csv = tmp_path / 'explicit.csv'
     raw.to_csv(csv)
     db = tmp_path / 'archive.sqlite'
-    db.touch()
+    from utils.measurement_archive import MeasurementArchive
+    with MeasurementArchive(db):
+        pass
     sources = tmp_path / 'sources.yaml'
     sources.write_text('outside_temp:\n  - entity: sensor.outside\n')
     calls = []
@@ -67,6 +69,28 @@ def test_explicit_loader_contract_and_matched_baseline(tmp_path, monkeypatch):
     assert report['baseline']['legacy_eligible']['matched_rows'] == 0
     assert report['archive_training']['legacy_policy'] == 'verified-only'
     json.dumps(report, allow_nan=False)
+
+
+def test_shadow_forwards_explicit_measurement_policy(tmp_path, monkeypatch):
+    options, calls, _, _, _ = setup_inputs(tmp_path, monkeypatch)
+    policy = tmp_path / 'policy.yaml'
+    policy.write_text('{}')
+    shadow.compare(**options, policy_path=policy)
+    assert calls[0][2]['policy_path'] == policy
+    assert calls[1][2]['require_policies'] is True
+
+
+def test_shadow_csv_reader_streams_large_inputs_and_keeps_only_requested_context(tmp_path):
+    from unittest.mock import patch
+    raw, _, _ = frames()
+    path = tmp_path / 'history.csv'
+    raw.to_csv(path)
+    original = pd.read_csv
+    index = raw.index[-2:]
+    with patch.object(shadow.pd, 'read_csv', wraps=original) as read:
+        result = shadow._read_csv(path, index, 3600)
+    assert read.call_args.kwargs.get('chunksize')
+    assert result.index[-1] == index[-1]
 
 
 def test_legacy_policy_requires_explicit_opt_in(tmp_path, monkeypatch):

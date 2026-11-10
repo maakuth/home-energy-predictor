@@ -14,7 +14,7 @@ import pandas as pd
 from process_data import process_frame
 from utils.archive_features import BASELOAD_INPUTS, load_archive_features, load_archive_raw
 from utils.baseload_quality import baseload_targets
-from utils.measurement_reader import interval_index
+from utils.measurement_reader import MeasurementReader, interval_index
 
 
 _METADATA = ('_source_valid', '_coverage_fraction', '_provenance', '_conflict',
@@ -44,18 +44,31 @@ def _timestamp(value: str) -> float:
 
 
 def _read_csv(path: Path, index: pd.DatetimeIndex, seconds: int) -> pd.DataFrame:
-    frame = pd.read_csv(path)
-    if 'timestamp' not in frame:
-        raise ValueError('CSV requires a timestamp column with explicit timezone')
-    stamps = [_timestamp(str(value)) for value in frame.pop('timestamp')]
-    if any(stamp % seconds for stamp in stamps):
-        raise ValueError('CSV timestamps must align to the declared interval')
-    frame.index = pd.DatetimeIndex(pd.to_datetime(stamps, unit='s', utc=True), name='timestamp')
-    if frame.index.has_duplicates:
-        raise ValueError('Duplicate CSV timestamps')
-    frame = frame.sort_index()
-    if not len(frame) or frame.index[0] > index[0] or frame.index[-1] < index[-1]:
+    context_start = index[0] - pd.Timedelta(days=1)
+    pieces = []
+    first = previous = None
+    columns = []
+    with pd.read_csv(path, chunksize=100000) as chunks:
+        for frame in chunks:
+            if 'timestamp' not in frame:
+                raise ValueError('CSV requires a timestamp column with explicit timezone')
+            stamps = [_timestamp(str(value)) for value in frame.pop('timestamp')]
+            if any(stamp % seconds for stamp in stamps):
+                raise ValueError('CSV timestamps must align to the declared interval')
+            frame.index = pd.DatetimeIndex(pd.to_datetime(stamps, unit='s', utc=True), name='timestamp')
+            if (frame.index.has_duplicates or not frame.index.is_monotonic_increasing
+                    or (len(frame) and previous is not None and frame.index[0] <= previous)):
+                raise ValueError('Duplicate or unordered CSV timestamps; supply a sorted audited file')
+            columns = list(frame.columns)
+            if len(frame):
+                first = frame.index[0] if first is None else first
+                previous = frame.index[-1]
+                selected = frame.loc[(frame.index >= context_start) & (frame.index <= index[-1])]
+                if len(selected):
+                    pieces.append(selected.copy())
+    if first is None or first > index[0] or previous is None or previous < index[-1]:
         raise ValueError('CSV does not span the full requested window; refusing a shorter intersection')
+    frame = pd.concat(pieces) if pieces else pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], tz='UTC'))
     # Preserve interior gaps as missing rows, never shift observations or fill them.
     context = pd.date_range(index[0] - pd.Timedelta(days=1), index[-1],
                             freq=pd.Timedelta(seconds=seconds), name='timestamp')
@@ -102,8 +115,9 @@ def _errors(prediction: pd.Series, actual: pd.Series, mask: pd.Series) -> dict:
 
 def compare(*, csv: str | Path, csv_mode: str, archive: str | Path,
             sources: str | Path, start: float, end: float,
-            interval_seconds: int = 60, allow_legacy: bool = False,
-            legacy_policy: str = 'verified-only', preferred_imports: list[int] | None = None) -> dict:
+             interval_seconds: int = 60, allow_legacy: bool = False,
+             legacy_policy: str = 'verified-only', preferred_imports: list[int] | None = None,
+             policy_path: str | Path | None = None) -> dict:
     """Compare the same [start, end) grid; never silently shorten either input.
 
     Raw CSVs are already legacy-resampled measurements, not recorder events.
@@ -123,13 +137,19 @@ def compare(*, csv: str | Path, csv_mode: str, archive: str | Path,
             raise FileNotFoundError(path)
     csv_frame = _read_csv(Path(csv), index, interval_seconds)
     missing_stamps = csv_frame.attrs['window_missing_timestamps']
-    archive_raw = load_archive_raw(archive, start, end, sources_path=sources,
+    options = {'policy_path': policy_path, 'require_policies': True} if policy_path is not None else {}
+    with MeasurementReader(archive) as reader:
+        archive_raw = load_archive_raw(archive, start, end, sources_path=sources,
                                    interval_seconds=interval_seconds, allow_legacy=allow_legacy,
-                                   preferred_imports=preferred_imports)
-    archive_features = load_archive_features(archive, start, end,
+                                    preferred_imports=preferred_imports, _reader=reader, **options)
+        archive_features = load_archive_features(archive, start, end,
                                             legacy_policy=legacy_policy, sources_path=sources,
                                             interval_seconds=interval_seconds, allow_legacy=allow_legacy,
-                                            preferred_imports=preferred_imports)
+                                            preferred_imports=preferred_imports, _reader=reader, **options)
+    for key in ('source_semantic_sha256', 'policy_semantic_sha256'):
+        if (key in archive_raw.attrs.get('archive', {}) and
+                archive_raw.attrs['archive'][key] != archive_features.attrs.get('archive_training', {}).get(key)):
+            raise ValueError('Measurement source/policy configuration changed during shadow materialization')
     if not archive_raw.index.equals(index) or not archive_features.index.equals(index):
         raise ValueError('Archive loader returned a mismatched window')
     policy_metadata = archive_features.attrs.get('archive_training')
@@ -188,7 +208,7 @@ def compare(*, csv: str | Path, csv_mode: str, archive: str | Path,
                    'archive': str(Path(archive).resolve()), 'sources': str(Path(sources).resolve())},
         'archive_training': policy_metadata,
         'aggregation_note': 'Recorder archive values are time-weighted complete-bin means; legacy CSV extraction used event means and may contain prior filling. Differences are not automatically regressions.',
-        'snapshot_note': 'Raw and feature loaders each use a read-only snapshot; these two snapshots are not atomic together. Use an offline archive for reproducible comparisons.',
+         'snapshot_note': 'Raw and feature loaders share one consistent read-only archive snapshot, closed before comparison/scoring. Source and policy semantic hashes must agree.',
         'csv_actuals_note': note,
         'raw': _differences(csv_frame.reindex(index), archive_raw, BASELOAD_INPUTS) if csv_mode == 'raw' else None,
         'features': _differences(csv_features, archive_features, feature_names),
@@ -206,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--csv-mode', choices=('raw', 'processed'), required=True)
     parser.add_argument('--archive', type=Path, required=True)
     parser.add_argument('--sources', type=Path, required=True)
+    parser.add_argument('--measurement-policy', dest='policy_path', type=Path)
     parser.add_argument('--from', dest='start', required=True)
     parser.add_argument('--to', dest='end', required=True)
     parser.add_argument('--interval-seconds', type=int, default=60)

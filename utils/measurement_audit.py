@@ -13,6 +13,7 @@ import pandas as pd
 from utils.measurement_reader import MeasurementReader, interval_index, numeric
 from utils.measurement_resampling import resample_numeric
 from utils.measurement_sources import MeasurementSource, mapped_ranges
+from utils.measurement_policy import load_policy_registry, require_policy_entries
 
 
 def inventory_csv(path: str | Path, interval_seconds: int = 60) -> dict[str, Any]:
@@ -208,6 +209,7 @@ def audit_measurements(reader: MeasurementReader, sources: dict[str, list[Measur
                        start: float, end: float, measurements: list[str], *,
                        interval_seconds: int = 900, legacy_policy: str = 'verified-only',
                        preferred_imports: list[int] | None = None,
+                       policy_path: str | Path | None = None,
                        max_bins: int = 10080) -> dict[str, Any]:
     """Bounded numeric availability audit, NOT a baseload/lag training gate.
 
@@ -226,13 +228,17 @@ def audit_measurements(reader: MeasurementReader, sources: dict[str, list[Measur
         raise ValueError('Audit bin limit exceeded; narrow the window or explicitly increase --max-bins')
     interval_index(start, end, interval_seconds)
     mapped_ranges(sources, start, end, measurements)
+    policies, policy_sha256 = load_policy_registry(policy_path) if policy_path is not None else ({}, None)
+    if policy_path is not None:
+        require_policy_entries(policies, measurements)
     if any(n in {'ev_position', 'mummun_energy', 'mummun_power',
-                 'resistive_heater_power', 'bulk_heater_power'} for n in measurements):
+                  'resistive_heater_power', 'bulk_heater_power'} and n not in policies for n in measurements):
         raise ValueError('Numeric audit does not infer category/counter/relay policies')
     hashes = {r['id']: r['sha256'] for r in reader.db.execute('SELECT id, sha256 FROM legacy_imports')}
     report: dict[str, Any] = {
         'start': start, 'end': end, 'interval_seconds': interval_seconds,
         'legacy_policy': legacy_policy, 'legacy_availability_included': True,
+        'policy_sha256': policy_sha256,
         'preferred_sha256': [hashes[i] for i in (preferred_imports or [])],
         'measurement_policy_only': True, 'target_and_lag_eligibility': 'not_evaluated',
         'migration_ready': False, 'measurements': {},
@@ -242,7 +248,7 @@ def audit_measurements(reader: MeasurementReader, sources: dict[str, list[Measur
     for name in dict.fromkeys(measurements):
         counts: dict[str, Any] = {key: 0 for key in (
             'bins', 'available_bins', 'full_coverage_bins', 'source_verified_bins',
-            'conflict_bins', 'measurement_eligible_bins')}
+            'conflict_bins', 'measurement_eligible_bins', 'unit_verified_bins')}
         counts['conflict_examples'] = []
         counts['provenance_bins'] = {}
         left = start
@@ -251,7 +257,8 @@ def audit_measurements(reader: MeasurementReader, sources: dict[str, list[Measur
             right = min(end, left + interval_seconds * 1440)
             frame = resample_numeric(reader, sources, name, left, right,
                 interval_seconds=interval_seconds, allow_legacy=True,
-                preferred_imports=preferred_imports,
+                 preferred_imports=preferred_imports,
+                 policy=policies.get(name),
                 nonnegative=name in {'solar_actual', 'gshp_power', 'leaf_power', 'wind_speed'})
             available = frame['value'].notna()
             complete = frame['coverage_fraction'].ge(1 - 1e-9)
@@ -262,7 +269,8 @@ def audit_measurements(reader: MeasurementReader, sources: dict[str, list[Measur
                 eligible &= verified
             counts['bins'] += len(frame)
             for key, mask in [('available_bins', available), ('full_coverage_bins', complete),
-                              ('source_verified_bins', verified), ('conflict_bins', conflict),
+                               ('source_verified_bins', verified), ('conflict_bins', conflict),
+                               ('unit_verified_bins', frame['unit_verified']),
                               ('measurement_eligible_bins', eligible)]:
                 counts[key] += int(mask.sum())
             for kind, number in frame['provenance'].value_counts().items():

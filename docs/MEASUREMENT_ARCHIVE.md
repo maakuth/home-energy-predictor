@@ -44,6 +44,7 @@ Back up runtime state and verify configuration before using them.
 ```sh
 venv/bin/python3 -m utils.measurement_ingest_cli \
   --archive state/measurement_history.sqlite \
+  --recorder-namespace CONFIRMED-RECORDER-IDENTITY \
   --sources config/measurement_sources.yaml \
   --measurement gshp_power \
   --from '2026-10-01T00:00:00+03:00' \
@@ -62,9 +63,10 @@ window again. An old source failure does not prevent trying the new source,
 but any failure makes the command exit nonzero. Missing recorder metadata is a
 failure, not a successful empty historical query.
 
-These two mappings are not yet a complete ingestion inventory for all training
-and inference features. Archive-backed resampling, legacy conflict resolution,
-and consumer migration must be completed before scheduled pipelines can switch.
+These two dated mappings override the full runtime source inventory. The
+ingestion CLI's explicit `--include-default-sources` merges both; it does not
+establish historical units or freshness. Source/registry evidence and rollout
+approval are still required before scheduled pipelines can switch.
 
 ## Read-only interval access
 
@@ -103,7 +105,8 @@ Legacy fallback is disabled unless `allow_legacy=True`. Its native resolution
 must divide the requested output interval. Legacy interval means are integrated
 over their declared duration, not treated as original state-change events.
 Partial coverage is reported, never interpolated into a complete measurement.
-This resampler does not yet implement cumulative-energy reset/delta handling or
+Without an explicit registry, the numeric compatibility resampler does not infer
+cumulative-energy reset/delta handling or
 categorical feature policies; those require separate measurement definitions.
 
 ## October snapshot overlap audit
@@ -140,8 +143,9 @@ extractor and are evaluated at call time; the dated YAML overrides those default
 The initial default selection is the eight baseload inputs: outdoor temperature,
 wind, solar forecast, grid, solar production, battery, shared heating and Leaf.
 Numeric optional sensors and heater relays can be explicitly selected. Category
-and cumulative-energy policies are not implemented yet and are rejected rather
-than silently interpreted as numeric power.
+and cumulative-energy measurements require an explicit
+[interpretation registry](MEASUREMENT_POLICIES.md), rather than being silently
+interpreted as numeric power.
 
 `load_archive_features` includes the preceding 24 hours for lag/rolling context,
 then returns only the requested window. Feature generation uses the existing
@@ -152,7 +156,7 @@ Legacy opt-in does not relax source verification. A separate explicit training
 eligibility policy is documented in [Archive training policy](ARCHIVE_TRAINING_POLICY.md).
 The default one-minute
 aggregation of original recorder events is time-weighted, unlike legacy event
-means; the eligibility and SARIMA changes are associated with model version 1.45.0.
+means; the completed consumer/type/pipeline changes are associated with model version 1.46.0.
 
 XGBoost can now train without reading or producing raw/processed CSV files:
 
@@ -178,7 +182,11 @@ default. No models have been trained against staging data as part of development
 SARIMA now accepts explicit archive windows for both training and benchmark
 prediction; see [SARIMA archive mode](SARIMA_ARCHIVE.md). Read-only
 [inventory/coverage audits](MEASUREMENT_ARCHIVE_AUDIT.md) are also available.
-Inference, optimization and evaluation consumers and scheduled pipelines still
-need migration. Energy/category handling, source/unit provenance validation,
-archive backup/restore tooling and operational cutover validation remain
-outstanding. **The system is not migration-ready.**
+Prediction, optimization, evaluation and diagnostic consumers now accept an
+explicit [fixed-cutoff history context](MEASUREMENT_ARCHIVE_DESIGN.md).
+[Pipeline archive routes](ARCHIVE_PIPELINES.md), strict measurement types and
+[verified backup/restore](MEASUREMENT_ARCHIVE_STORAGE.md) are implemented.
+[Validation evidence](MEASUREMENT_ARCHIVE_VALIDATION.md) separates synthetic
+tests, full-length profiling and legacy-only real shadows. Source/unit/freshness
+evidence, authorized backfills, verified-recorder shadows and deployment approval
+remain outstanding. **The system is not migration-ready for live cutover.**

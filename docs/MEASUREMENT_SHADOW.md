@@ -87,12 +87,20 @@ equal event-mean weight. Thus even matching sources/windows can legitimately
 differ. Legacy imported values do not become recorder events or source-verified
 because they match numerically.
 
-The raw and feature loaders each hold one read-only snapshot, not a single shared
-snapshot across both calls. Use an offline archive for reproducible comparisons;
-concurrent ingestion could change their views. Frames are materialized in
-memory (the CSV is read in full before trimming); choose bounded diagnostic
-inputs/windows. Missing mandatory archive coverage
+Raw and feature reads share one read-only snapshot. Archive output frames are
+materialized for the requested diagnostic window; CSV parsing is streamed and
+retains only that window plus context. Choose bounded diagnostic windows.
+Missing mandatory archive coverage
 can make existing feature coverage checks fail; this is an explicit diagnostic
 failure, never grounds for silently switching to CSV. This command depends on
 the archive loader's explicit legacy eligibility contract and makes no rollout
 or operational-cutover changes.
+## Integrated policies and snapshots
+
+`--measurement-policy PATH` applies the same complete registry to archive raw
+and feature reads. Both now share one consistent read-only snapshot, released
+before scoring; source/policy semantic hashes must match. Input CSVs are streamed
+and retain only the matched window plus preceding-day context. Duplicate or
+unordered timestamps are rejected. See
+[real matched-window evidence](MEASUREMENT_ARCHIVE_VALIDATION.md); agreement of
+already-imported CSV history is not independent recorder verification.
