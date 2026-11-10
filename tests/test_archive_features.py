@@ -144,3 +144,32 @@ def test_explicit_invalid_legacy_flag_cannot_become_eligible(tmp_path):
                                 allow_legacy=True, legacy_policy='complete-legacy')
     assert out.battery_power.isna().all()
     assert not out.baseload_training_eligible.any()
+
+
+def test_explicit_presence_features_preserve_category_rule_and_unknown(tmp_path):
+    path, sources = build(tmp_path)
+    with MeasurementArchive(path) as archive:
+        archive.ingest('device_tracker.car', None, START - 86400, START + 120,
+                       [(100, START - 86400, 'home', None),
+                        (101, START + 60, 'unknown', None)])
+    sources.update(parse_sources({'ev_position': [{'entity': 'device_tracker.car'}]}))
+    policies = {'ev_position': {'kind': 'presence', 'input_unit': 'state',
+        'canonical_unit': '1', 'sign': 1, 'state_values': {'home': 1, 'away': 0},
+        'aggregation': 'any_home'}}
+    out = load_archive_features(path, START, START + 120, sources=sources,
+        measurements=[*sources], policies=policies)
+    assert out.ev_position.iloc[0] == 1
+    assert pd.isna(out.ev_position.iloc[1])
+
+
+def test_optional_numeric_feature_has_no_preinstallation_zeros(tmp_path):
+    path, sources = build(tmp_path)
+    with MeasurementArchive(path) as archive:
+        archive.ingest('sensor.aahp', None, START + 60, START + 120,
+                       [(100, START + 60, '1000', None)])
+    sources.update(parse_sources({'aahp_living_power': [{'entity': 'sensor.aahp',
+        'from': pd.Timestamp(START + 60, unit='s', tz='UTC').isoformat()}]}))
+    out = load_archive_features(path, START, START + 120, sources=sources,
+                               measurements=[*sources])
+    assert pd.isna(out.aahp_living_power.iloc[0])
+    assert pd.notna(out.aahp_living_power.iloc[1])

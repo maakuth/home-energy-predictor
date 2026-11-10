@@ -14,6 +14,7 @@ import pandas as pd
 
 from utils.measurement_reader import MeasurementReader, interval_index, numeric
 from utils.measurement_sources import MeasurementSource, mapped_ranges
+from utils.measurement_policy import MeasurementPolicy, counter_power
 
 
 def _event_value(state: object, attributes: object, attribute: str | None,
@@ -38,6 +39,7 @@ def resample_numeric(
     legacy_interval_seconds: int = 60, preferred_imports: list[int] | None = None,
     state_values: dict[str, float] | None = None, scale: float = 1.0,
     nonnegative: bool = False,
+    policy: MeasurementPolicy | None = None,
 ) -> pd.DataFrame:
     """Return complete-bin means; incomplete bins have NaN, not partial means.
 
@@ -47,6 +49,15 @@ def resample_numeric(
     states inside queried coverage always block legacy fallback. Legacy values
     require opt-in and never set source_valid, even if they cover an entire bin.
     """
+    if policy is not None:
+        for source in sources[measurement]:
+            if source.attribute != policy.attribute:
+                raise ValueError(f'Policy attribute does not match source for {measurement}')
+        if policy.kind == 'counter':
+            return resample_counter(reader, sources, measurement, start, end,
+                                    interval_seconds, policy=policy)
+        max_age_seconds = policy.max_age_seconds
+        nonnegative = policy.nonnegative
     index = interval_index(start, end, interval_seconds)
     ranges = mapped_ranges(sources, start, end, [measurement])
     if not math.isfinite(scale):
@@ -60,7 +71,9 @@ def resample_numeric(
         frame = reader.legacy_numeric(measurement, start, end, legacy_interval_seconds, preferred_imports)
         legacy = {ts.timestamp(): row for ts, row in frame.iterrows() if row.import_ids}
     sums = np.zeros(len(index))
+    maxima = np.zeros(len(index))
     seconds = np.zeros(len(index))
+    verified_seconds = np.zeros(len(index))
     kinds: list[set[str]] = [set() for _ in index]
     conflicts = np.zeros(len(index), dtype=bool)
     imports: list[set[int]] = [set() for _ in index]
@@ -70,6 +83,7 @@ def resample_numeric(
         key = (source.entity, source.attribute or '')
         sid = reader.db.execute('SELECT id FROM sources WHERE entity=? AND attribute=?', key).fetchone()
         events: dict[float, float] = {}
+        verified_events: dict[float, bool] = {}
         coverage: list[tuple[float, float]] = []
         if sid is not None:
             prefix = 'SELECT timestamp, recorder_id, state, attributes FROM observations WHERE source_id=?'
@@ -79,7 +93,12 @@ def resample_numeric(
                                       (sid[0], left, right)).fetchall()
             for row in rows:
                 if source.start is None or row['timestamp'] >= source.start.timestamp():
-                    events[row['timestamp']] = _event_value(row['state'], row['attributes'], source.attribute, state_values)
+                    if policy is None:
+                        events[row['timestamp']] = _event_value(row['state'], row['attributes'], source.attribute, state_values)
+                        verified_events[row['timestamp']] = False
+                    else:
+                        events[row['timestamp']], verified_events[row['timestamp']] = policy.observation(
+                            row['state'], row['attributes'])
             coverage = [(row[0], min(right, row[1])) for row in reader.db.execute(
                 'SELECT start, end FROM fetch_ranges WHERE source_id=? AND end>? AND start<? ORDER BY start',
                 (sid[0], left, right))]
@@ -99,6 +118,7 @@ def resample_numeric(
             coverage_index = bisect_right(coverage_starts, a) - 1
             raw = coverage_index >= 0 and a < coverage[coverage_index][1]
             value = math.nan
+            unit_verified = False
             provenance = 'missing'
             conflict = False
             import_ids: tuple[int, ...] = ()
@@ -106,9 +126,13 @@ def resample_numeric(
                 provenance = 'recorder'
                 if event_index >= 0:
                     t = event_times[event_index]
-                    if t >= coverage[coverage_index][0] and (max_age_seconds is None or a < t + max_age_seconds):
+                    carry = getattr(reader, 'carry_supported', None)
+                    supported = (carry(sid[0], t, coverage[coverage_index][0]) if callable(carry) and sid is not None
+                                 else t >= coverage[coverage_index][0])
+                    if supported and (max_age_seconds is None or a < t + max_age_seconds):
                         value = events[t]
-            elif allow_legacy:
+                        unit_verified = verified_events[t]
+            elif allow_legacy and (policy is None or (policy.kind == 'numeric' and not policy.require_unit)):
                 row = legacy.get((a // legacy_interval_seconds) * legacy_interval_seconds)
                 if row is not None:
                     value = row.value
@@ -129,16 +153,82 @@ def resample_numeric(
                 conflicts[bin_index] |= conflict
                 if math.isfinite(value):
                     sums[bin_index] += value * duration
+                    maxima[bin_index] = max(maxima[bin_index], value)
                     seconds[bin_index] += duration
+                    if unit_verified:
+                        verified_seconds[bin_index] += duration
                 position = stop
 
     complete = np.isclose(seconds, interval_seconds, rtol=0, atol=1e-7)
+    values = maxima if policy is not None and policy.aggregation == 'any_home' else sums / interval_seconds
     return pd.DataFrame({
-        'value': np.where(complete, sums / interval_seconds * scale, np.nan),
+        'value': np.where(complete, values * scale, np.nan),
         'coverage_fraction': seconds / interval_seconds,
         'source_valid': [bool(ok and kind == {'recorder'}) for ok, kind in zip(complete, kinds)],
         'provenance': ['mixed' if len(kind) > 1 else next(iter(kind), 'missing') for kind in kinds],
         'conflict': conflicts,
         'import_ids': [tuple(sorted(ids)) for ids in imports],
         'entities': [tuple(sorted(ids)) for ids in entities],
+        'unit_verified': np.isclose(verified_seconds, interval_seconds, rtol=0, atol=1e-7),
     }, index=index)
+
+
+def resample_counter(reader: MeasurementReader,
+                     sources: dict[str, list[MeasurementSource]], measurement: str,
+                     start: float, end: float, interval_seconds: int = 900,
+                     *, policy: MeasurementPolicy) -> pd.DataFrame:
+    """Exact endpoint counter deltas, never resampled counter means.
+
+    Every bin needs one source, continuous queried coverage, exact observations
+    at both endpoints, and no internal invalid state, reset or declared-age gap.
+    An endpoint may be at a source's exclusive end, but no delta crosses sources.
+    Legacy intervals are not counter observations and are never used here.
+    """
+    index = interval_index(start, end, interval_seconds)
+    records = []
+    for timestamp in index:
+        left = timestamp.timestamp()
+        right = left + interval_seconds
+        ranges = mapped_ranges(sources, left, right, [measurement])
+        value, verified = math.nan, False
+        entities = tuple(sorted({source.entity for _, source, _, _ in ranges}))
+        provenance = 'missing'
+        if len(ranges) == 1 and ranges[0][2:] == (left, right):
+            source = ranges[0][1]
+            if source.attribute != policy.attribute:
+                raise ValueError(f'Policy attribute does not match source for {measurement}')
+            sid = reader.db.execute('SELECT id FROM sources WHERE entity=? AND attribute=?',
+                                    (source.entity, source.attribute or '')).fetchone()
+            if sid is not None:
+                coverage = reader.db.execute(
+                    'SELECT start, end FROM fetch_ranges WHERE source_id=? AND end>? AND start<? ORDER BY start',
+                    (sid[0], left, right)).fetchall()
+                covered_until = left
+                for a, b in coverage:
+                    if a > covered_until:
+                        break
+                    covered_until = max(covered_until, b)
+                if covered_until >= right:
+                    provenance = 'recorder'
+                    observations = reader.db.execute(
+                        'SELECT timestamp, state, attributes FROM observations WHERE source_id=? '
+                        'AND timestamp>=? AND timestamp<=? ORDER BY timestamp, recorder_id',
+                        (sid[0], left, right)).fetchall()
+                    events = {row['timestamp']: policy.observation(row['state'], row['attributes'])
+                              for row in observations}
+                    times = sorted(events)
+                    if times and times[0] == left and times[-1] == right:
+                        values = [events[t][0] for t in times]
+                        valid = all(math.isfinite(v) and v >= 0 for v in values)
+                        valid &= all(b >= a for a, b in zip(values, values[1:]))
+                        if policy.max_age_seconds is not None:
+                            valid &= all(b - a <= policy.max_age_seconds for a, b in zip(times, times[1:]))
+                        if valid:
+                            value = counter_power(values[0], values[-1], interval_seconds, policy)
+                            verified = all(events[t][1] for t in times)
+        valid = math.isfinite(value)
+        records.append({'value': value, 'coverage_fraction': float(valid),
+                        'source_valid': valid, 'provenance': provenance,
+                        'conflict': False, 'import_ids': (), 'entities': entities,
+                        'unit_verified': verified})
+    return pd.DataFrame(records, index=index)

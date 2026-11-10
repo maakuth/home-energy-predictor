@@ -1,0 +1,44 @@
+# Illustrations ONLY, not an audited operational registry. Not loaded by default.
+# Actual recorder metadata and source-history evidence must justify each entry.
+# No default freshness limit is known. Add max_age_seconds only with evidence.
+total_power:
+  kind: numeric
+  input_unit: kW
+  canonical_unit: kW
+  sign: 1  # canonical grid import positive, export negative
+  require_unit: true
+
+battery_power:
+  kind: numeric
+  input_unit: W
+  canonical_unit: W
+  sign: 1  # canonical charging positive, discharging negative
+  require_unit: true
+
+wind_speed:
+  kind: numeric
+  attribute: wind_speed
+  unit_attribute: wind_speed_unit
+  input_unit: km/h  # Example only: not evidence of actual/historical weather units.
+  canonical_unit: km/h
+  sign: 1
+  nonnegative: true
+  require_unit: true
+
+ev_position:
+  kind: presence
+  input_unit: state
+  canonical_unit: '1'
+  sign: 1
+  aggregation: any_home
+  state_values:
+    home: 1
+    away: 0
+  # not_home and named zones intentionally remain unknown until explicitly mapped.
+
+mummun_power:
+  kind: counter
+  input_unit: kWh  # Example, not evidence of the historical counter's unit.
+  canonical_unit: kW
+  sign: 1
+  require_unit: true

@@ -5,6 +5,9 @@ back to operational CSVs. Legacy eligibility never implies source verification.
 """
 from __future__ import annotations
 
+from dataclasses import asdict
+import hashlib
+import json
 import math
 import os
 from pathlib import Path
@@ -16,12 +19,21 @@ from utils.archive_quality import LEGACY_POLICIES, apply_training_policy
 from utils.measurement_reader import MeasurementReader, interval_index
 from utils.measurement_resampling import resample_numeric
 from utils.measurement_sources import MeasurementSource, load_sources, parse_sources
+from utils.measurement_policy import load_policy_registry, parse_policies, require_policy_entries
 
 
 BASELOAD_INPUTS = ('outside_temp', 'wind_speed', 'solar_forecast', 'total_power',
                    'solar_actual', 'battery_power', 'gshp_power', 'leaf_power')
 _CONFIG = Path(__file__).resolve().parents[1] / 'config' / 'measurement_sources.yaml'
-_QUALITY_SUFFIXES = ('_source_valid', '_coverage_fraction', '_provenance', '_conflict', '_import_ids', '_entities')
+_QUALITY_SUFFIXES = ('_source_valid', '_coverage_fraction', '_provenance', '_conflict', '_import_ids', '_entities', '_unit_verified')
+_CANONICAL_UNITS = {
+    **dict.fromkeys(('total_power', 'solar_actual', 'solar_forecast', 'mummun_power'), 'kW'),
+    **dict.fromkeys(('battery_power', 'gshp_power', 'leaf_power', 'aahp_living_power',
+                     'aahp_cabin_power', 'resistive_heater_power', 'bulk_heater_power'), 'W'),
+    **dict.fromkeys(('outside_temp', 'gshp_supply_temp', 'gshp_return_temp', 'sauna_temp',
+                     'gshp_pump_temp', 'accumulator_temp'), 'C'),
+    'ev_soc': '%', 'ev_position': '1',
+}
 
 
 def default_sources() -> dict[str, list[MeasurementSource]]:
@@ -64,12 +76,15 @@ def load_archive_raw(
     sources_path: str | Path = _CONFIG, measurements: list[str] | None = None,
     interval_seconds: int = 60, chunk_seconds: int = 86400,
     allow_legacy: bool = False, preferred_imports: list[int] | None = None,
+    policy_path: str | Path | None = None, policies: dict | None = None,
+    require_policies: bool = False,
 ) -> pd.DataFrame:
     """Resample bounded chunks under a single read-only archive snapshot.
 
     Units match the existing processor: grid/solar are kW, shared heating,
     Leaf, battery and relay estimates are W. Source units must be audited before
-    cutover. Energy-counter and category policies are deliberately not guessed.
+    cutover. Energy-counter and category policies require an explicit registry.
+    require_policies enforces registry completeness; it does not certify units.
     """
     interval_index(start, end, interval_seconds)
     if not isinstance(chunk_seconds, int) or chunk_seconds <= 0 or chunk_seconds % interval_seconds:
@@ -77,11 +92,25 @@ def load_archive_raw(
     if sources is None:
         sources = default_sources()
         sources.update(load_sources(sources_path))
+    if policy_path is not None and policies is not None:
+        raise ValueError('Use either policy_path or policies, not both')
+    registry, policy_sha256 = (load_policy_registry(policy_path) if policy_path is not None
+                               else (parse_policies(policies if policies is not None else {}), None))
+    for name, policy in registry.items():
+        if name in _CANONICAL_UNITS and policy.canonical_unit != _CANONICAL_UNITS[name]:
+            raise ValueError(f'Invalid canonical unit for {name}: expected {_CANONICAL_UNITS[name]}')
+        if ((name == 'ev_position' and policy.kind != 'presence')
+                or (name in {'mummun_energy', 'mummun_power'} and policy.kind != 'counter')):
+            raise ValueError(f'Invalid measurement kind for {name}')
+    if 'mummun_power' in registry and 'mummun_power' not in sources and 'mummun_energy' in sources:
+        sources = {**sources, 'mummun_power': sources['mummun_energy']}
     names = list(dict.fromkeys(measurements if measurements is not None else BASELOAD_INPUTS))
+    if require_policies:
+        require_policy_entries(registry, names)
     if not names or any(name not in sources for name in names):
         raise ValueError('Unknown or empty measurement selection')
-    if any(name in {'ev_position', 'mummun_energy', 'mummun_power'} for name in names):
-        raise ValueError('Category/energy-counter resampling policy is not implemented')
+    if any(name in {'ev_position', 'mummun_energy', 'mummun_power'} and name not in registry for name in names):
+        raise ValueError('Category/energy-counter measurements require an explicit policy')
     frames = []
     with MeasurementReader(path) as reader:
         imports = [dict(row) for row in reader.db.execute(
@@ -92,7 +121,7 @@ def load_archive_raw(
             columns = {}
             for name in names:
                 state_values = None
-                if name in {'resistive_heater_power', 'bulk_heater_power'}:
+                if name not in registry and name in {'resistive_heater_power', 'bulk_heater_power'}:
                     var = 'RESISTIVE_HEATER_POWER_KW' if name == 'resistive_heater_power' else 'BULK_HEATER_POWER_KW'
                     watts = float(os.getenv(var, '6.0')) * 1000
                     if not math.isfinite(watts) or watts <= 0:
@@ -101,6 +130,7 @@ def load_archive_raw(
                 result = resample_numeric(reader, sources, name, left, right,
                     interval_seconds=interval_seconds, allow_legacy=allow_legacy,
                     preferred_imports=preferred_imports, state_values=state_values,
+                    policy=registry.get(name),
                     nonnegative=name in {'solar_actual', 'gshp_power', 'leaf_power', 'wind_speed',
                                          'resistive_heater_power', 'bulk_heater_power'})
                 columns[name] = result['value']
@@ -110,8 +140,15 @@ def load_archive_raw(
             left = right
     out = pd.concat(frames)
     out.attrs['archive'] = {'archive_path': str(Path(path).resolve()),
-                            'start': start, 'end': end, 'interval_seconds': interval_seconds,
-                            'allow_legacy': allow_legacy, 'preferred_imports': preferred_imports or [],
+                             'start': start, 'end': end, 'interval_seconds': interval_seconds,
+                             'allow_legacy': allow_legacy, 'preferred_imports': preferred_imports or [],
+                             'policy_path': str(policy_path) if policy_path is not None else None,
+                             'policies': {name: asdict(policy) for name, policy in registry.items()},
+                             'implicit_policy_measurements': sorted(set(names) - registry.keys()),
+                             'policy_sha256': policy_sha256,
+                             'policy_semantic_sha256': hashlib.sha256(json.dumps(
+                                 {name: asdict(policy) for name, policy in registry.items()},
+                                 sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest(),
                             'imports': imports}
     return out
 
@@ -132,10 +169,20 @@ def load_archive_features(path: str | Path, start: float, end: float, *,
     raw = load_archive_raw(path, start - 86400, end, interval_seconds=interval_seconds, **options)
     metadata = [name for name in raw if name.endswith(_QUALITY_SUFFIXES) and not name.endswith('_source_valid')]
     features = process_frame(raw.drop(columns=metadata))
+    # The compatibility processor treats all float positions as strings and
+    # smooths/fills optional states and counters. These explicit policy outputs
+    # are already interpreted; do not turn missing history into away/zero.
+    for name, policy in raw.attrs['archive']['policies'].items():
+        if name in raw and policy['kind'] in {'state', 'presence', 'counter'}:
+            features[name] = raw[name]
     # Generic numeric processing must not smooth or fabricate archive metadata.
     for name in raw:
         if name.endswith(_QUALITY_SUFFIXES):
             features[name] = raw[name]
+        else:
+            # Numeric compatibility denoising is retained only where input is
+            # actually present; its zero/forward fills cannot establish history.
+            features[name] = features[name].where(raw[name].notna())
     features = apply_training_policy(raw, features, legacy_policy)
     features.attrs['archive_training'].update({'start': start, 'end': end, 'context_start': start - 86400})
     lower, upper = pd.to_datetime(start, unit='s', utc=True), pd.to_datetime(end, unit='s', utc=True)
