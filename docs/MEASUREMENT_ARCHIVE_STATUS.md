@@ -64,7 +64,9 @@ is not proof of original sensor fidelity or a model ranking.
 ## Open evidence/authorization questions
 
 1. **Recorder access and identity:** read-only HA/PostgreSQL metadata/history
-   inspection requires permission. Confirm the stable recorder namespace and
+   inspection must be run on the operator's host: the container cannot reach
+   PostgreSQL. A [standalone evidence collector](MEASUREMENT_EVIDENCE.md) is
+   provided; no live inspection was attempted here. Confirm the stable recorder namespace and
    whether a database rebuild changed state-ID identity before first binding.
 2. **Measurement dimensions/sign/freshness:** historical wind units and the
    solar forecast entity's dimension are unresolved. Inference uses hourly
@@ -87,7 +89,7 @@ is not proof of original sensor fidelity or a model ranking.
 The remaining work depends on these answers/data, not another implicit fallback
 or fabricated eligibility rule. Merge and operational rollout are distinct.
 
-Final integrated validation: **870 non-slow tests passed**, 55 slow tests
+Final integrated validation including the standalone collector: **878 non-slow tests passed**, 55 slow tests
 deselected, four passing subtests; repository-wide Pyright and shell syntax
 checks passed. Slow model/planner fits were not rerun. All task commits remain
 unmerged; only the intentional `.pruner` workspace aid is left untracked.
