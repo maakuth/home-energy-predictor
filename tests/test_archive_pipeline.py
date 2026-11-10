@@ -86,6 +86,33 @@ def test_publish_requires_separate_explicit_approval():
     run.assert_not_called()
 
 
+def test_pipeline_no_longer_ingests_or_requires_the_daily_energy_forecast():
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400, recorder_namespace='ha')
+    command = plan[0]['argv']
+    selected = [command[index + 1] for index, value in enumerate(command) if value == '--measurement']
+    assert 'solar_forecast' not in selected
+    assert 'solar_actual' in selected
+
+
+def test_training_artifacts_need_the_new_feature_contract_before_rollout(tmp_path, monkeypatch):
+    from pathlib import Path
+    from utils.archive_pipeline import _verify_output
+    from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
+    monkeypatch.chdir(tmp_path)
+    state = Path('state')
+    state.mkdir()
+    metadata = {'archive_training': {'end': CUTOFF, 'archive_path': str(Path(request().path).resolve()),
+                                      'legacy_policy': 'verified-only'}}
+    (state / 'model_training_metadata.json').write_text(json.dumps(metadata))
+    (state / 'model_features.json').write_text(json.dumps(BASELOAD_FEATURES))
+    (state / 'energy_model.json').write_text('unchanged model')
+    with pytest.raises(ValueError, match='retrain'):
+        _verify_output('train-xgboost', request())
+    metadata['feature_contract'] = baseload_feature_contract()
+    (state / 'model_training_metadata.json').write_text(json.dumps(metadata))
+    _verify_output('train-xgboost', request())
+
+
 def test_isolated_pipeline_without_any_csv_checks_artifacts_before_explicit_publish(tmp_path, monkeypatch):
     import os
     from pathlib import Path

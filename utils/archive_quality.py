@@ -8,11 +8,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from utils.baseload_quality import baseload_targets
+from utils.baseload_quality import baseload_targets, baseload_feature_contract
 
 LEGACY_POLICIES = ('verified-only', 'complete-legacy')
 METERS = ('total_power', 'solar_actual', 'battery_power', 'gshp_power', 'leaf_power')
-PREDICTOR_INPUTS = ('outside_temp', 'wind_speed', 'solar_forecast')
+PREDICTOR_INPUTS = ('outside_temp', 'wind_speed')
 
 
 def _true(values: pd.Series) -> pd.Series:
@@ -70,5 +70,6 @@ def apply_training_policy(raw: pd.DataFrame, features: pd.DataFrame,
         'legacy_policy': policy,
         'contract_version': 1,
         'legacy_is_source_verified': False,
+        'feature_contract': baseload_feature_contract(),
     }
     return out

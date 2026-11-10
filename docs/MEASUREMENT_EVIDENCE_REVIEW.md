@@ -34,10 +34,10 @@ is available, but namespace continuity still needs operator confirmation.
 
 All 42 inspected tomorrow-forecast recorder events declared daily **energy**
 (`kWh`, `device_class: energy`, `state_class: total`). Legacy extraction reads
-that entity's scalar state into `solar_forecast`; XGBoost includes that feature.
-Inference instead fills `solar_forecast` with target-hour `pv_estimate` power
-from the live `detailedHourly` forecast. The archive default mapping repeats the
-legacy scalar source while its consumer convention is kW.
+that entity's scalar state into `solar_forecast`; old XGBoost models include it.
+Inference fills `solar_forecast` with target-hour `pv_estimate` power
+from the live `detailedHourly` forecast. Before the approved repair, the archive
+default mapping repeated the legacy scalar source with a kW consumer convention.
 
 This is a genuine input-contract mismatch, not a reason to change baseload
 meter truth or optimizer thresholds. Do not relabel kWh as kW, divide a daily
@@ -52,7 +52,7 @@ collector did not distinguish absent arrays from empty arrays. It therefore
 does **not** prove that all historical hourly payloads are unavailable. The
 follow-up collector now reports those attribute shapes explicitly.
 
-### Repair choices still require evidence/design
+### Considered repair choices
 
 1. Discover a retained power forecast or detailed historical payload. Verify its
    target interval, issue/availability time, unit history and coverage before
@@ -69,9 +69,14 @@ follow-up collector now reports those attribute shapes explicitly.
    list. Keep planner solar forecasts independently; they are not the same
    dependency as this ML predictor.
 
-No choice is silently made here. Existing explicit numeric unit policies already refuse
-to convert this energy state into a numeric kW feature. The registry is not
-declared operationally complete, and no production model is retrained.
+The user explicitly selected **option 3: remove the predictor**. Model version
+1.47.0 implements an 18-feature baseload contract (version 2), removing forecast
+source/eligibility/ingestion dependencies. Measured PV remains mandatory for
+baseload truth and live solar forecasts remain in planner output. Optional raw
+archive access labels the legacy daily state kWh, not kW. Archive inference and
+hindsight reject old/mixed model artifacts; explicit retraining and validation
+are still required. CSV compatibility remains available for rollback. No
+production model was retrained and no accuracy improvement is claimed.
 
 ## Retention and instrumentation cautions
 
@@ -84,7 +89,7 @@ declared operationally complete, and no production model is retrained.
   redefine the source boundary or the approximate equipment-removal time.
 * The current solar source begins August 3; battery begins May 12. Earliest
   retained events are **not installation dates** or proof of earlier zero load.
-  Older solar aliases/source periods still need inspection.
+  Older aliases overlap newer histories; no switch boundary is inferred below.
 * The reported EV SoC/position entities have no events after July 15 and current
   HA requests returned HTTP errors (status not recorded). They are not usable
   fresh observations; no replacement entity is guessed.
@@ -106,19 +111,23 @@ indexed endpoint observations, not a full UTC/date/count or forecast-origin
 coverage audit. No SQLite data or WAL was modified. Current host archive
 coverage is still unknown.
 
-## Next bounded host inspection
+## Follow-up report reviewed
 
-Extract the updated standalone collector from the task branch as before, then:
+The supplied `measurement-source-followup.json`, generated November 10 at
+11:54:19 UTC, discovered 38 entities without prefix truncation or PostgreSQL
+errors. Retained `power_now`, `power_in_30_minutes` and `power_in_1_hour` states
+report W and begin April 30, 2025. These are not automatically equivalent to
+future-target hourly forecast vintages. `forecast_this_hour`/`forecast_next_hour`
+report Wh; daily forecast states report kWh.
 
-```sh
-python3 "$script" --discovery-only \
-  --discover-prefix sensor.solcast \
-  --discover-prefix sensor.solarh_63038 \
-  --discover-prefix sensor.solar_plant_real_power \
-  --ha --output measurement-source-followup.json
-```
+Sampled recorder Solcast events have absent `detailedHourly`/`detailedForecast`
+arrays; current HA today/tomorrow entities have populated arrays. This does not
+prove absence throughout all historical events. No historical curves are
+reconstructed and no additional broad discovery report is needed for removal.
 
-This only discovers bounded recorder entity names and samples their metadata;
-it does not choose a feature or source mapping. Prefix limits/truncation and
-forecast attribute presence/empty/unreadable shapes are reported. It preserves
-the original read-only/no-control/no-archive-write safety contract.
+Current solar aliases report W (`sensor.solar_plant_real_power_2`) and kW
+(`sensor.solar_plant_real_power_kw_2`). Older `solarh_63038` histories end around
+August 7 and overlap newer histories. Endpoint dates do not establish a valid
+source-switch boundary or equipment installation date. Namespace continuity,
+battery sign, evidence-based freshness limits and authorized staging writes
+remain operational gates; the reports are not automatically promoted to policy.

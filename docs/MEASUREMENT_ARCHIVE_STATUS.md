@@ -3,7 +3,7 @@
 Implementation branch: `task/measurement-archive-finish` (extends
 `task/measurement-archive-reader`, preserving all prior archive work). Nothing
 has been merged into `master` or enabled in the live pipeline. Model version:
-1.46.0. No production models were retrained.
+1.47.0. No production models were retrained.
 
 ## Available for explicit offline use
 
@@ -14,6 +14,10 @@ has been merged into `master` or enabled in the live pipeline. Model version:
   preserved, five-meter baseload accounting and exact lag/Leaf-energy gates:
   [training policy](ARCHIVE_TRAINING_POLICY.md).
 * Archive XGBoost training with policy/import provenance in model metadata.
+* User-approved removal of the misdimensioned solar-forecast ML predictor;
+  18-feature contract v2, embedded booster/metadata compatibility checks and
+  strict archive-mode rejection of old/mixed artifacts. Measured PV accounting
+  and live planner solar outputs remain intact. Explicit retraining is required.
 * SARIMA archive training and benchmark prediction, materializing and releasing
   a read snapshot before fitting: [SARIMA documentation](SARIMA_ARCHIVE.md).
 * Matched-window, non-actuating CSV/archive processing and repeat-yesterday
@@ -72,9 +76,10 @@ is not proof of original sensor fidelity or a model ranking.
    solar forecast contract are now partially resolved by the supplied report:
    sampled wind is km/h and the current tomorrow-forecast state is **daily kWh**,
    confirming a training/inference mismatch with hourly `pv_estimate` power.
-   See [evidence review and next steps](MEASUREMENT_EVIDENCE_REVIEW.md). An
-   equivalent historical power forecast or an explicit model change is needed;
-   daily energy cannot be relabelled kW.
+   The user selected predictor removal, now implemented; historical hourly
+   forecasts are no longer a baseload training gate. See
+   [evidence review](MEASUREMENT_EVIDENCE_REVIEW.md). Daily energy is not
+   relabelled kW and no nowcast proxy is substituted.
    Supply/verify correct per-period entity/attribute/unit associations, battery
    sign and evidence-based expiry limits. No thresholds are guessed to obtain
    coverage. The example registry is intentionally incomplete.
@@ -93,9 +98,11 @@ is not proof of original sensor fidelity or a model ranking.
 The remaining work depends on these answers/data, not another implicit fallback
 or fabricated eligibility rule. Merge and operational rollout are distinct.
 
-Final integrated validation including evidence review and bounded source discovery: **881 non-slow tests passed**, 55 slow tests
+Integrated validation including predictor removal: **897 non-slow tests passed**, 55 slow tests
 deselected, four passing subtests; repository-wide Pyright and shell syntax
-checks passed. Slow model/planner fits were not rerun. All task commits remain
+checks passed. Full-suite validation: **951 passed, 1 skipped**, four passing
+subtests (including slow tests). These are isolated test results, not production
+retraining or representative model-quality evaluation. All task commits remain
 unmerged; only the intentional `.pruner` workspace aid is left untracked.
 
 **The system is not migration-ready.** Do not delete source CSVs, snapshots or

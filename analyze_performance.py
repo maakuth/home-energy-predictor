@@ -14,6 +14,7 @@ from utils.sqlite_utils import get_db_connection, db_exists
 from utils.git_utils import get_model_version
 from utils.baseload_quality import select_training_rows
 from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
+from utils.baseload_model import validate_baseload_model
 from utils.archive_evaluation import quarter_measurements
 from utils.archive_quality import METERS
 
@@ -378,6 +379,11 @@ def backtest_current_model(df_actual: pd.DataFrame, *, history: ArchiveHistory |
         model.load_model(model_path)
         with open(features_path, 'r') as f:
             features = json.load(f)
+        if history is not None or (frame is not None and 'archive_training' in frame.attrs):
+            with open('state/model_training_metadata.json') as f:
+                metadata = json.load(f)
+            booster = model.get_booster()
+            validate_baseload_model(features, metadata, booster.attr('baseload_feature_contract'), booster.feature_names)
 
         # Load processed features
         df_proc = frame.copy() if frame is not None else pd.read_csv(processed_path, index_col=0)
@@ -412,6 +418,8 @@ def backtest_current_model(df_actual: pd.DataFrame, *, history: ArchiveHistory |
         quarters = predictions.resample('15min').mean().where(predictions.resample('15min').count() >= expected)
         return quarters.dropna().to_frame('hindsight_usage')
     except Exception as e:
+        if history is not None or (frame is not None and 'archive_training' in frame.attrs):
+            raise
         print(f"Error during hindsight backtest: {e}")
         return pd.DataFrame()
 

@@ -76,7 +76,7 @@ class TestTrainModel(unittest.TestCase):
         with open(features_path) as f:
             saved_features = json.load(f)
         expected_features = [
-            'outside_temp', 'wind_speed', 'solar_forecast',
+            'outside_temp', 'wind_speed',
             'leaf_power_lag_1h', 'leaf_energy_24h',
             'baseload_lag_1h', 'baseload_lag_24h',
             'is_extended_complex',

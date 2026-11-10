@@ -25,12 +25,13 @@ from utils.measurement_sources import MeasurementSource, load_sources, parse_sou
 from utils.measurement_policy import load_policy_registry, parse_policies, require_policy_entries
 
 
-BASELOAD_INPUTS = ('outside_temp', 'wind_speed', 'solar_forecast', 'total_power',
+BASELOAD_INPUTS = ('outside_temp', 'wind_speed', 'total_power',
                    'solar_actual', 'battery_power', 'gshp_power', 'leaf_power')
 _CONFIG = Path(__file__).resolve().parents[1] / 'config' / 'measurement_sources.yaml'
 _QUALITY_SUFFIXES = ('_source_valid', '_coverage_fraction', '_provenance', '_conflict', '_import_ids', '_entities', '_unit_verified')
 _CANONICAL_UNITS = {
-    **dict.fromkeys(('total_power', 'solar_actual', 'solar_forecast', 'mummun_power'), 'kW'),
+    **dict.fromkeys(('total_power', 'solar_actual', 'mummun_power'), 'kW'),
+    'solar_forecast': 'kWh',  # Optional legacy/raw daily-energy state, never an ML input.
     **dict.fromkeys(('battery_power', 'gshp_power', 'leaf_power', 'aahp_living_power',
                      'aahp_cabin_power', 'resistive_heater_power', 'bulk_heater_power'), 'W'),
     **dict.fromkeys(('outside_temp', 'gshp_supply_temp', 'gshp_return_temp', 'sauna_temp',
@@ -152,6 +153,7 @@ def load_archive_raw(
             left = right
     out = pd.concat(frames)
     out.attrs['archive'] = {'archive_path': str(Path(path).resolve()),
+                             'measurements': names,
                              'archive_identity': identity,
                              'sources_path': None if explicit_sources else str(Path(sources_path).resolve()),
                              'source_mappings': source_metadata,
@@ -265,8 +267,7 @@ def load_archive_training_features(path: str | Path, start: float, end: float, *
     quality = ['baseload_power', 'baseload_target_valid', 'baseload_training_eligible',
                'baseload_lag_1h_training_eligible', 'baseload_lag_24h_training_eligible',
                'leaf_power_lag_1h_training_eligible', 'leaf_energy_24h_training_eligible',
-               'outside_temp_training_eligible', 'wind_speed_training_eligible',
-               'solar_forecast_training_eligible', 'heating_regime']
+               'outside_temp_training_eligible', 'wind_speed_training_eligible', 'heating_regime']
     frames = []
     quality_summary: dict[str, dict[str, int]] = {}
     stream = iter_archive_features(path, start, end, **options)

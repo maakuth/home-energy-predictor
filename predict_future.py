@@ -18,6 +18,7 @@ from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
 from utils.archive_quality import METERS, apply_training_policy
+from utils.baseload_model import validate_baseload_model
 
 load_dotenv(override=True)
 
@@ -560,6 +561,11 @@ def predict(*, history: ArchiveHistory | None = None) -> None:
         model.load_model('state/energy_model.json')
         with open('state/model_features.json', 'r') as f:
             features = json.load(f)
+        if history is not None:
+            with open('state/model_training_metadata.json') as f:
+                metadata = json.load(f)
+            booster = model.get_booster()
+            validate_baseload_model(features, metadata, booster.attr('baseload_feature_contract'), booster.feature_names)
     except FileNotFoundError:
         if history is not None:
             raise
@@ -612,6 +618,8 @@ def predict(*, history: ArchiveHistory | None = None) -> None:
     X_inference = pd.DataFrame(inference_data)
     missing = set(features) - set(X_inference.columns)
     if missing:
+        if history is not None:
+            raise ValueError(f'Missing archive inference features: {sorted(missing)}; refusing fabricated defaults')
         defaults = {'ev_soc': 80.0}
         print(f"⚠ Model expects features not in inference data: {missing}. Filling with defaults.")
         for f in missing:

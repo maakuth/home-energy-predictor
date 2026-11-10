@@ -9,12 +9,18 @@ import numpy as np
 import pandas as pd
 
 BASELOAD_FEATURES = [
-    'outside_temp', 'wind_speed', 'solar_forecast',
+    'outside_temp', 'wind_speed',
     'leaf_power_lag_1h', 'leaf_energy_24h',
     'baseload_lag_1h', 'baseload_lag_24h', 'is_extended_complex',
     'hour', 'minute', 'quarter_hour', 'day_of_week', 'month',
     'hour_sin', 'hour_cos', 'day_sin', 'day_cos', 'month_sin', 'month_cos',
 ]
+
+
+def baseload_feature_contract() -> dict[str, object]:
+    """Independent of eligibility contract v1; changing inputs requires retraining."""
+    return {'name': 'baseload', 'version': 2, 'target': 'baseload_power', 'target_unit': 'kW',
+            'features': list(BASELOAD_FEATURES), 'excluded_predictors': ['solar_forecast']}
 
 
 def baseload_targets(raw: pd.DataFrame) -> pd.DataFrame:
@@ -77,7 +83,7 @@ def select_training_rows(frame: pd.DataFrame) -> pd.DataFrame:
         required = ['baseload_training_eligible', 'baseload_lag_1h_training_eligible',
                     'baseload_lag_24h_training_eligible', 'leaf_power_lag_1h_training_eligible',
                     'leaf_energy_24h_training_eligible', 'outside_temp_training_eligible',
-                    'wind_speed_training_eligible', 'solar_forecast_training_eligible']
+                    'wind_speed_training_eligible']
         if any(name not in frame for name in required):
             raise ValueError('Missing archive eligibility metadata')
         good = frame[required].astype(str).apply(lambda s: s.str.lower().eq('true')).all(axis=1)

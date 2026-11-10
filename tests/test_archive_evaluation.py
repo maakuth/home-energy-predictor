@@ -144,9 +144,14 @@ def test_archive_hindsight_uses_training_policy_without_processed_csv(tmp_path, 
     state = tmp_path / 'state'
     state.mkdir()
     (state / 'energy_model.json').write_text('{}')
-    (state / 'model_features.json').write_text(json.dumps(['outside_temp']))
+    from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
+    (state / 'model_features.json').write_text(json.dumps(BASELOAD_FEATURES))
+    (state / 'model_training_metadata.json').write_text(json.dumps({'feature_contract': baseload_feature_contract()}))
     history, raw = history_frame()
     frame = pd.DataFrame({'outside_temp': 5.0, 'baseload_power': 3.5}, index=raw.index)
+    for name in BASELOAD_FEATURES:
+        if name not in frame:
+            frame[name] = 0.
     required = ['baseload', 'baseload_lag_1h', 'baseload_lag_24h', 'leaf_power_lag_1h',
                 'leaf_energy_24h', 'outside_temp', 'wind_speed', 'solar_forecast']
     for name in required:
@@ -155,6 +160,8 @@ def test_archive_hindsight_uses_training_policy_without_processed_csv(tmp_path, 
     frame.loc[frame.index[16], 'outside_temp_training_eligible'] = False
     history.features.return_value = frame
     model = Mock()
+    model.get_booster.return_value.feature_names = list(BASELOAD_FEATURES)
+    model.get_booster.return_value.attr.return_value = json.dumps(baseload_feature_contract())
     model.predict.side_effect = lambda features: np.full(len(features), 3.5)
     monkeypatch.setattr('analyze_performance.xgb.XGBRegressor', lambda: model)
     monkeypatch.setattr(pd, 'read_csv', Mock(side_effect=AssertionError('CSV forbidden')))

@@ -1,12 +1,11 @@
 # Archive training eligibility
 
-**Solar feature blocker:** the supplied operator report confirms that the
-default tomorrow-forecast scalar is daily energy (kWh), while inference uses
-hourly forecast power. Do not use that default source to train a production
-XGBoost model. Equivalent power-forecast history or an explicit feature-contract
-change is required; see [evidence review](MEASUREMENT_EVIDENCE_REVIEW.md).
-Eligibility checks do not repair incompatible physical meanings. SARIMA does
-not use this predictor; its measured baseload target contract is unchanged.
+**Approved solar predictor removal (model 1.47.0):** new XGBoost models exclude
+`solar_forecast`. Historical daily energy (kWh) was incompatible with inference's
+hourly forecast power; no replacement forecast history is invented. Measured
+`solar_actual` remains mandatory for target accounting, and live solar forecasts
+remain available to planning. SARIMA target semantics are unchanged. See the
+[evidence review](MEASUREMENT_EVIDENCE_REVIEW.md).
 
 Archive training is opt-in. Scheduled CSV jobs are unchanged; this is not a
 pipeline cutover. Original source verification is never relaxed.
@@ -30,8 +29,9 @@ cannot become eligible through this policy.
 policy. Target values use original aligned meter means before median filters,
 solar substitution or zero fills. Exact 1h/24h lags inherit eligibility from
 their historical timestamps; previous-day Leaf energy requires a complete
-window. Archive XGBoost selection also requires eligible temperature, wind and
-solar forecast rather than admitting imputed weather values.
+window. Archive XGBoost selection also requires eligible temperature and wind
+rather than admitting imputed weather values. No solar-forecast source,
+eligibility column or pipeline ingestion is required for baseload training.
 
 Each measurement retains source validity, coverage fraction, provenance,
 conflict status, contributing import IDs and mapped entities. DataFrame
@@ -41,6 +41,24 @@ single read snapshot before returning for fitting. XGBoost persists this in
 `state/model_training_metadata.json`, alongside eligible/verified target counts
 and eligible date bounds. Metadata lists imports in the archive snapshot;
 per-row import IDs identify actual contributors. No hash precedence is implied.
+
+## Model compatibility
+
+The eligibility policy remains contract version 1. The independent baseload
+feature contract is version 2, with 18 ordered inputs. Training writes it to
+`state/model_training_metadata.json` and embeds it in the booster as
+`baseload_feature_contract`; `state/model_features.json` stores the ordered list.
+Archive prediction and hindsight evaluation require matching metadata, embedded
+contract, ordered feature list and actual booster feature names. Old or mixed
+artifacts fail closed, with no implicit CSV fallback or fabricated features.
+Pipeline training checks also require the current metadata and feature list.
+
+Existing models are not migrated by editing JSON. Explicit retraining and
+representative validation are required before archive-mode use. No-argument CSV
+inference still supports existing persisted feature lists for rollback; newly
+trained CSV models also omit the predictor. Compatibility does not repair an
+old model's dimensional mismatch. No production retraining or quality gain is
+claimed by the code/tests alone.
 
 ```sh
 venv/bin/python3 train_model.py --archive /path/to/staging.sqlite \

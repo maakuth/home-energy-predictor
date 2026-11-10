@@ -124,12 +124,18 @@ def prediction_runtime(history, monkeypatch, tmp_path):
     reader.side_effect = read
     monkeypatch.chdir(tmp_path)
     Path('state').mkdir()
-    Path('state/model_features.json').write_text(json.dumps(['baseload_lag_1h', 'leaf_energy_24h']))
+    from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
+    Path('state/model_features.json').write_text(json.dumps(BASELOAD_FEATURES))
+    Path('state/model_training_metadata.json').write_text(json.dumps({'feature_contract': baseload_feature_contract()}))
     model = Mock()
+    model.get_booster.return_value.feature_names = list(BASELOAD_FEATURES)
+    model.get_booster.return_value.attr.return_value = json.dumps(baseload_feature_contract())
     model.predict.side_effect = lambda features: np.ones(len(features))
     monkeypatch.setattr(prediction.xgb, 'XGBRegressor', Mock(return_value=model))
     solar = {'attributes': {'detailedHourly': [{'period_start': CUTOFF.isoformat(), 'pv_estimate': 1.}]}}
-    monkeypatch.setattr(prediction, 'get_ha_state', lambda entity: solar if 'solcast' in entity else {'state': '40'})
+    monkeypatch.setattr(prediction, 'get_ha_state', lambda entity: (
+        solar if entity.endswith('forecast_today') else
+        {'attributes': {'detailedHourly': []}} if entity.endswith('forecast_tomorrow') else {'state': '40'}))
     monkeypatch.setattr(prediction, 'call_ha_service', Mock(return_value=None))
     monkeypatch.setattr(prediction, 'fetch_states_history', Mock(side_effect=AssertionError('PG history forbidden')))
     monkeypatch.setattr(prediction, 'fetch_market_prices', Mock(return_value=([.1], [0], None, False, False, None)))
@@ -149,7 +155,26 @@ def test_prediction_fixed_cutoff_and_success_metadata(prediction_runtime):
     assert metadata['archive_path'] == str(Path(context.path).resolve())
     assert metadata['legacy_policy'] == 'verified-only'
     assert metadata['model_version'] == 'test-version'
-    assert model.predict.call_args.args[0].iloc[0].tolist() == [6., 24.]
+    inputs = model.predict.call_args.args[0]
+    assert inputs.iloc[0][['baseload_lag_1h', 'leaf_energy_24h']].tolist() == [6., 24.]
+    assert 'solar_forecast' not in inputs
+    assert rows[0]['solar_forecast'] == 1.  # Planner forecast survives predictor removal.
+
+
+@pytest.mark.parametrize('problem', ['old_features', 'missing_contract', 'old_booster'])
+def test_archive_prediction_rejects_incompatible_models_before_writing_outputs(prediction_runtime, problem):
+    context, model = prediction_runtime
+    from utils.baseload_quality import BASELOAD_FEATURES
+    if problem == 'old_features':
+        Path('state/model_features.json').write_text(json.dumps([*BASELOAD_FEATURES, 'solar_forecast']))
+    elif problem == 'missing_contract':
+        Path('state/model_training_metadata.json').write_text('{}')
+    else:
+        model.get_booster.return_value.attr.return_value = None
+    with pytest.raises(ValueError, match='retrain'):
+        prediction.predict(history=context)
+    model.predict.assert_not_called()
+    assert not Path(os.environ['TEST_PREDICTIONS_FILE']).exists()
 
 
 @pytest.mark.parametrize('failure', ['solar', 'model', 'features', 'anchors', 'empty_horizon', 'empty_model'])

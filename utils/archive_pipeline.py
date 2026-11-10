@@ -19,6 +19,7 @@ from utils.archive_features import BASELOAD_INPUTS, default_sources
 from utils.archive_history import ArchiveHistory, add_history_arguments, aware_epoch, history_from_arguments
 from utils.measurement_policy import load_policies, require_policy_entries
 from utils.measurement_sources import load_sources
+from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
 
 _SOURCES = Path(__file__).resolve().parents[1] / 'config' / 'measurement_sources.yaml'
 
@@ -120,6 +121,9 @@ def _configuration_hashes(history: ArchiveHistory) -> dict[str, str]:
 def _verify_output(step: str, history: ArchiveHistory) -> None:
     if step == 'train-xgboost':
         metadata = json.loads(Path('state/model_training_metadata.json').read_text())
+        if (metadata.get('feature_contract') != baseload_feature_contract()
+                or json.loads(Path('state/model_features.json').read_text()) != list(BASELOAD_FEATURES)):
+            raise ValueError('Incompatible baseload feature contract; retrain before archive rollout')
         _verify_context(metadata.get('archive_training') or {}, history)
         if not Path('state/energy_model.json').is_file():
             raise ValueError('Missing trained XGBoost model artifact')

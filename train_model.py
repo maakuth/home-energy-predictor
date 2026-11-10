@@ -8,7 +8,7 @@ import json
 import os
 from datetime import datetime
 from typing import Any
-from utils.baseload_quality import BASELOAD_FEATURES, select_training_rows
+from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract, select_training_rows
 from utils.archive_features import load_archive_features, load_archive_training_features
 from utils.archive_quality import LEGACY_POLICIES
 from utils.git_utils import get_model_version
@@ -27,7 +27,7 @@ def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', mi
     step_seconds = float(df.index.to_series().diff().dt.total_seconds().median())
     print(f"  - Raw rows: {len(df)}")
     
-    # Target (Y): baseload = total home power - gshp_power
+    # Target (Y): aligned home load minus the original shared-heating and Leaf meters.
     target = 'baseload_power'
     
     # Features (X)
@@ -121,11 +121,13 @@ def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', mi
     
     # Save model
     os.makedirs('state', exist_ok=True)
+    model.get_booster().set_attr(baseload_feature_contract=json.dumps(baseload_feature_contract(), sort_keys=True))
     model.save_model('state/energy_model.json')
     with open('state/model_features.json', 'w') as f:
         json.dump(features, f)
     with open('state/model_training_metadata.json', 'w') as f:
         json.dump({'model_version': get_model_version(),
+                   'feature_contract': baseload_feature_contract(),
                    'archive_training': df.attrs.get('archive_training'),
                    'input_mode': 'archive' if 'archive_training' in df.attrs else 'processed-frame-or-csv',
                    'eligible_rows': len(df), 'holdout_days': holdout_days,
