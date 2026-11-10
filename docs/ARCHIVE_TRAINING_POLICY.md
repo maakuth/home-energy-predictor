@@ -1,5 +1,13 @@
 # Archive training eligibility
 
+**Solar feature blocker:** the supplied operator report confirms that the
+default tomorrow-forecast scalar is daily energy (kWh), while inference uses
+hourly forecast power. Do not use that default source to train a production
+XGBoost model. Equivalent power-forecast history or an explicit feature-contract
+change is required; see [evidence review](MEASUREMENT_EVIDENCE_REVIEW.md).
+Eligibility checks do not repair incompatible physical meanings. SARIMA does
+not use this predictor; its measured baseload target contract is unchanged.
+
 Archive training is opt-in. Scheduled CSV jobs are unchanged; this is not a
 pipeline cutover. Original source verification is never relaxed.
 

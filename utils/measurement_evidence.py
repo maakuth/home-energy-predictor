@@ -145,8 +145,10 @@ def summarize_observations(rows: list[tuple[Any, ...]], *, attribute: str | None
     timestamps: list[float] = []
     malformed = invalid = 0
     forecast_keys: set[str] = set()
+    forecast_shapes: dict[str, Counter[str]] = {name: Counter() for name in ('detailedHourly', 'detailedForecast')}
     for timestamp, state, attributes in rows:
         timestamps.append(float(timestamp))
+        attributes_readable = True
         try:
             attrs = json.loads(attributes) if isinstance(attributes, str) else (attributes or {})
             if not isinstance(attrs, dict):
@@ -154,11 +156,16 @@ def summarize_observations(rows: list[tuple[Any, ...]], *, attribute: str | None
         except (ValueError, TypeError):
             malformed += 1
             attrs = {}
+            attributes_readable = False
         metadata = {key: value[:128] if isinstance(value, str) else value for key, value in attrs.items()
                     if key in _METADATA and (value is None or isinstance(value, (str, bool, int)))}
         variants[json.dumps(metadata, sort_keys=True)] += 1
         for key in ('detailedHourly', 'detailedForecast'):
             entries = attrs.get(key)
+            shape = ('unreadable_attributes' if not attributes_readable else
+                     'absent' if key not in attrs else 'empty_list' if entries == [] else
+                     'nonempty_list' if isinstance(entries, list) else 'other_type')
+            forecast_shapes[key][shape] += 1
             if isinstance(entries, list):
                 for entry in entries[:2]:
                     if isinstance(entry, dict):
@@ -186,10 +193,45 @@ def summarize_observations(rows: list[tuple[Any, ...]], *, attribute: str | None
                            'zero': sum(value == 0 for value in values),
                            'positive': sum(value > 0 for value in values)},
         'forecast_entry_keys': sorted(forecast_keys),
+        'forecast_attribute_shapes': {name: dict(counts) for name, counts in forecast_shapes.items()},
         'source_verification': 'not_established',
         'note': 'Bounded sample, not complete coverage. Update gaps do not establish a freshness limit; '
                 'numeric sign alone does not establish charge/discharge semantics. Units are not converted.',
     }
+
+
+def discover_entities(connection: Any, prefixes: list[str], *, limit: int = 100) -> dict[str, Any]:
+    """Inspect a bounded metadata-name catalog, not states or control services."""
+    if (not prefixes or any(not isinstance(prefix, str) or not prefix.strip() or len(prefix) > 255 for prefix in prefixes)
+            or not 1 <= limit <= 500):
+        raise ValueError('Discovery requires nonempty literal prefixes and a limit of 1..500')
+    connection.set_session(readonly=True, autocommit=False)
+    cursor = connection.cursor()
+    entities: set[str] = set()
+    results = []
+    try:
+        cursor.execute('SHOW transaction_read_only')
+        row = cursor.fetchone()
+        if row is None or row[0] != 'on':
+            raise ValueError('Server did not confirm a read-only transaction; refusing discovery')
+        for prefix in dict.fromkeys(prefixes):
+            try:
+                cursor.execute("SET LOCAL statement_timeout = '15s'")
+                cursor.execute("SET LOCAL lock_timeout = '3s'")
+                cursor.execute('''SELECT entity_id FROM states_meta WHERE starts_with(entity_id, %s)
+                    ORDER BY entity_id LIMIT %s''', (prefix, limit + 1))
+                rows = cursor.fetchall()
+                selected = [row[0] for row in rows[:limit]]
+                entities.update(selected)
+                results.append({'prefix': prefix, 'returned': len(selected), 'truncated': len(rows) > limit})
+            except Exception as error:
+                connection.rollback()
+                results.append({'prefix': prefix, 'error_type': type(error).__name__, 'error': str(error)})
+        return {'entities': sorted(entities), 'prefixes': results, 'limit_per_prefix': limit,
+                'note': 'Names are candidates only; units and target/issue-time semantics still require review.'}
+    finally:
+        connection.rollback()
+        cursor.close()
 
 
 def collect_postgres(connection: Any, requests: list[tuple[str, str, str | None]],
@@ -296,6 +338,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--sources', type=Path, help='Optional dated YAML; default is embedded confirmed mappings plus runtime inventory')
     parser.add_argument('--include-default-sources', action='store_true')
     parser.add_argument('--measurement', action='append')
+    parser.add_argument('--discover-prefix', action='append', default=[],
+                        help='Also inspect bounded recorder entity names starting with this literal prefix')
+    parser.add_argument('--discovery-only', action='store_true', help='Only sample discovered entities, not the default inventory')
+    parser.add_argument('--discovery-limit', type=int, default=100, help='Entity-name limit per prefix, 1..500')
     parser.add_argument('--from', dest='start', type=aware_epoch)
     parser.add_argument('--to', dest='end', type=aware_epoch)
     parser.add_argument('--days', type=int, default=7, help='Default bounded sample window (1..31 days)')
@@ -308,6 +354,10 @@ def main(argv: list[str] | None = None) -> None:
         parser.error('--output must be a NEW non-operational JSON path')
     if not 1 <= args.days <= 31 or not 1 <= args.sample_limit <= 10000:
         parser.error('days must be 1..31 and sample-limit 1..10000')
+    if not 1 <= args.discovery_limit <= 500 or any(not prefix.strip() or len(prefix) > 255 for prefix in args.discover_prefix):
+        parser.error('Discovery requires nonempty prefixes and a limit of 1..500')
+    if args.discovery_only and (not args.discover_prefix or args.sources or args.measurement or args.include_default_sources):
+        parser.error('--discovery-only requires --discover-prefix and cannot combine with source/measurement selection')
     if (args.start is None) != (args.end is None):
         parser.error('Supply both --from and --to, or neither')
     end = args.end if args.end is not None else math.floor(time.time() / 60) * 60
@@ -318,18 +368,23 @@ def main(argv: list[str] | None = None) -> None:
         # A standalone copy may live in /tmp; configuration belongs to the
         # operator's project working directory, never the script's parent.
         load_dotenv(dotenv_path=Path.cwd() / '.env', override=False)
-        sources = load_sources(args.sources) if args.sources else {**default_sources(), **_confirmed_sources()}
+        sources = {} if args.discovery_only else (
+            load_sources(args.sources) if args.sources else {**default_sources(), **_confirmed_sources()})
         if args.sources and args.include_default_sources:
             sources = {**default_sources(), **sources}
-        ranges = mapped_ranges(sources, start, end, args.measurement)
+        ranges = [] if args.discovery_only else mapped_ranges(sources, start, end, args.measurement)
         requests = [(name, source.entity, source.attribute) for name, source, _, _ in ranges]
-        if not requests:
+        if not requests and not args.discover_prefix:
             raise ValueError('No selected source periods intersect the inspection window')
         source_ranges: dict[tuple[str, str, str | None], list[tuple[float, float]]] = {}
         for name, source, left, right in ranges:
             source_ranges.setdefault((name, source.entity, source.attribute), []).append((left, right))
         connection = get_db_connection()
+        discovery = None
         try:
+            if args.discover_prefix:
+                discovery = discover_entities(connection, args.discover_prefix, limit=args.discovery_limit)
+                requests.extend((f'discovered:{entity}', entity, None) for entity in discovery['entities'])
             postgres = collect_postgres(connection, requests, start, end, sample_limit=args.sample_limit,
                                         source_ranges=source_ranges)
         finally:
@@ -341,6 +396,8 @@ def main(argv: list[str] | None = None) -> None:
                       'Confirm battery charging sign using independent operational evidence.',
                       'Confirm historical forecast feature matches inference hourly pv_estimate dimensions.',
                       'Choose freshness limits from source behavior/equipment evidence, not this bounded sample alone.']}
+        if discovery is not None:
+            report['discovery'] = discovery
         if args.ha:
             report['home_assistant'] = collect_home_assistant([entity for _, entity, _ in requests])
         text = json.dumps(report, indent=2, allow_nan=False) + '\n'

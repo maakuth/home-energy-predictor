@@ -69,8 +69,12 @@ is not proof of original sensor fidelity or a model ranking.
    provided; no live inspection was attempted here. Confirm the stable recorder namespace and
    whether a database rebuild changed state-ID identity before first binding.
 2. **Measurement dimensions/sign/freshness:** historical wind units and the
-   solar forecast entity's dimension are unresolved. Inference uses hourly
-   `pv_estimate` power; a daily forecast energy sensor cannot be relabelled kW.
+   solar forecast contract are now partially resolved by the supplied report:
+   sampled wind is km/h and the current tomorrow-forecast state is **daily kWh**,
+   confirming a training/inference mismatch with hourly `pv_estimate` power.
+   See [evidence review and next steps](MEASUREMENT_EVIDENCE_REVIEW.md). An
+   equivalent historical power forecast or an explicit model change is needed;
+   daily energy cannot be relabelled kW.
    Supply/verify correct per-period entity/attribute/unit associations, battery
    sign and evidence-based expiry limits. No thresholds are guessed to obtain
    coverage. The example registry is intentionally incomplete.
@@ -89,7 +93,7 @@ is not proof of original sensor fidelity or a model ranking.
 The remaining work depends on these answers/data, not another implicit fallback
 or fabricated eligibility rule. Merge and operational rollout are distinct.
 
-Final integrated validation including the standalone collector: **878 non-slow tests passed**, 55 slow tests
+Final integrated validation including evidence review and bounded source discovery: **881 non-slow tests passed**, 55 slow tests
 deselected, four passing subtests; repository-wide Pyright and shell syntax
 checks passed. Slow model/planner fits were not rerun. All task commits remain
 unmerged; only the intentional `.pruner` workspace aid is left untracked.

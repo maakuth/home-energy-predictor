@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from utils.measurement_evidence import collect_home_assistant, collect_postgres, main, summarize_observations
+from utils.measurement_evidence import collect_home_assistant, collect_postgres, discover_entities, main, summarize_observations
 
 
 def test_summary_distinguishes_energy_forecast_and_attribute_units_without_relabeling():
@@ -14,6 +14,7 @@ def test_summary_distinguishes_energy_forecast_and_attribute_units_without_relab
     assert report['sampled_events'] == 3
     assert report['metadata_variants'][0]['metadata']['unit_of_measurement'] == 'kWh'
     assert report['malformed_attributes'] == 1
+    assert report['forecast_attribute_shapes']['detailedHourly']['unreadable_attributes'] == 1
     assert report['numeric_values']['minimum'] == 20.5
     assert report['source_verification'] == 'not_established'
     wind = summarize_observations([(10., 'sunny', '{"wind_speed":7,"wind_speed_unit":"km/h"}')],
@@ -143,3 +144,41 @@ def test_custom_dated_sources_clip_each_sample_window(tmp_path):
     boundary = datetime.fromisoformat('2026-11-01T00:00:00+00:00').timestamp()
     assert windows[('power', 'sensor.old', None)][0][1] == boundary
     assert windows[('power', 'sensor.new', None)][0][0] == boundary
+
+
+def test_forecast_attribute_presence_is_distinct_from_empty_or_unrecorded_payloads():
+    report = summarize_observations([
+        (1., '1', '{}'), (2., '1', '{"detailedHourly":[]}'),
+        (3., '1', '{"detailedHourly":[{"period_start":"x","pv_estimate":2}]}')], attribute=None)
+    shapes = report['forecast_attribute_shapes']['detailedHourly']
+    assert shapes == {'absent': 1, 'empty_list': 1, 'nonempty_list': 1}
+    assert report['forecast_attribute_shapes']['detailedForecast'] == {'absent': 3}
+
+
+def test_entity_discovery_is_literal_bounded_readonly_and_marks_truncation():
+    connection = MagicMock()
+    cursor = connection.cursor.return_value
+    cursor.fetchone.return_value = ('on',)
+    cursor.fetchall.return_value = [('sensor.solcast_a',), ('sensor.solcast_b',), ('sensor.solcast_c',)]
+    report = discover_entities(connection, ['sensor.solcast_'], limit=2)
+    connection.set_session.assert_called_once_with(readonly=True, autocommit=False)
+    connection.commit.assert_not_called()
+    query = next(call for call in cursor.execute.call_args_list if 'states_meta' in call.args[0])
+    assert 'starts_with(entity_id, %s)' in query.args[0]
+    assert query.args[1] == ('sensor.solcast_', 3)
+    assert report['entities'] == ['sensor.solcast_a', 'sensor.solcast_b']
+    assert report['prefixes'][0]['truncated'] is True
+
+
+def test_discovery_only_cli_does_not_sample_the_default_inventory(tmp_path):
+    connection = MagicMock()
+    with patch('utils.measurement_evidence.get_db_connection', return_value=connection), \
+         patch('utils.measurement_evidence.discover_entities', return_value={
+             'entities': ['sensor.solcast_power_now'], 'prefixes': [], 'limit_per_prefix': 100}) as discover, \
+         patch('utils.measurement_evidence.collect_postgres', return_value={'read_only': True}) as collect, \
+         patch('utils.measurement_evidence.collect_home_assistant') as ha:
+        main(['--discover-prefix', 'sensor.solcast', '--discovery-only',
+              '--output', str(tmp_path / 'discovery.json')])
+    discover.assert_called_once()
+    assert collect.call_args.args[1] == [('discovered:sensor.solcast_power_now', 'sensor.solcast_power_now', None)]
+    ha.assert_not_called()

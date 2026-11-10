@@ -75,3 +75,25 @@ python3 "$script" --from 2026-10-01T00:00:00Z --to 2026-10-22T00:00:00Z \
 No sample/metadata result is automatically turned into a production registry,
 source-verification flag, namespace binding, import precedence or rollout
 approval. Return the report(s) to resolve those remaining design/evidence gates.
+
+## Focused source discovery
+
+`--discover-prefix PREFIX` additionally discovers recorder entity names using a
+literal prefix (no wildcard expansion). Name discovery is read-only and capped
+at 100 entries per prefix by default; `--discovery-limit` accepts 1..500 and
+reports truncation. Those candidates receive the same bounded history/unit
+sampling. Use `--discovery-only` to avoid resampling the default inventory; it
+cannot combine with `--sources`/`--measurement`. An empty discovery remains a
+report, not proof that differently named sensors do not exist.
+
+```sh
+python3 "$script" --discovery-only --discover-prefix sensor.solcast \
+  --discover-prefix sensor.solarh_63038 --discover-prefix sensor.solar_plant_real_power \
+  --ha --output measurement-source-followup.json
+```
+
+Forecast attribute shape counts distinguish absent arrays, empty lists, populated
+lists, other types and unreadable/truncated attributes. They expose no full
+forecast curves. Candidate names such as `power_now` do not establish equivalent
+future-target forecast semantics; target/issue timing still requires review.
+See [the supplied report review](MEASUREMENT_EVIDENCE_REVIEW.md).
