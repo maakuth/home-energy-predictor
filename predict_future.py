@@ -5,6 +5,9 @@ import numpy as np
 import xgboost as xgb
 import json
 import sqlite3
+import argparse
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from dotenv import load_dotenv
@@ -13,6 +16,8 @@ from utils.price_utils import fetch_market_prices
 from utils.db_utils import fetch_states_history
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, get_db_path
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
+from utils.archive_quality import METERS, apply_training_policy
 
 load_dotenv(override=True)
 
@@ -165,7 +170,9 @@ def generate_inference_data(
     
     is_sauna_detected = sauna_states.get('is_sauna_detected', False)
     was_warm_yesterday = sauna_states.get('was_warm_yesterday', False)
-    now = sauna_states.get('now', datetime.now().astimezone())
+    now = sauna_states.get('now')
+    if now is None:
+        now = datetime.now().astimezone()
 
     while current_ts <= end_time:
         # Get nearest solar estimate
@@ -263,7 +270,52 @@ def generate_inference_data(
         
     return inference_data, timestamps
 
-def predict() -> None:
+def archive_inference_anchors(history: ArchiveHistory) -> tuple[float, float, float, float]:
+    """Exact cutoff-relative meter bins; no smoothing, relay subtraction or fill.
+
+    The synthetic cutoff row is only a lag-query position, never a measurement.
+    Applying the training contract there gives the same complete prior-day Leaf
+    energy and exact lags used during fitting without reading future raw data.
+    """
+    raw = history.raw(history.cutoff - 86400, history.cutoff, measurements=list(METERS))
+    cutoff = pd.to_datetime(history.cutoff, unit='s', utc=True)
+    expected = pd.date_range(cutoff - pd.Timedelta(days=1), cutoff, freq='min', inclusive='left')
+    if raw.index.has_duplicates:
+        raise ValueError('Duplicate archive anchor timestamps')
+    raw = raw.reindex(expected.append(pd.DatetimeIndex([cutoff])))
+    targets = apply_training_policy(raw, pd.DataFrame(index=raw.index), history.legacy_policy)
+    row = targets.loc[cutoff]
+    names = ['baseload_lag_1h', 'baseload_lag_24h', 'leaf_power_lag_1h', 'leaf_energy_24h']
+    if not all(pd.notna(row[name]) and np.isfinite(row[name]) for name in names):
+        raise ValueError('Archive inference anchors/Leaf prior-day coverage unavailable; refusing prediction')
+    return (float(targets['baseload_lag_1h'].iloc[-1]),
+            float(targets['baseload_lag_24h'].iloc[-1]),
+            float(targets['leaf_power_lag_1h'].iloc[-1]),
+            float(targets['leaf_energy_24h'].iloc[-1]))
+
+
+def archive_sauna_history(history: ArchiveHistory, current_temp: float) -> tuple[bool, bool]:
+    """Historical sauna evidence, with calendar windows in Europe/Helsinki.
+
+    Missing eligible evidence means no heuristic activation (not measured cold).
+    Archive I/O/configuration errors still propagate rather than falling back.
+    """
+    now = datetime.fromtimestamp(history.cutoff, ZoneInfo('Europe/Helsinki'))
+    yesterday = now.date() - timedelta(days=1)
+    start = datetime.combine(yesterday, datetime.min.time(), tzinfo=now.tzinfo)
+    raw = history.raw(start.timestamp(), history.cutoff, measurements=['sauna_temp'])
+    values = pd.to_numeric(raw['sauna_temp'], errors='coerce').where(history.eligible(raw, 'sauna_temp'))
+    local_index = pd.DatetimeIndex(raw.index).tz_convert('Europe/Helsinki')
+    evening = (local_index.date == yesterday) & (local_index.hour >= 18) & (local_index.hour <= 22)
+    warm = bool(values.loc[evening].gt(50).any())
+    # Compare with the exact 30-minute bin, not an arbitrarily stale sample.
+    target = pd.to_datetime(history.cutoff - 1800, unit='s', utc=True)
+    previous = values.get(target, np.nan)
+    rising = bool(current_temp > 30 and pd.notna(previous) and current_temp > previous + 1)
+    return rising, warm
+
+
+def predict(*, history: ArchiveHistory | None = None) -> None:
     print('Syncing with Home Assistant...')
     
     # fetch solar data
@@ -299,6 +351,8 @@ def predict() -> None:
         
     # Convert to DataFrame
     if not solar_data:
+        if history is not None:
+            raise ValueError('No solar forecast data; refusing archive prediction')
         print('Error: No solar forecast data found.')
         return
         
@@ -338,7 +392,7 @@ def predict() -> None:
         'sensor.tasmota_energy_power_3',
         'sensor.be_stat_batt_power'
     ]
-    anchor_data = fetch_states_history(anchor_entities, hours=25)
+    anchor_data = fetch_states_history(anchor_entities, hours=25) if history is None else {}
     
     def get_baseload_at_lag(hours_back):
         return compute_baseload_at_lag(anchor_data, hours_back, solar_forecast_df=df_solar)
@@ -366,9 +420,12 @@ def predict() -> None:
             print(f"⚠️ Error calculating Leaf features: {e}")
             return 0.0, 0.0
 
-    lag1h_val = get_baseload_at_lag(1)
-    lag24h_val = get_baseload_at_lag(24)
-    leaf_lag1h, leaf_energy_24h = get_leaf_features()
+    if history is None:
+        lag1h_val = get_baseload_at_lag(1)
+        lag24h_val = get_baseload_at_lag(24)
+        leaf_lag1h, leaf_energy_24h = get_leaf_features()
+    else:
+        lag1h_val, lag24h_val, leaf_lag1h, leaf_energy_24h = archive_inference_anchors(history)
 
     print(f"⚓ Anchors - 1h: {lag1h_val:.2f}kW, 24h: {lag24h_val:.2f}kW, Leaf 24h: {leaf_energy_24h:.1f}kWh")
 
@@ -452,7 +509,7 @@ def predict() -> None:
     
     # Is sauna currently heating up? (Rising temperature check)
     is_sauna_detected = False
-    if s_temp_val > 30.0:
+    if history is None and s_temp_val > 30.0:
         # Fetch last 30 mins to see if it's rising
         s_history_dict = fetch_states_history('sensor.sauna_temperature_2', hours=0.5)
         s_history = s_history_dict.get('sensor.sauna_temperature_2', pd.DataFrame())
@@ -467,11 +524,13 @@ def predict() -> None:
 
     # Heuristic for tomorrow's sauna: Was it warm yesterday evening?
     # Check history from yesterday 18:00 to 22:00
-    now_local = datetime.now()
+    now_local = (datetime.fromtimestamp(history.cutoff, ZoneInfo('Europe/Helsinki'))
+                 if history is not None else datetime.now())
     yesterday_evening_start = (now_local - timedelta(days=1)).replace(hour=18, minute=0, second=0)
     # We need to fetch enough history to cover that period
     hours_to_fetch = (now_local - yesterday_evening_start).total_seconds() / 3600.0 + 4.0
-    s_yesterday_dict = fetch_states_history('sensor.sauna_temperature_2', hours=hours_to_fetch)
+    s_yesterday_dict = (fetch_states_history('sensor.sauna_temperature_2', hours=hours_to_fetch)
+                        if history is None else {})
     s_yesterday = s_yesterday_dict.get('sensor.sauna_temperature_2', pd.DataFrame())
      
     was_warm_yesterday = False
@@ -488,6 +547,9 @@ def predict() -> None:
             was_warm_yesterday = True
             print("📅 Sauna was used yesterday evening.")
 
+    if history is not None:
+        is_sauna_detected, was_warm_yesterday = archive_sauna_history(history, s_temp_val)
+
     ev_pos = get_ha_state('device_tracker.xpz_491_position')
     pos_val = 1 if ev_pos and ev_pos.get('state') == 'home' else 0
     print(f"🚗 EV Position: {'Home' if pos_val else 'Away'}")
@@ -499,11 +561,14 @@ def predict() -> None:
         with open('state/model_features.json', 'r') as f:
             features = json.load(f)
     except FileNotFoundError:
+        if history is not None:
+            raise
         print('Error: Model files not found. Run train_model.py first.')
         return
 
     # Determine prediction window: from current interval until end of available solar horizon.
-    now = datetime.now().astimezone() # Use aware datetime, local tz
+    now = (datetime.fromtimestamp(history.cutoff, ZoneInfo('Europe/Helsinki'))
+           if history is not None else datetime.now().astimezone())
     interval = max(PREDICTION_INTERVAL_MINUTES, 1)
     # Round down to the current interval boundary so the plan includes the current slot.
     # This ensures run_often/push_to_ha always find the correct current entry.
@@ -541,6 +606,8 @@ def predict() -> None:
     inference_data, timestamps = generate_inference_data(
         start_time, end_time, interval, df_solar, df_weather, current_states, sauna_states
     )
+    if history is not None and not inference_data:
+        raise ValueError('Empty prediction horizon at history cutoff')
         
     X_inference = pd.DataFrame(inference_data)
     missing = set(features) - set(X_inference.columns)
@@ -551,11 +618,13 @@ def predict() -> None:
             X_inference[f] = defaults.get(f, 0)
     X_inference = X_inference[features]
     predictions = model.predict(X_inference)
+    if history is not None and (len(predictions) != len(timestamps) or not np.isfinite(predictions).all()):
+        raise ValueError('Missing or nonfinite model predictions')
     
     # Combine predictions with timestamps
     # Model output is average Power (kW) for the interval
     results = []
-    generated_at = datetime.now().astimezone().isoformat()
+    generated_at = (now if history is not None else datetime.now().astimezone()).isoformat()
     
     # Fetch market prices to identify fallbacks
     print('Fetching market prices for fallback detection...')
@@ -582,8 +651,19 @@ def predict() -> None:
     
     # Support environment variable override for testing
     predictions_file = os.getenv('TEST_PREDICTIONS_FILE', 'state/future_predictions.json')
-    with open(predictions_file, 'w') as f:
-        json.dump(results, f, indent=2)
+    if history is None:
+        with open(predictions_file, 'w') as f:
+            json.dump(results, f, indent=2)
+    else:
+        temporary = Path(predictions_file + '.tmp')
+        try:
+            with temporary.open('w') as f:
+                json.dump(results, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, predictions_file)
+        finally:
+            temporary.unlink(missing_ok=True)
     print(f'\n✅ Predictions saved to {predictions_file}')
 
     # Archive predictions for feedback loop using SQLite
@@ -667,5 +747,36 @@ def predict() -> None:
     except Exception as e:
         print(f'⚠️ Error archiving to SQLite: {e}')
 
+    if history is not None:
+        metadata = {
+            'history_cutoff': history.cutoff,
+            'archive_path': str(Path(history.path).resolve()),
+            'sources_path': str(Path(history.sources_path).resolve() if history.sources_path else
+                                Path(__file__).resolve().parent / 'config/measurement_sources.yaml'),
+            'measurement_policy_path': str(Path(history.policy_path).resolve()) if history.policy_path else None,
+            'legacy_policy': history.legacy_policy,
+            'allow_legacy': history.allow_legacy,
+            'preferred_imports': list(history.preferred_imports),
+            'model_version': git_version,
+            'generated_at': generated_at,
+            'current_telemetry_and_forecasts': 'live',
+        }
+        training_metadata = Path('state/model_training_metadata.json')
+        if training_metadata.exists():
+            metadata['model_training'] = json.loads(training_metadata.read_text())
+        sidecar = Path(predictions_file).with_name('future_predictions_metadata.json')
+        temporary = sidecar.with_suffix('.json.tmp')
+        try:
+            with temporary.open('w') as f:
+                json.dump(metadata, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, sidecar)
+        finally:
+            temporary.unlink(missing_ok=True)
+
 if __name__ == '__main__':
-    predict()
+    parser = argparse.ArgumentParser(description='Generate baseload predictions')
+    add_history_arguments(parser)
+    args = parser.parse_args()
+    predict(history=history_from_arguments(args))

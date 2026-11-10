@@ -7,10 +7,12 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from utils.archive_history import ArchiveHistory
 
 
 def load_uncontrolled_heating_forecast(
     timestamps: list[Any] | np.ndarray, history_path: str | Path | None = None,
+    *, history: ArchiveHistory | None = None,
 ) -> np.ndarray:
     """Use a 24-hour observed-mean persistence baseline when all dispatch is off.
 
@@ -18,6 +20,8 @@ def load_uncontrolled_heating_forecast(
     Only source-valid raw observations before the first plan slot are used.
     Coverage is logged; unavailable history leaves legacy zero-load behavior
     with an explicit warning rather than inventing measurements.
+    Explicit archive mode instead uses the fixed cutoff's preceding day and
+    raises on unavailable history; partial coverage remains labelled observed.
     """
     zeros = np.zeros(len(timestamps))
     if len(timestamps) == 0:
@@ -27,6 +31,20 @@ def load_uncontrolled_heating_forecast(
                          ('BULK_HEATER_OPTIMIZE_ENABLED', 'false')]:
         if os.getenv(key, default).strip().lower() in {'1', 'true', 'yes', 'on'}:
             return zeros
+    if history is not None:
+        if history_path is not None:
+            raise ValueError('Choose archive history or compatibility history_path, not both')
+        frame = history.raw(history.cutoff - 86400, history.cutoff, measurements=['gshp_power'])
+        power = pd.to_numeric(frame['gshp_power'], errors='coerce')
+        power = power.where(history.eligible(frame, 'gshp_power') & np.isfinite(power) & power.ge(0)).dropna()
+        print(f'Uncontrolled heating archive coverage: {len(power)}/1440 eligible minute samples '
+              f'(policy={history.legacy_policy}).')
+        if power.empty:
+            raise ValueError('Archive uncontrolled heating history unavailable; refusing zero-load fallback')
+        mean_kw = float(power.mean()) / 1000.0
+        print(f'Uncontrolled heating forecast: {mean_kw:.3f} kW (24h observed mean; '
+              'not weather-adjusted). Heating dispatch remains disabled.')
+        return np.full(len(timestamps), mean_kw)
     path = Path(history_path) if history_path is not None else Path(os.getenv('TEST_TMP_DIR', 'state')) / 'raw_data.csv'
     try:
         frame = pd.read_csv(path, index_col=0, low_memory=False)

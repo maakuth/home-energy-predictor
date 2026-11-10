@@ -4,6 +4,9 @@ import json
 import numpy as np
 import pandas as pd
 import sqlite3
+import argparse
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from dotenv import load_dotenv
@@ -25,11 +28,12 @@ from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPla
 from battery_planners.joint_linprog import JointLinprogPlanner, leaf_charging_allowed
 from utils.plan_time import current_plan_entry
 from utils.uncontrolled_heating import load_uncontrolled_heating_forecast
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
 
 load_dotenv(override=True)
 
 
-def write_plan_atomically(plan_file: str, plan: list[dict[str, Any]]) -> None:
+def write_plan_atomically(plan_file: str, plan: list[dict[str, Any]] | dict[str, Any]) -> None:
     """Publish a complete plan in one replacement operation for live readers."""
     temp_file = f'{plan_file}.tmp'
     try:
@@ -665,17 +669,50 @@ select_gshp_initial_temp = get_gshp_initial_temp
 
 
 
-def optimize() -> None:
+def archive_fireplace_detected(history: ArchiveHistory) -> bool:
+    """Thermal trend evidence only; never replace current live control state.
+
+    Disabled/missing instrumentation yields no fireplace evidence. Read errors
+    propagate; archive mode never asks PostgreSQL for a replacement history.
+    """
+    if not os.getenv('GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila').strip():
+        return False
+    raw = history.raw(history.cutoff - 3600, history.cutoff,
+                      measurements=['accumulator_temp', 'gshp_power'])
+    # Only adjacent eligible final bins establish a recent rise. Dropping gaps
+    # and differencing would silently pair unrelated/stale observations.
+    index = pd.to_datetime([history.cutoff - 120, history.cutoff - 60], unit='s', utc=True)
+    raw = raw.reindex(index)
+    if not all(history.eligible(raw, name).all() for name in ('accumulator_temp', 'gshp_power')):
+        return False
+    return bool((raw.accumulator_temp.iloc[-1] - raw.accumulator_temp.iloc[-2]) * 15 > .3
+                and raw.gshp_power.iloc[-1] < 100)
+
+
+def optimize(*, history: ArchiveHistory | None = None) -> None:
+    planning_now = (datetime.fromtimestamp(history.cutoff, ZoneInfo('Europe/Helsinki'))
+                    if history is not None else datetime.now().astimezone())
     print('Loading predictions...')
     try:
         predictions_data, predictions, prediction_timestamps, prediction_solar, sarima_lower, sarima_upper, prediction_solar_p10, prediction_solar_p90 = load_predictions()
     except FileNotFoundError:
+        if history is not None:
+            raise
         print('Error: future_predictions.json not found. Run predict_future.py first.')
         return
+    except KeyError as error:
+        if history is not None:
+            raise ValueError('Empty or incomplete predictions; refusing archive optimization') from error
+        raise
+
+    if history is not None and (not len(predictions) or not np.isfinite(predictions).all()):
+        raise ValueError('Empty or nonfinite predictions; refusing archive optimization')
 
     print('Fetching market prices...')
     market_prices, is_fallback_price, price_source, is_inclusive, tomorrow_valid, export_prices_base = fetch_market_prices(prediction_timestamps, get_plan_interval_minutes())
     if market_prices is None or is_fallback_price is None:
+        if history is not None:
+            raise ValueError('Market prices unavailable; refusing archive optimization')
         print('Error: Could not fetch market prices from Home Assistant sensors.')
         return
 
@@ -687,7 +724,7 @@ def optimize() -> None:
     if settled_prices is not None:
         spot_reference = update_monthly_spot_reference(
             settled_prices,
-            datetime.now().astimezone().date(),
+            planning_now.date(),
             os.getenv('KULUTUSVAIKUTUS_STATE_FILE', 'state/kulutusvaikutus_state.json'),
         )
     import_prices, export_prices = build_tariff_prices(
@@ -700,11 +737,11 @@ def optimize() -> None:
 
     # Determine opportunity-cost lookahead window based on spot price availability
     from datetime import time
-    now = datetime.now()
+    now = planning_now if history is not None else datetime.now()
     if tomorrow_valid:
-        end_of_price_horizon = datetime.combine(now.date() + timedelta(days=1), time.max)
+        end_of_price_horizon = datetime.combine(now.date() + timedelta(days=1), time.max, tzinfo=now.tzinfo)
     else:
-        end_of_price_horizon = datetime.combine(now.date(), time.max)
+        end_of_price_horizon = datetime.combine(now.date(), time.max, tzinfo=now.tzinfo)
     max_lookahead_hours = (end_of_price_horizon - now).total_seconds() / 3600.0
     print(f"Spot price horizon: tomorrow_valid={tomorrow_valid}, max_lookahead_hours={max_lookahead_hours:.1f}h")
 
@@ -732,7 +769,7 @@ def optimize() -> None:
         # Get recent accumulator temperature history (last 30 minutes)
         acc_temp_history = (
             fetch_states_history(accumulator_entity, hours=1)
-            if accumulator_entity else {}
+            if accumulator_entity and history is None else {}
         )
         acc_df = acc_temp_history.get(accumulator_entity, pd.DataFrame())
         
@@ -753,6 +790,9 @@ def optimize() -> None:
                 is_fireplace_currently_on = (acc_roc_15m > 0.3) and (gshp_power_state is not None and float(gshp_power_state.get('state', 0)) < 100)
     except Exception as e:
         print(f"⚠️ Error detecting fireplace status: {e}")
+
+    if history is not None:
+        is_fireplace_currently_on = archive_fireplace_detected(history)
 
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
@@ -833,7 +873,8 @@ def optimize() -> None:
     
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.
-    uncontrolled_heating_kw = load_uncontrolled_heating_forecast(prediction_timestamps)
+    uncontrolled_heating_kw = (load_uncontrolled_heating_forecast(prediction_timestamps, history=history)
+                               if history is not None else load_uncontrolled_heating_forecast(prediction_timestamps))
     battery_optimization_load_kw = predictions + uncontrolled_heating_kw + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw
 
     # NOTE: planned_ev_kw is NOT included in total_planned_load_kw.
@@ -1160,5 +1201,24 @@ def optimize() -> None:
     except Exception as e:
         print(f'⚠️ Error archiving optimized plan to SQLite: {e}')
 
+    if history is not None:
+        metadata = {
+            'history_cutoff': history.cutoff,
+            'archive_path': str(Path(history.path).resolve()),
+            'sources_path': str(Path(history.sources_path).resolve() if history.sources_path else
+                                Path(__file__).resolve().parent / 'config/measurement_sources.yaml'),
+            'measurement_policy_path': str(Path(history.policy_path).resolve()) if history.policy_path else None,
+            'legacy_policy': history.legacy_policy,
+            'allow_legacy': history.allow_legacy,
+            'preferred_imports': list(history.preferred_imports),
+            'model_version': git_version,
+            'generated_at': generated_at,
+            'current_telemetry_and_forecasts': 'live',
+        }
+        write_plan_atomically(str(Path(plan_file).with_name('optimization_plan_metadata.json')), metadata)
+
 if __name__ == '__main__':
-    optimize()
+    parser = argparse.ArgumentParser(description='Optimize the energy plan')
+    add_history_arguments(parser)
+    args = parser.parse_args()
+    optimize(history=history_from_arguments(args))
