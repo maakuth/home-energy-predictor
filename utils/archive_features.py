@@ -6,6 +6,8 @@ back to operational CSVs. Legacy eligibility never implies source verification.
 from __future__ import annotations
 
 from dataclasses import asdict
+from contextlib import nullcontext
+from collections.abc import Iterator
 import hashlib
 import json
 import math
@@ -16,6 +18,7 @@ import pandas as pd
 
 from process_data import process_frame
 from utils.archive_quality import LEGACY_POLICIES, apply_training_policy
+from utils.baseload_quality import BASELOAD_FEATURES
 from utils.measurement_reader import MeasurementReader, interval_index
 from utils.measurement_resampling import resample_numeric
 from utils.measurement_sources import MeasurementSource, load_sources, parse_sources
@@ -78,6 +81,7 @@ def load_archive_raw(
     allow_legacy: bool = False, preferred_imports: list[int] | None = None,
     policy_path: str | Path | None = None, policies: dict | None = None,
     require_policies: bool = False,
+    _reader: MeasurementReader | None = None,
 ) -> pd.DataFrame:
     """Resample bounded chunks under a single read-only archive snapshot.
 
@@ -89,6 +93,7 @@ def load_archive_raw(
     interval_index(start, end, interval_seconds)
     if not isinstance(chunk_seconds, int) or chunk_seconds <= 0 or chunk_seconds % interval_seconds:
         raise ValueError('Chunk size must be positive and divisible by the interval')
+    explicit_sources = sources is not None
     if sources is None:
         sources = default_sources()
         sources.update(load_sources(sources_path))
@@ -112,7 +117,14 @@ def load_archive_raw(
     if any(name in {'ev_position', 'mummun_energy', 'mummun_power'} and name not in registry for name in names):
         raise ValueError('Category/energy-counter measurements require an explicit policy')
     frames = []
-    with MeasurementReader(path) as reader:
+    source_metadata = {name: [{'entity': source.entity, 'attribute': source.attribute,
+                              'from': source.start.isoformat() if source.start else None,
+                              'to': source.end.isoformat() if source.end else None}
+                             for source in periods] for name, periods in sources.items()}
+    identity = None
+    with (MeasurementReader(path) if _reader is None else nullcontext(_reader)) as reader:
+        if reader.version >= 2:
+            identity = dict(reader.db.execute('SELECT * FROM archive_identity').fetchone())
         imports = [dict(row) for row in reader.db.execute(
             'SELECT id, sha256, source_path, interval_seconds FROM legacy_imports ORDER BY id')]
         left = start
@@ -140,6 +152,11 @@ def load_archive_raw(
             left = right
     out = pd.concat(frames)
     out.attrs['archive'] = {'archive_path': str(Path(path).resolve()),
+                             'archive_identity': identity,
+                             'sources_path': None if explicit_sources else str(Path(sources_path).resolve()),
+                             'source_mappings': source_metadata,
+                             'source_semantic_sha256': hashlib.sha256(json.dumps(
+                                 source_metadata, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                              'start': start, 'end': end, 'interval_seconds': interval_seconds,
                              'allow_legacy': allow_legacy, 'preferred_imports': preferred_imports or [],
                              'policy_path': str(policy_path) if policy_path is not None else None,
@@ -155,6 +172,7 @@ def load_archive_raw(
 
 def load_archive_features(path: str | Path, start: float, end: float, *,
                           interval_seconds: int = 60, legacy_policy: str = 'verified-only',
+                          validate_coverage: bool = True,
                           **options) -> pd.DataFrame:
     """Include a full preceding day for exact lags, then trim the output window."""
     interval_index(start, end, interval_seconds)
@@ -168,7 +186,8 @@ def load_archive_features(path: str | Path, start: float, end: float, *,
         raise ValueError('Feature resolution must be whole minutes')
     raw = load_archive_raw(path, start - 86400, end, interval_seconds=interval_seconds, **options)
     metadata = [name for name in raw if name.endswith(_QUALITY_SUFFIXES) and not name.endswith('_source_valid')]
-    features = process_frame(raw.drop(columns=metadata))
+    features = process_frame(raw.drop(columns=metadata), solar_fallback=False,
+                              validate_coverage=validate_coverage)
     # The compatibility processor treats all float positions as strings and
     # smooths/fills optional states and counters. These explicit policy outputs
     # are already interpreted; do not turn missing history into away/zero.
@@ -187,3 +206,86 @@ def load_archive_features(path: str | Path, start: float, end: float, *,
     features.attrs['archive_training'].update({'start': start, 'end': end, 'context_start': start - 86400})
     lower, upper = pd.to_datetime(start, unit='s', utc=True), pd.to_datetime(end, unit='s', utc=True)
     return features.loc[(features.index >= lower) & (features.index < upper)].copy()
+
+
+def iter_archive_features(path: str | Path, start: float, end: float, *,
+                           interval_seconds: int = 60, chunk_seconds: int = 86400,
+                           legacy_policy: str = 'verified-only', **options) -> Iterator[pd.DataFrame]:
+    """Bound feature memory with exact day context and seven-bin median halos.
+
+    The generator owns one snapshot; exhaust it or call close() on early exit.
+    Do not fit models while holding the generator open. Empty/invalid chunks are
+    retained as ineligible rows, not filled merely to pass coverage diagnostics.
+    """
+    interval_index(start, end, interval_seconds)
+    if chunk_seconds <= 0 or chunk_seconds % interval_seconds:
+        raise ValueError('Feature chunks must be positive and interval-aligned')
+    options = dict(options)
+    inferred_sources = options.get('sources') is None
+    sources_path = options.get('sources_path', _CONFIG)
+    if options.get('sources') is None:
+        options['sources'] = {**default_sources(), **load_sources(sources_path)}
+    policy_path = options.pop('policy_path', None)
+    policy_hash = None
+    if policy_path is not None:
+        if options.get('policies') is not None:
+            raise ValueError('Use either policy_path or policies, not both')
+        options['policies'], policy_hash = load_policy_registry(policy_path)
+    with MeasurementReader(path) as reader:
+        left = start
+        while left < end:
+            right = min(end, left + chunk_seconds)
+            halo_end = min(end, right + 7 * interval_seconds)
+            frame = load_archive_features(path, left, halo_end, interval_seconds=interval_seconds,
+                legacy_policy=legacy_policy, validate_coverage=False, chunk_seconds=chunk_seconds,
+                _reader=reader, **options)
+            frame = frame.loc[frame.index < pd.Timestamp(right, unit='s', tz='UTC')].copy()
+            for key in ('archive', 'archive_training'):
+                if key not in frame.attrs:
+                    continue
+                metadata = frame.attrs[key]
+                metadata.update(start=start if key == 'archive_training' else start - 86400,
+                                end=end, context_start=start - 86400)
+                if inferred_sources:
+                    metadata['sources_path'] = str(Path(sources_path).resolve())
+                if policy_path is not None:
+                    metadata.update(policy_path=str(policy_path), policy_sha256=policy_hash)
+            yield frame
+            del frame
+            left = right
+
+
+def load_archive_training_features(path: str | Path, start: float, end: float, **options) -> pd.DataFrame:
+    """Project chunks before concatenating the unavoidable in-memory fit matrix.
+
+    Per-measurement tuple/string metadata is not retained for every training row;
+    source/import/policy provenance remains in the common snapshot attributes.
+    The final fit matrix is still O(rows), explicitly not constant-memory fitting.
+    """
+    quality = ['baseload_power', 'baseload_target_valid', 'baseload_training_eligible',
+               'baseload_lag_1h_training_eligible', 'baseload_lag_24h_training_eligible',
+               'leaf_power_lag_1h_training_eligible', 'leaf_energy_24h_training_eligible',
+               'outside_temp_training_eligible', 'wind_speed_training_eligible',
+               'solar_forecast_training_eligible', 'heating_regime']
+    frames = []
+    quality_summary: dict[str, dict[str, int]] = {}
+    stream = iter_archive_features(path, start, end, **options)
+    try:
+        for frame in stream:
+            for name in BASELOAD_INPUTS:
+                counts = quality_summary.setdefault(name, {'source_verified_bins': 0, 'unit_verified_bins': 0,
+                                                           'conflict_bins': 0, 'training_eligible_bins': 0})
+                for key, suffix in (('source_verified_bins', '_source_valid'),
+                                     ('unit_verified_bins', '_unit_verified'),
+                                     ('conflict_bins', '_conflict'),
+                                     ('training_eligible_bins', '_training_eligible')):
+                    if name + suffix in frame:
+                        counts[key] += int(frame[name + suffix].astype(str).str.lower().eq('true').sum())
+            columns = list(dict.fromkeys([*BASELOAD_FEATURES, *quality]))
+            frames.append(frame.loc[:, [name for name in columns if name in frame]].copy())
+    finally:
+        stream.close()
+    out = pd.concat(frames)
+    out.attrs['archive_training']['projected_training_frame'] = True
+    out.attrs['archive_training']['requested_window_quality_summary'] = quality_summary
+    return out

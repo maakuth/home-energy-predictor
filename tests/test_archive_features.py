@@ -146,6 +146,18 @@ def test_explicit_invalid_legacy_flag_cannot_become_eligible(tmp_path):
     assert not out.baseload_training_eligible.any()
 
 
+def test_archive_never_substitutes_forecast_for_a_verified_zero_solar_meter(tmp_path):
+    path, sources = build(tmp_path)
+    with MeasurementArchive(path) as archive:
+        archive.ingest('sensor.forecast', None, START - 86400, START + 120,
+                       [(999, START - 86400, '2', None)])
+    sources['solar_forecast'] = parse_sources({'solar_forecast': [{'entity': 'sensor.forecast'}]})['solar_forecast']
+    out = load_archive_features(path, START, START + 120, sources=sources)
+    assert out.solar_actual.eq(0).all()
+    assert out.total_home_power.eq(3).all()
+    assert out.baseload_power.eq(2).all()
+
+
 def test_explicit_presence_features_preserve_category_rule_and_unknown(tmp_path):
     path, sources = build(tmp_path)
     with MeasurementArchive(path) as archive:

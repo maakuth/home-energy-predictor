@@ -122,6 +122,7 @@ def add_history_arguments(parser: argparse.ArgumentParser, default_csv: str) -> 
     parser.add_argument('--from', dest='start', type=_aware_timestamp, help='Inclusive, timezone-aware archive start')
     parser.add_argument('--to', dest='end', type=_aware_timestamp, help='Exclusive, timezone-aware archive cutoff')
     parser.add_argument('--sources', help='Dated source YAML overrides')
+    parser.add_argument('--measurement-policy', help='Explicit unit/kind/freshness registry for archive mode')
     parser.add_argument('--interval-seconds', type=int, default=60)
     parser.add_argument('--allow-legacy', action='store_true')
     parser.add_argument('--legacy-policy', choices=['verified-only', 'complete-legacy'], default=None)
@@ -131,7 +132,7 @@ def add_history_arguments(parser: argparse.ArgumentParser, default_csv: str) -> 
 def history_input(parser: argparse.ArgumentParser, args: argparse.Namespace) -> str | pd.DataFrame:
     """Materialize one snapshot and release it before constructing a model."""
     if not args.archive:
-        if (args.start is not None or args.end is not None or args.sources or args.allow_legacy
+        if (args.start is not None or args.end is not None or args.sources or args.measurement_policy or args.allow_legacy
                 or args.legacy_policy is not None or args.preferred_import or args.interval_seconds != 60):
             parser.error('source/window/legacy/resolution options require --archive')
         return args.data_path
@@ -143,7 +144,10 @@ def history_input(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error('--preferred-import requires --allow-legacy')
     if args.interval_seconds < 60 or args.interval_seconds % 60 or 900 % args.interval_seconds:
         parser.error('archive resolution must be whole minutes dividing 15 minutes')
-    options = {'sources_path': args.sources} if args.sources else {}
+    options: dict[str, Any] = {'sources_path': args.sources} if args.sources else {}
+    if args.measurement_policy:
+        options['policy_path'] = args.measurement_policy
+        options['require_policies'] = True
     policy = args.legacy_policy or 'verified-only'
     frame = load_archive_features(args.archive, args.start, args.end,
         interval_seconds=args.interval_seconds, allow_legacy=args.allow_legacy,
@@ -152,6 +156,7 @@ def history_input(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     frame.attrs['sarima_archive_request'] = {
         'path': args.archive, 'start': args.start, 'end': args.end,
         'sources_path': args.sources, 'interval_seconds': args.interval_seconds,
+        'policy_path': args.measurement_policy,
         'allow_legacy': args.allow_legacy, 'legacy_policy': policy,
         'preferred_imports': args.preferred_import,
     }

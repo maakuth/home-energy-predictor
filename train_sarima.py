@@ -13,7 +13,10 @@ def train_sarima(
     days: int | None = 14,
     params_path: Optional[str] = None,
     data_path: str | pd.DataFrame = 'state/processed_data.csv',
+    *, _outcome: dict[str, bool] | None = None,
 ) -> None:
+    if _outcome is not None:
+        _outcome['saved'] = False
     window = f'last {days} days' if days is not None else 'explicit input window'
     print(f"Loading {window} for SARIMA training...")
     ts_data = load_historical_data(file_path=data_path, last_n_days=days)
@@ -78,6 +81,8 @@ def train_sarima(
             fcntl.flock(f, fcntl.LOCK_UN)
             
         print(f"✅ SARIMA parameters saved to {params_path} ({len(results.params)} params)")
+        if _outcome is not None:
+            _outcome['saved'] = True
         
     except Exception as e:
         print(f"❌ SARIMA Training Error: {e}")
@@ -86,6 +91,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Train SARIMA model")
     parser.add_argument('--days', type=int, default=None, help='CSV lookback days (default: 14); archive uses explicit bounds')
     parser.add_argument('--params-path', default=None)
+    parser.add_argument('--require-success', action='store_true', help='Exit nonzero when no new model parameters were saved')
     add_history_arguments(parser, 'state/processed_data.csv')
     args = parser.parse_args(argv)
     if args.archive and args.days is not None:
@@ -93,8 +99,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.days is not None and args.days <= 0:
         parser.error('--days must be positive')
     data = history_input(parser, args)
+    outcome: dict[str, bool] = {}
     train_sarima(days=None if args.archive else (args.days or 14),
-                 data_path=data, params_path=args.params_path)
+                  data_path=data, params_path=args.params_path, _outcome=outcome)
+    if args.require_success and not outcome.get('saved', False):
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

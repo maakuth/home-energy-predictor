@@ -44,6 +44,24 @@ def test_archive_requires_declared_versioned_policy_not_just_boolean_column(meta
         predictor.load_historical_data(frame)
 
 
+def test_sarima_archive_cli_forwards_measurement_policy():
+    with patch('sarimax_predictor.load_archive_features', return_value=features()) as load, \
+         patch('train_sarima.train_sarima'):
+        training.main(['--archive', 'archive.sqlite', '--from', '2026-10-21T00:00Z',
+              '--to', '2026-10-22T00:00Z', '--measurement-policy', 'policies.yaml'])
+    assert load.call_args.kwargs['policy_path'] == 'policies.yaml'
+
+
+def test_pipeline_sarima_required_success_exits_nonzero_when_no_eligible_history():
+    frame = features()
+    frame['baseload_training_eligible'] = False
+    with patch('sarimax_predictor.load_archive_features', return_value=frame):
+        with pytest.raises(SystemExit) as error:
+            training.main(['--archive', 'archive.sqlite', '--from', '2026-10-21T00:00Z',
+                  '--to', '2026-10-22T00:00Z', '--require-success'])
+    assert error.value.code == 1
+
+
 def test_archive_partial_quarters_and_nonfinite_targets_are_missing():
     frame = features(45, '1min')
     frame.loc[frame.index[16], 'baseload_training_eligible'] = False

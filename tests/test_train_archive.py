@@ -65,6 +65,32 @@ def test_archive_cli_declares_legacy_policy_and_requires_opt_in():
         assert load.call_args.kwargs['legacy_policy'] == 'complete-legacy'
 
 
+def test_training_cli_forwards_explicit_measurement_policy():
+    with patch('train_model.load_archive_features', return_value=pd.DataFrame()) as load, \
+         patch('train_model.train'):
+        main(['--archive', 'archive.sqlite', '--from', '2026-10-21T00:00Z',
+              '--to', '2026-10-22T00:00Z', '--measurement-policy', 'policies.yaml'])
+    assert load.call_args.kwargs['policy_path'] == 'policies.yaml'
+
+
+def test_pipeline_required_training_success_exits_nonzero_on_quality_gate():
+    with patch('train_model.load_archive_features', return_value=pd.DataFrame({'baseload_power': [2.]})):
+        with pytest.raises(SystemExit) as error:
+            main(['--archive', 'archive.sqlite', '--from', '2026-10-21T00:00Z',
+                  '--to', '2026-10-22T00:00Z', '--require-success'])
+    assert error.value.code == 1
+
+
+def test_archive_training_can_project_streamed_chunks_before_fit():
+    with patch('train_model.load_archive_features') as whole, \
+         patch('train_model.load_archive_training_features', return_value=pd.DataFrame()) as stream, \
+         patch('train_model.train'):
+        main(['--archive', 'archive.sqlite', '--from', '2026-10-21T00:00Z',
+              '--to', '2026-10-22T00:00Z', '--feature-chunk-seconds', '86400'])
+    whole.assert_not_called()
+    assert stream.call_args.kwargs['chunk_seconds'] == 86400
+
+
 def test_legacy_policy_saved_with_model_without_claiming_verification(tmp_path, monkeypatch):
     import json
     from tests.test_archive_eligibility import raw_frame

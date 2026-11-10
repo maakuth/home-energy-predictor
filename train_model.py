@@ -7,13 +7,16 @@ from sklearn.metrics import mean_absolute_error
 import json
 import os
 from datetime import datetime
+from typing import Any
 from utils.baseload_quality import BASELOAD_FEATURES, select_training_rows
-from utils.archive_features import load_archive_features
+from utils.archive_features import load_archive_features, load_archive_training_features
 from utils.archive_quality import LEGACY_POLICIES
 from utils.git_utils import get_model_version
 
 def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', min_coverage_days: float = 14.0,
-          frame: pd.DataFrame | None = None) -> None:
+          frame: pd.DataFrame | None = None, *, _outcome: dict[str, bool] | None = None) -> None:
+    if _outcome is not None:
+        _outcome['saved'] = False
     print('Loading processed data...')
     df = pd.read_csv(data_path, index_col=0) if frame is None else frame.copy(deep=True)
     df.index = pd.to_datetime(df.index, utc=True)
@@ -129,6 +132,8 @@ def train(holdout_days: int = 0, data_path: str = 'state/processed_data.csv', mi
                    'first_eligible': str(df.index.min()), 'last_eligible': str(df.index.max()),
                    'eligible_verified_targets': int(df.baseload_target_valid.astype(str).str.lower().eq('true').sum())}, f, indent=2)
     print('Model saved to energy_model.json')
+    if _outcome is not None:
+        _outcome['saved'] = True
 
 def _epoch(value: str) -> float:
     try:
@@ -147,6 +152,9 @@ def main(argv: list[str] | None = None) -> None:
     source.add_argument('--data-path', default='state/processed_data.csv', help='Processed training-data CSV path')
     source.add_argument('--archive', help='Explicit read-only measurement archive; requires --from and --to')
     parser.add_argument('--sources', help='Dated source YAML for archive mode; merges with extraction defaults')
+    parser.add_argument('--measurement-policy', help='Explicit unit/kind/freshness registry for archive mode')
+    parser.add_argument('--feature-chunk-seconds', type=int,
+                        help='Project bounded feature chunks before building the fit matrix (archive only)')
     parser.add_argument('--from', dest='start', type=_epoch)
     parser.add_argument('--to', dest='end', type=_epoch)
     parser.add_argument('--interval-seconds', type=int, default=60)
@@ -155,6 +163,7 @@ def main(argv: list[str] | None = None) -> None:
                         help='Explicit target eligibility policy; source verification is never changed')
     parser.add_argument('--preferred-import', type=int, action='append', help='Explicit legacy precedence in archive mode')
     parser.add_argument('--min-coverage-days', type=float, default=14.0, help='Minimum eligible sample-days before fitting (default 14)')
+    parser.add_argument('--require-success', action='store_true', help='Exit nonzero when training keeps the old model instead of saving a new one')
     args = parser.parse_args(argv)
     frame = None
     if args.archive:
@@ -162,15 +171,27 @@ def main(argv: list[str] | None = None) -> None:
             parser.error('archive mode requires increasing --from and --to timestamps')
         if args.legacy_policy != 'verified-only' and not args.allow_legacy:
             parser.error('--legacy-policy complete-legacy requires --allow-legacy')
-        options = {'sources_path': args.sources} if args.sources else {}
-        frame = load_archive_features(args.archive, args.start, args.end,
+        options: dict[str, Any] = {'sources_path': args.sources} if args.sources else {}
+        if args.measurement_policy:
+            options['policy_path'] = args.measurement_policy
+            options['require_policies'] = True
+        loader = load_archive_features
+        if args.feature_chunk_seconds is not None:
+            if args.feature_chunk_seconds <= 0 or args.feature_chunk_seconds % args.interval_seconds:
+                parser.error('feature chunks must be positive and interval-aligned')
+            options['chunk_seconds'] = args.feature_chunk_seconds
+            loader = load_archive_training_features
+        frame = loader(args.archive, args.start, args.end,
             interval_seconds=args.interval_seconds, allow_legacy=args.allow_legacy,
             preferred_imports=args.preferred_import, legacy_policy=args.legacy_policy, **options)
-    elif (args.start is not None or args.end is not None or args.sources or args.allow_legacy
-          or args.preferred_import or args.legacy_policy != 'verified-only'):
+    elif (args.start is not None or args.end is not None or args.sources or args.measurement_policy or args.allow_legacy
+          or args.preferred_import or args.legacy_policy != 'verified-only' or args.feature_chunk_seconds is not None):
         parser.error('source/window/legacy options require --archive')
+    outcome: dict[str, bool] = {}
     train(holdout_days=args.holdout_days, data_path=args.data_path,
-          min_coverage_days=args.min_coverage_days, frame=frame)
+          min_coverage_days=args.min_coverage_days, frame=frame, _outcome=outcome)
+    if args.require_success and not outcome.get('saved', False):
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

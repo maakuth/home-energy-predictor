@@ -56,7 +56,8 @@ def diagnose_feature_coverage(df, required_cols=None):
 check_feature_coverage = diagnose_feature_coverage
 feature_coverage = diagnose_feature_coverage
 
-def process_frame(raw: pd.DataFrame) -> pd.DataFrame:
+def process_frame(raw: pd.DataFrame, *, solar_fallback: bool | None = None,
+                  validate_coverage: bool = True) -> pd.DataFrame:
     """Generate existing features in memory without writing or mutating input."""
     df = raw.copy(deep=True)
     df.index = pd.to_datetime(df.index, utc=True)
@@ -73,7 +74,9 @@ def process_frame(raw: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
-    if os.getenv('SOLAR_FALLBACK_TO_FORECAST', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}:
+    if solar_fallback is None:
+        solar_fallback = os.getenv('SOLAR_FALLBACK_TO_FORECAST', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
+    if solar_fallback:
         if 'solar_actual' in df.columns and 'solar_forecast' in df.columns:
             if df['solar_actual'].max() == 0.0 and df['solar_forecast'].max() > 0:
                 print('⚠ Solar actual sensor appears offline (all zeros), substituting solar forecast')
@@ -242,7 +245,8 @@ def process_frame(raw: pd.DataFrame) -> pd.DataFrame:
     df['month_sin'] = np.sin(2 * np.pi * (df['month']-1) / 12)
     df['month_cos'] = np.cos(2 * np.pi * (df['month']-1) / 12)
     
-    diagnose_feature_coverage(df)
+    if validate_coverage:
+        diagnose_feature_coverage(df)
 
     # Keep invalid intervals and their reasons for audit. Selection belongs to
     # the trainer, not to a destructive drop of the historical timeline.

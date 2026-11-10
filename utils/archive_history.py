@@ -42,6 +42,7 @@ class ArchiveHistory:
             options['sources_path'] = self.sources_path
         if self.policy_path is not None:
             options['policy_path'] = self.policy_path
+            options['require_policies'] = True
         return options
 
     def _bounds(self, start: float, end: float, interval_seconds: int) -> None:
