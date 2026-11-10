@@ -6,21 +6,29 @@ import os
 import sqlite3
 import pickle
 import fcntl
+import argparse
+from copy import deepcopy
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.sqlite_utils import get_db_connection, get_db_path
+from utils.archive_features import load_archive_features
 
 BASELOAD_MAX_KW = 20.0
 
 def load_historical_data(
-    file_path: str = 'state/processed_data.csv',
+    file_path: str | pd.DataFrame = 'state/processed_data.csv',
     target_col: str = 'baseload_power',
-    last_n_days: int = 14,
+    last_n_days: int | None = 14,
 ) -> Optional[pd.Series]:
     """
-    Loads historical baseload data for prediction anchoring.
+    Load CSV compatibility data or materialized archive features.
+
+    Archive frames require explicit training eligibility; original verification
+    flags are never relaxed here. None uses the entire explicit archive window.
     """
+    if isinstance(file_path, pd.DataFrame):
+        return _archive_history(file_path, target_col, last_n_days)
     if not os.path.exists(file_path):
         print(f"Error: {file_path} not found. Run process_data.py first.")
         return None
@@ -34,7 +42,7 @@ def load_historical_data(
         df = df[~df.index.duplicated(keep='first')]
         
         # Select recent data
-        cutoff = df.index.max() - pd.Timedelta(days=last_n_days)
+        cutoff = df.index.min() if last_n_days is None else df.index.max() - pd.Timedelta(days=last_n_days)
         ts_data = pd.Series(df.loc[df.index >= cutoff, target_col])
         if target_col == 'baseload_power' and 'baseload_target_valid' in df:
             valid = df.baseload_target_valid.astype(str).str.lower().eq('true')
@@ -55,6 +63,95 @@ def load_historical_data(
     except Exception as e:
         print(f"Error loading historical data: {e}")
         return None
+
+
+def _archive_history(frame: pd.DataFrame, target: str, days: int | None) -> Optional[pd.Series]:
+    if target != 'baseload_power' or 'baseload_training_eligible' not in frame:
+        raise ValueError('Archive features require baseload training eligibility')
+    df = frame.copy()
+    df.index = pd.to_datetime(df.index, utc=True)
+    if df.index.has_duplicates:
+        raise ValueError('Duplicate archive timestamps')
+    df = df.sort_index()
+    if df.empty:
+        return None
+    # CLI supplies the declared resolution; direct frames may use a regular grid.
+    step = frame.attrs.get('sarima_interval_seconds')
+    if step is None:
+        step = float(df.index.to_series().diff().dt.total_seconds().median()) if len(df) > 1 else 900.0
+    if not np.isfinite(step) or step <= 0 or 900 % step:
+        raise ValueError('Archive resolution must divide 15 minutes')
+    if not df.index.equals(df.index.floor(f'{int(step)}s')):
+        raise ValueError('Archive timestamps must align with declared resolution')
+    if days is not None:
+        df = df.loc[df.index >= df.index.max() - pd.Timedelta(days=days)]
+    values = pd.to_numeric(df[target], errors='coerce')
+    eligible = df.baseload_training_eligible.astype(str).str.lower().eq('true')
+    values = values.where(eligible & np.isfinite(values) & values.ge(0))
+    counts = values.resample('15min').count()
+    result = values.resample('15min').mean().where(counts == int(900 / step))
+    result.attrs = deepcopy(frame.attrs)
+    result.attrs['input'] = 'measurement_archive'
+    result.attrs['eligible_quarters'] = int(result.notna().sum())
+    result.attrs['missing_quarters'] = int(result.isna().sum())
+    result.attrs['provenance_counts'] = {
+        name: df[name].astype(str).value_counts().to_dict()
+        for name in df if name.endswith('_provenance')
+    }
+    return result if result.notna().any() else None
+
+
+def _aware_timestamp(value: str) -> float:
+    try:
+        timestamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    if timestamp.tzinfo is None:
+        raise argparse.ArgumentTypeError('Timestamp must have an explicit timezone')
+    return timestamp.timestamp()
+
+
+def add_history_arguments(parser: argparse.ArgumentParser, default_csv: str) -> None:
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--data-path', default=default_csv, help='Processed CSV compatibility input (default)')
+    source.add_argument('--archive', help='Read-only measurement archive; no CSV fallback')
+    parser.add_argument('--from', dest='start', type=_aware_timestamp, help='Inclusive, timezone-aware archive start')
+    parser.add_argument('--to', dest='end', type=_aware_timestamp, help='Exclusive, timezone-aware archive cutoff')
+    parser.add_argument('--sources', help='Dated source YAML overrides')
+    parser.add_argument('--interval-seconds', type=int, default=60)
+    parser.add_argument('--allow-legacy', action='store_true')
+    parser.add_argument('--legacy-policy', choices=['verified-only', 'complete-legacy'], default=None)
+    parser.add_argument('--preferred-import', type=int, action='append')
+
+
+def history_input(parser: argparse.ArgumentParser, args: argparse.Namespace) -> str | pd.DataFrame:
+    """Materialize one snapshot and release it before constructing a model."""
+    if not args.archive:
+        if (args.start is not None or args.end is not None or args.sources or args.allow_legacy
+                or args.legacy_policy is not None or args.preferred_import or args.interval_seconds != 60):
+            parser.error('source/window/legacy/resolution options require --archive')
+        return args.data_path
+    if args.start is None or args.end is None or args.start >= args.end:
+        parser.error('archive mode requires increasing --from and --to timestamps')
+    if args.legacy_policy == 'complete-legacy' and not args.allow_legacy:
+        parser.error('complete-legacy requires --allow-legacy')
+    if args.preferred_import and not args.allow_legacy:
+        parser.error('--preferred-import requires --allow-legacy')
+    if args.interval_seconds < 60 or args.interval_seconds % 60 or 900 % args.interval_seconds:
+        parser.error('archive resolution must be whole minutes dividing 15 minutes')
+    options = {'sources_path': args.sources} if args.sources else {}
+    policy = args.legacy_policy or 'verified-only'
+    frame = load_archive_features(args.archive, args.start, args.end,
+        interval_seconds=args.interval_seconds, allow_legacy=args.allow_legacy,
+        legacy_policy=policy, preferred_imports=args.preferred_import, **options)
+    frame.attrs['sarima_interval_seconds'] = args.interval_seconds
+    frame.attrs['sarima_archive_request'] = {
+        'path': args.archive, 'start': args.start, 'end': args.end,
+        'sources_path': args.sources, 'interval_seconds': args.interval_seconds,
+        'allow_legacy': args.allow_legacy, 'legacy_policy': policy,
+        'preferred_imports': args.preferred_import,
+    }
+    return frame
 
 def _get_safe_forecast(
     model: SARIMAX,
@@ -257,62 +354,33 @@ def archive_sarimax_predictions(
     except Exception as e:
         print(f"⚠️ Error archiving SARIMA to SQLite: {e}")
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description='SARIMA benchmark prediction from CSV or an explicit archive window')
+    add_history_arguments(parser, os.getenv('SLOW_DATA_PATH', 'state/processed_data.csv'))
     # Support environment variable override for testing and slow-task isolation
-    params_path = os.getenv('SLOW_PARAMS_PATH') or os.getenv('TEST_SARIMA_PARAMS', 'state/sarima_model_params.pkl')
+    parser.add_argument('--params-path', default=os.getenv('SLOW_PARAMS_PATH') or os.getenv('TEST_SARIMA_PARAMS', 'state/sarima_model_params.pkl'))
+    parser.add_argument('--output', default='state/sarimax_predictions.json')
+    parser.add_argument('--no-archive-results', action='store_true', help='Do not write benchmark results to SQLite')
+    args = parser.parse_args(argv)
+    data = history_input(parser, args)
+    params_path = args.params_path
 
     if not os.path.exists(params_path):
         print(f"⚠️ No SARIMA parameters found at {params_path}. Please run train_sarima.py first.")
         return
 
-    # 1. Load the pre-trained parameters
-    print("Loading pre-trained SARIMA parameters...")
-    with open(params_path, 'rb') as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
-        model_data = pickle.load(f)
-        fcntl.flock(f, fcntl.LOCK_UN)
-    
-    # 2. Load latest data for anchoring (at least 2 days to maintain seasonal state)
-    data_path = os.getenv('SLOW_DATA_PATH', 'state/processed_data.csv')
-    ts_data = load_historical_data(file_path=data_path, last_n_days=3)
+    # CSV retains its three-day anchor. Archive mode uses exactly its explicit
+    # window; history_input has already closed the read-only snapshot.
+    ts_data = load_historical_data(file_path=data, last_n_days=None if args.archive else 3)
     if ts_data is None:
         return
 
     historical_std = float(ts_data.std()) if len(ts_data) > 1 else None
 
-    # 3. Re-instantiate model and apply parameters
-    print(f"Reconstructing SARIMA model and updating state...")
-    model = SARIMAX(
-        ts_data,
-        order=model_data['order'],
-        seasonal_order=model_data['seasonal_order'],
-        enforce_stationarity=False,
-        enforce_invertibility=False
-    )
-    # Use safe forecast: tries warm start, falls back to clean fit if CIs explode
-    forecast_steps = 96 # 24 hours
-    print(f"Forecasting {forecast_steps} steps ahead using SARIMA...")
-    forecast = _get_safe_forecast(model, forecast_steps, start_params=model_data['params'])
-    if forecast is None:
-        # Safe fallback: flat forecast at historical mean
-        historical_mean = float(ts_data.mean()) if len(ts_data) > 0 else 0.0
-        last_ts = ts_data.index[-1] if len(ts_data) > 0 else pd.Timestamp.now(tz='UTC')
-        ts = pd.date_range(start=last_ts + pd.Timedelta(minutes=15), periods=forecast_steps, freq='15min', tz='UTC')
-        forecast_mean = pd.Series([historical_mean] * forecast_steps, index=ts)
-        forecast_ci = pd.DataFrame({
-            'lower baseload_power': [max(0.0, historical_mean * 0.5)] * forecast_steps,
-            'upper baseload_power': [min(BASELOAD_MAX_KW, historical_mean * 1.5 + 5)] * forecast_steps
-        }, index=ts)
-    else:
-        forecast_mean = forecast.predicted_mean
-        forecast_ci = forecast.conf_int(alpha=0.05)
-    
-    # Final safety caps: baseload must be >= 0 and <= physical ceiling
-    forecast_mean = np.clip(forecast_mean, 0, BASELOAD_MAX_KW)
-    
-    # 5. Save & Archive
-    save_benchmark_results(forecast_mean, forecast_ci, historical_std=historical_std)  # type: ignore[arg-type]
-    archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=historical_std)  # type: ignore[arg-type]
+    forecast_mean, forecast_ci = predict_sarimax(ts_data, params_path=params_path)
+    save_benchmark_results(forecast_mean, forecast_ci, filename=args.output, historical_std=historical_std)
+    if not args.no_archive_results:
+        archive_sarimax_predictions(forecast_mean, forecast_ci, historical_std=historical_std)
 
 if __name__ == "__main__":
     main()

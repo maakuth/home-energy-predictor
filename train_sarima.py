@@ -7,14 +7,15 @@ import fcntl
 import argparse
 from typing import Optional
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from sarimax_predictor import load_historical_data, BASELOAD_MAX_KW
+from sarimax_predictor import load_historical_data, BASELOAD_MAX_KW, add_history_arguments, history_input
 
 def train_sarima(
-    days: int = 14,
+    days: int | None = 14,
     params_path: Optional[str] = None,
-    data_path: str = 'state/processed_data.csv',
+    data_path: str | pd.DataFrame = 'state/processed_data.csv',
 ) -> None:
-    print(f"Loading last {days} days for SARIMA training...")
+    window = f'last {days} days' if days is not None else 'explicit input window'
+    print(f"Loading {window} for SARIMA training...")
     ts_data = load_historical_data(file_path=data_path, last_n_days=days)
     
     if ts_data is None or ts_data.notna().sum() < 192:
@@ -35,7 +36,7 @@ def train_sarima(
             pass
 
     try:
-        print(f"Fitting SARIMA model ({days}-day window, s=96, D=1)...")
+        print(f"Fitting SARIMA model ({window}, s=96, D=1)...")
         # Specification
         order = (1, 1, 1)
         seasonal_order = (1, 1, 0, 96)
@@ -67,7 +68,8 @@ def train_sarima(
             'params': results.params,
             'order': order,
             'seasonal_order': seasonal_order,
-            'last_index': ts_data.index.max()
+            'last_index': ts_data.index.max(),
+            'training_metadata': dict(ts_data.attrs),
         }
         
         with open(params_path, 'wb') as f:
@@ -80,10 +82,20 @@ def train_sarima(
     except Exception as e:
         print(f"❌ SARIMA Training Error: {e}")
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Train SARIMA model")
-    parser.add_argument("--days", type=int, default=14, help="Number of days of historical data to use (default: 14)")
-    parser.add_argument('--data-path', default='state/processed_data.csv', help='Processed training-data CSV path')
-    args = parser.parse_args()
-    
-    train_sarima(days=args.days, data_path=args.data_path)
+    parser.add_argument('--days', type=int, default=None, help='CSV lookback days (default: 14); archive uses explicit bounds')
+    parser.add_argument('--params-path', default=None)
+    add_history_arguments(parser, 'state/processed_data.csv')
+    args = parser.parse_args(argv)
+    if args.archive and args.days is not None:
+        parser.error('--days is for CSV mode; archive mode uses explicit --from/--to')
+    if args.days is not None and args.days <= 0:
+        parser.error('--days must be positive')
+    data = history_input(parser, args)
+    train_sarima(days=None if args.archive else (args.days or 14),
+                 data_path=data, params_path=args.params_path)
+
+
+if __name__ == '__main__':
+    main()
