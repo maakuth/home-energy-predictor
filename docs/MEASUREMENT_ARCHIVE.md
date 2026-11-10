@@ -148,9 +148,11 @@ then returns only the requested window. Feature generation uses the existing
 imputation and filtering rules, while archive quality metadata is kept separate
 and restored unchanged. Missing required observations can therefore prevent
 feature generation, and invalid meter truth remains ineligible for training.
-Legacy opt-in does not relax the source-validity gate. The default one-minute
+Legacy opt-in does not relax source verification. A separate explicit training
+eligibility policy is documented in [Archive training policy](ARCHIVE_TRAINING_POLICY.md).
+The default one-minute
 aggregation of original recorder events is time-weighted, unlike legacy event
-means; archive-trained models are associated with model version 1.44.0.
+means; the eligibility and SARIMA changes are associated with model version 1.45.0.
 
 XGBoost can now train without reading or producing raw/processed CSV files:
 
@@ -166,11 +168,17 @@ This is an operational example, not a development command: it writes model
 artifacts under `state/` if the unchanged coverage gate passes. Missing archive
 files, malformed windows and missing sources never silently fall back to CSV.
 `--allow-legacy` and repeatable `--preferred-import` enable explicit legacy
-reading/selection, but do not make unverified legacy targets eligible for fitting.
+reading/selection, but alone do not make unverified legacy targets eligible for fitting.
+`--legacy-policy complete-legacy --allow-legacy` opts into complete conflict-free
+legacy targets without changing original-source flags. Missing mandatory meters
+and incomplete lag/Leaf-energy windows remain excluded.
 The existing CSV training arguments remain supported and are still the scheduled
 default. No models have been trained against staging data as part of development.
 
-The remaining SARIMA, inference, optimization and evaluation consumers and the
-scheduled pipelines still need migration. Historical import eligibility policy,
-energy/category handling, archive backup/restore tooling and operational cutover
-validation remain outstanding.
+SARIMA now accepts explicit archive windows for both training and benchmark
+prediction; see [SARIMA archive mode](SARIMA_ARCHIVE.md). Read-only
+[inventory/coverage audits](MEASUREMENT_ARCHIVE_AUDIT.md) are also available.
+Inference, optimization and evaluation consumers and scheduled pipelines still
+need migration. Energy/category handling, source/unit provenance validation,
+archive backup/restore tooling and operational cutover validation remain
+outstanding. **The system is not migration-ready.**

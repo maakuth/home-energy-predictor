@@ -239,10 +239,10 @@ def test_csv_explicit_false_source_flag_excludes_actual(tmp_path, monkeypatch):
     assert report['baseline']['verified']['matched_rows'] == 1
 
 
-def test_real_read_only_archive_time_weighted_comparison(tmp_path, monkeypatch):
+def test_real_read_only_archive_time_weighted_comparison(tmp_path):
     from utils.measurement_archive import MeasurementArchive
 
-    raw, _, features = frames()
+    raw, _, _ = frames()
     csv = tmp_path / 'raw.csv'
     raw.to_csv(csv)
     archive_path = tmp_path / 'archive.sqlite'
@@ -255,12 +255,12 @@ def test_real_read_only_archive_time_weighted_comparison(tmp_path, monkeypatch):
                 events.append((i * 10 + 1, START + 1800, '5', None))
             archive.ingest('sensor.' + name, None, START - 86400, START + 7200, events)
     before = archive_path.read_bytes()
-    # Exercise the real SQLite reader/resampler; the shared policy contract is
-    # stubbed here because it is delivered on a separate implementation branch.
-    monkeypatch.setattr(shadow, 'load_archive_features', lambda *a, **kw: features.copy())
     report = shadow.compare(csv=csv, csv_mode='raw', archive=archive_path, sources=sources,
                             start=START, end=START + 7200, interval_seconds=3600)
     assert report['raw']['total_power']['archive_minus_csv_mean'] == 1.5
     assert report['raw']['total_power']['archive_mean_coverage_fraction'] == 1.
     assert report['raw']['total_power']['archive_source_verified_rows'] == 2
+    assert report['baseline']['verified']['matched_rows'] == 2
+    assert report['baseline']['verified']['archive']['mae_kw'] == 1.5
+    assert report['features']['baseload_power']['mean_absolute_difference'] == 1.5
     assert archive_path.read_bytes() == before

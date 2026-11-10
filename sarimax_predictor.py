@@ -68,6 +68,10 @@ def load_historical_data(
 def _archive_history(frame: pd.DataFrame, target: str, days: int | None) -> Optional[pd.Series]:
     if target != 'baseload_power' or 'baseload_training_eligible' not in frame:
         raise ValueError('Archive features require baseload training eligibility')
+    policy = frame.attrs.get('archive_training', {})
+    if (policy.get('contract_version') != 1
+            or policy.get('legacy_policy') not in {'verified-only', 'complete-legacy'}):
+        raise ValueError('Archive features require a declared versioned training policy')
     df = frame.copy()
     df.index = pd.to_datetime(df.index, utc=True)
     if df.index.has_duplicates:
@@ -76,7 +80,7 @@ def _archive_history(frame: pd.DataFrame, target: str, days: int | None) -> Opti
     if df.empty:
         return None
     # CLI supplies the declared resolution; direct frames may use a regular grid.
-    step = frame.attrs.get('sarima_interval_seconds')
+    step = frame.attrs.get('sarima_interval_seconds', policy.get('interval_seconds'))
     if step is None:
         step = float(df.index.to_series().diff().dt.total_seconds().median()) if len(df) > 1 else 900.0
     if not np.isfinite(step) or step <= 0 or 900 % step:

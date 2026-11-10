@@ -16,7 +16,7 @@ def features(periods=288, freq='15min'):
     frame = pd.DataFrame({'baseload_power': 2.0, 'baseload_target_valid': False,
                           'baseload_training_eligible': True},
                          index=pd.date_range('2026-04-01', periods=periods, freq=freq, tz='UTC'))
-    frame.attrs['archive_eligibility'] = {'legacy_policy': 'complete-legacy'}
+    frame.attrs['archive_training'] = {'legacy_policy': 'complete-legacy', 'contract_version': 1}
     return frame
 
 
@@ -34,6 +34,14 @@ def test_dataframe_uses_distinct_eligibility_without_changing_source_truth():
 def test_archive_dataframe_requires_eligibility_no_csv_fallback():
     with pytest.raises(ValueError, match='eligib'):
         predictor.load_historical_data(features().drop(columns='baseload_training_eligible'))
+
+
+@pytest.mark.parametrize('metadata', [None, {}, {'legacy_policy': 'unrestricted', 'contract_version': 1}])
+def test_archive_requires_declared_versioned_policy_not_just_boolean_column(metadata):
+    frame = features()
+    frame.attrs = {} if metadata is None else {'archive_training': metadata}
+    with pytest.raises(ValueError, match='policy'):
+        predictor.load_historical_data(frame)
 
 
 def test_archive_partial_quarters_and_nonfinite_targets_are_missing():
@@ -61,7 +69,7 @@ def test_training_persists_archive_metadata_after_materializing(tmp_path):
     with (tmp_path / 'params.pkl').open('rb') as handle:
         saved = pickle.load(handle)
     assert saved['training_metadata']['input'] == 'measurement_archive'
-    assert saved['training_metadata']['archive_eligibility']['legacy_policy'] == 'complete-legacy'
+    assert saved['training_metadata']['archive_training']['legacy_policy'] == 'complete-legacy'
     assert saved['last_index'] == frame.index[-1]
 
 
@@ -171,10 +179,7 @@ def test_real_archive_snapshot_is_closed_before_fitting(tmp_path):
 
     with patch('utils.archive_features.MeasurementReader', TrackedReader):
         frame = load_archive_features(path, start, start + 3 * 86400, sources=sources)
-    # This branch predates the shared policy patch. Only supply its conservative
-    # verified-only eligibility when absent; integration uses the real column.
-    if 'baseload_training_eligible' not in frame:
-        frame['baseload_training_eligible'] = frame.baseload_target_valid
+    assert frame.baseload_training_eligible.all()
 
     def fitted(*args, **kwargs):
         assert len(readers) == 1

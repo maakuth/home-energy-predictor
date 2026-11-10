@@ -98,6 +98,18 @@ WantedBy=timers.target
 
 ### run_slow (at :57 every hour)
 
+Scheduled no-argument runs still use the copied processed CSV for rollback.
+An explicitly invoked `run_slow.sh --archive PATH --from ISO --to ISO` instead
+materializes one read-only archive feature snapshot and skips copying the CSV.
+Source/legacy-policy options are forwarded to `sarimax_predictor.py`; archive
+failure exits without a CSV fallback. Both routes retain parameter-file
+synchronization and the separate slow-task lock. No timer/service is switched
+by this code change. See [SARIMA archive mode](SARIMA_ARCHIVE.md) before invoking
+it; the benchmark normally writes predictions to SQLite unless
+`--no-archive-results` is passed. Never run operational jobs against live state
+as a development test. Frequent/weekly pipelines remain CSV-backed and are not
+archive-ready.
+
 ```
 # /etc/systemd/system/hepo-slow.timer
 [Unit]

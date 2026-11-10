@@ -51,3 +51,12 @@ venv/bin/python3 sarimax_predictor.py --data-path /path/to/processed.csv
 
 Existing `SLOW_DATA_PATH`, `SLOW_PARAMS_PATH`, and `TEST_SARIMA_PARAMS`
 compatibility overrides remain supported by their existing entry points.
+# Slow-task wrapper and rollback
+
+`run_slow.sh` forwards explicit SARIMA arguments. Passing `--archive PATH` skips
+the processed-CSV copy while retaining model-parameter synchronization. Supply
+the same explicit bounds/source/policy options as the predictor CLI. Archive
+errors terminate the job, never retrying a CSV. Returning to the no-argument
+invocation retains the original CSV compatibility route. No timer configuration
+or live pipeline has been changed. Isolated shell tests cover CSV absence,
+argument forwarding, failure propagation, and default rollback behavior.
