@@ -8,21 +8,26 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from sarimax_predictor import load_historical_data as load_actual_baseload
 from utils.sqlite_utils import get_db_connection, db_exists
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
 
 
-def get_archived_xgboost_predictions(days: int = 2) -> pd.DataFrame:
+def get_archived_xgboost_predictions(days: int = 2, *, history: ArchiveHistory | None = None) -> pd.DataFrame:
     if not db_exists():
         return pd.DataFrame()
 
     conn = get_db_connection()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    end = pd.to_datetime(history.cutoff, unit='s', utc=True) if history is not None else datetime.now(timezone.utc)
+    cutoff = (end - timedelta(days=days)).isoformat()
+    as_of = (f"AND julianday(generated_at) <= julianday({history.cutoff}, 'unixepoch')"
+             if history is not None else '')
     query = f"""
         SELECT target_timestamp, predicted_usage_kw as predicted_baseload
         FROM (
             SELECT target_timestamp, predicted_usage_kw,
-                   ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
+                   ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY julianday(generated_at) DESC) as rn
             FROM predictions
-            WHERE target_timestamp >= '{cutoff}'
+            WHERE julianday(target_timestamp) >= julianday('{cutoff}')
+            {as_of}
         )
         WHERE rn = 1
     """
@@ -44,20 +49,24 @@ def load_sarima_latest_forecast(filename: str = 'state/sarimax_predictions.json'
     return df.set_index('timestamp')[['predicted_baseload']]
 
 
-def get_archived_sarima_predictions(days: int = 2) -> pd.DataFrame:
+def get_archived_sarima_predictions(days: int = 2, *, history: ArchiveHistory | None = None) -> pd.DataFrame:
     if not db_exists():
         return pd.DataFrame()
 
     conn = get_db_connection()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    end = pd.to_datetime(history.cutoff, unit='s', utc=True) if history is not None else datetime.now(timezone.utc)
+    cutoff = (end - timedelta(days=days)).isoformat()
+    as_of = (f"AND julianday(generated_at) <= julianday({history.cutoff}, 'unixepoch')"
+             if history is not None else '')
     try:
         query = f"""
             SELECT target_timestamp, predicted_baseload_kw as predicted_baseload
             FROM (
                 SELECT target_timestamp, predicted_baseload_kw,
-                       ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
+                       ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY julianday(generated_at) DESC) as rn
                 FROM sarimax_predictions
-                WHERE target_timestamp >= '{cutoff}'
+                WHERE julianday(target_timestamp) >= julianday('{cutoff}')
+                {as_of}
             )
             WHERE rn = 1
         """
@@ -90,27 +99,43 @@ def print_hourly_breakdown(label: str, df_comp: pd.DataFrame) -> None:
         print(f"  {h:>2}:00   {len(grp):<8} {mae:<10.4f} {bias:<+12.4f} {mean_pred:<10.3f} {mean_act:<10.3f}")
 
 
-def compare(days: int = 2, hourly: bool = False, output_csv: Optional[str] = None, show_blend: bool = False) -> None:
+def compare(days: int = 2, hourly: bool = False, output_csv: Optional[str] = None, show_blend: bool = False,
+            *, history: ArchiveHistory | None = None) -> None:
     print(f"=== Model Comparison Analysis (last {days} days) ===")
 
-    actual_ts = load_actual_baseload(file_path='state/processed_data.csv', last_n_days=days)
+    measured = pd.DataFrame()
+    if history is not None:
+        from analyze_performance import fetch_actuals
+        measured = fetch_actuals(days, history=history)
+        actual_ts = measured.baseload_actual_kw
+        print(f'Archive actuals policy: {history.legacy_policy}; legacy eligibility is not source verification.')
+        if show_blend:
+            print('Archive blend skipped: archived main-model total load and SARIMA baseload have different targets.')
+            show_blend = False
+    else:
+        actual_ts = load_actual_baseload(file_path='state/processed_data.csv', last_n_days=days)
     if actual_ts is None:
         return
 
     actual_df = pd.DataFrame({'actual_baseload': actual_ts})
 
     results: dict[str, Any] = {}
-    xgb_df = get_archived_xgboost_predictions(days=days)
-    sarima_df = get_archived_sarima_predictions(days=days)
+    options = {'history': history} if history is not None else {}
+    xgb_df = get_archived_xgboost_predictions(days=days, **options)
+    sarima_df = get_archived_sarima_predictions(days=days, **options)
 
     if not xgb_df.empty:
-        xgb_comp = xgb_df.join(actual_df, how='inner').dropna()
+        xgb_actuals = (measured[['actual_usage']].rename(columns={'actual_usage': 'actual_baseload'})
+                       if history is not None else actual_df)
+        xgb_comp = xgb_df.join(xgb_actuals, how='inner').dropna()
         if not xgb_comp.empty:
             mae = (xgb_comp['predicted_baseload'] - xgb_comp['actual_baseload']).abs().mean()
             bias = (xgb_comp['predicted_baseload'] - xgb_comp['actual_baseload']).mean()
-            print(f"\nXGBoost (Main):")
+            print('\nXGBoost (Main, total load):' if history is not None else '\nXGBoost (Main):')
             print(f"  MAE:  {mae:.4f} kW  Bias: {bias:+.4f} kW  Samples: {len(xgb_comp)}")
             results['xgb'] = {'mae': float(mae), 'bias': float(bias), 'samples': len(xgb_comp)}
+            if history is not None:
+                results['xgb']['target'] = 'total_load'
             if hourly:
                 print_hourly_breakdown('XGBoost', xgb_comp)
         else:
@@ -124,6 +149,8 @@ def compare(days: int = 2, hourly: bool = False, output_csv: Optional[str] = Non
             print(f"\nSARIMA (Benchmark):")
             print(f"  MAE:  {mae:.4f} kW  Bias: {bias:+.4f} kW  Samples: {len(sarima_comp)}")
             results['sarima'] = {'mae': float(mae), 'bias': float(bias), 'samples': len(sarima_comp)}
+            if history is not None:
+                results['sarima']['target'] = 'baseload'
             if hourly:
                 print_hourly_breakdown('SARIMA', sarima_comp)
     else:
@@ -156,7 +183,11 @@ def compare(days: int = 2, hourly: bool = False, output_csv: Optional[str] = Non
     if output_csv and results:
         rows = []
         for model, metrics in results.items():
-            rows.append({'model': model, **metrics})
+            row = {'model': model, **metrics}
+            if history is not None:
+                row.update({'history_cutoff': history.cutoff, 'measurement_policy': history.legacy_policy,
+                            'legacy_is_source_verified': False})
+            rows.append(row)
         pd.DataFrame(rows).to_csv(output_csv, index=False)
         print(f"\n✅ Results saved to {output_csv}")
 
@@ -169,6 +200,8 @@ if __name__ == "__main__":
     parser.add_argument('--hourly', action='store_true', help='Show hourly breakdown')
     parser.add_argument('--blend', action='store_true', help='Evaluate 50/50 blend used in production')
     parser.add_argument('--output-csv', type=str, default=None, help='Save results to CSV file')
+    add_history_arguments(parser)
     args = parser.parse_args()
 
-    compare(days=args.days, hourly=args.hourly, output_csv=args.output_csv, show_blend=args.blend)
+    compare(days=args.days, hourly=args.hourly, output_csv=args.output_csv, show_blend=args.blend,
+            history=history_from_arguments(args))

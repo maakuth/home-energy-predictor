@@ -1,23 +1,31 @@
 """Offline heating-regime and resistance-only benchmark diagnostics.
 
-Only reads the supplied CSV. Never loads .env, contacts HA/SQL, trains a model,
+Only reads the supplied CSV or explicit bounded archive. Never loads .env, contacts HA/SQL, trains a model,
 or interprets virtual/supply temperature as measured accumulator temperature.
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def heating_regimes(index: pd.DatetimeIndex) -> pd.Series:
-    """User-confirmed equipment timeline; uncertain changeover days are isolated."""
+    """Equipment-era labels, not meter-source boundaries.
+
+    Removal was confirmed October 7 at approximately 08:00 Helsinki, not
+    October 6. Its exact instant is unknown: isolate the whole October 7
+    changeover day rather than claiming minute-level equipment certainty.
+    Other historical dates remain provisional, not newly verified evidence.
+    """
     local = pd.to_datetime(index, utc=True).tz_convert('Europe/Helsinki')
     dates = local.strftime('%Y-%m-%d')
     labels = np.select(
-        [dates < '2026-08-20', dates < '2026-10-06', dates < '2026-10-07',
+        [dates < '2026-08-20', dates < '2026-10-07', dates < '2026-10-08',
          dates < '2026-10-19', dates < '2026-10-20', dates < '2026-10-21'],
         ['old_pre_failure', 'old_intermittent', 'removal_transition',
          'resistance_only', 'installation_transition', 'integration_transition'],
@@ -98,6 +106,10 @@ def analyze_heating(
     out['fireplace_affected'] = onset.rolling(tail + 1, min_periods=1).max().astype(bool)
     out['thermal_candidate'] = (resistance & out.power_valid & out.tank_valid
                                 & out.weather_valid & ~out.fireplace_affected)
+    for column in data:
+        if column.endswith(('_source_valid', '_coverage_fraction', '_provenance', '_conflict')):
+            out[column] = data[column]
+    out.attrs = raw.attrs.copy()
 
     daily = pd.DataFrame(index=out.resample('D').size().index)
     daily.index.name = 'local_date'
@@ -117,8 +129,11 @@ def analyze_heating(
 
 
 def main() -> None:
+    from utils.archive_history import add_history_arguments, history_from_arguments
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--input', required=True, help='Unfiltered raw interval-mean CSV; gshp_power is the shared meter in W')
+    parser.add_argument('--input', help='Unfiltered raw interval-mean CSV; gshp_power is the shared meter in W')
+    parser.add_argument('--days', type=int, help='Explicit bounded archive diagnostic window')
+    add_history_arguments(parser)
     parser.add_argument('--output-dir', type=Path, help='Optional NEW directory for interval masks and daily report')
     parser.add_argument('--interval-minutes', type=int, default=1)
     parser.add_argument('--tail-hours', type=float, default=24)
@@ -126,7 +141,22 @@ def main() -> None:
     parser.add_argument('--rise-margin-c', type=float, default=0.3)
     parser.add_argument('--tank-max-c', type=float, default=80)
     args = parser.parse_args()
-    raw = pd.read_csv(args.input, index_col=0, low_memory=False)
+    history = history_from_arguments(args)
+    if history is not None:
+        if args.input or args.days is None or args.days <= 0:
+            parser.error('Archive diagnostics require positive --days and no --input')
+        raw = history.raw(history.cutoff - args.days * 86400, history.cutoff,
+                          measurements=['gshp_power', 'accumulator_temp', 'outside_temp'],
+                          interval_seconds=args.interval_minutes * 60)
+        for name in ['gshp_power', 'accumulator_temp', 'outside_temp']:
+            raw[name] = raw[name].where(history.eligible(raw, name))
+        raw.attrs['archive_diagnostic'] = {'cutoff': history.cutoff,
+            'legacy_policy': history.legacy_policy, 'legacy_is_source_verified': False}
+        print(f'Archive eligibility: {history.legacy_policy}; legacy eligibility does not verify sources.')
+    else:
+        if not args.input:
+            parser.error('Provide --input or --archive with --cutoff and --days')
+        raw = pd.read_csv(args.input, index_col=0, low_memory=False)
     # Processed power has already been split/median-filtered, so reject it.
     if 'baseload_power' in raw or 'heating_power' in raw:
         parser.error('Use raw, unfiltered shared-meter data, not processed training data')

@@ -7,6 +7,19 @@ from datetime import datetime, timedelta
 import sqlite3
 from typing import Any
 from dotenv import load_dotenv
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
+
+
+def load_diagnostic_features(days: int | None, *, history: ArchiveHistory | None = None) -> pd.DataFrame:
+    if history is not None:
+        if days is None or days <= 0:
+            raise ValueError('Archive fireplace diagnostics require explicit positive --days')
+        return history.features(history.cutoff - days * 86400, history.cutoff)
+    frame = pd.read_csv('state/processed_data.csv', index_col=0)
+    frame.index = pd.to_datetime(frame.index, utc=True)
+    if days is not None:
+        frame = frame.loc[frame.index >= frame.index.max() - pd.Timedelta(days=days)]
+    return frame
 
 load_dotenv(override=True)
 
@@ -22,18 +35,22 @@ def get_env_float(name: str, default: float) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Estimate fireplace cost savings.")
     parser.add_argument('--days', type=int, default=None, help='Number of recent days to analyze. If omitted, analyzes all available data.')
+    add_history_arguments(parser)
     args = parser.parse_args()
+    history = history_from_arguments(args)
 
     print("Loading processed data...")
     try:
-        df = pd.read_csv('state/processed_data.csv', index_col=0)
+        df = load_diagnostic_features(args.days, history=history)
     except FileNotFoundError:
+        if history is not None:
+            raise
         print("state/processed_data.csv not found.")
         return
 
     df.index = pd.to_datetime(df.index, utc=True)
     
-    if args.days is not None:
+    if args.days is not None and history is None:
         cutoff_date = df.index.max() - pd.Timedelta(days=args.days)
         print(f"Filtering data to the last {args.days} days (since {cutoff_date})...")
         df = df[df.index >= cutoff_date]
@@ -49,6 +66,11 @@ def main() -> None:
     interval_hours = interval_minutes / 60.0
 
     print(f"Data resolution: {interval_minutes} minutes")
+
+    if history is not None:
+        # Current archive feature contract intentionally excludes tank/fireplace
+        # instrumentation. Never turn smoothed/missing features into heat evidence.
+        raise ValueError('Archive fireplace savings require an audited tank/fireplace feature contract; unavailable')
 
     if 'is_fireplace_active' not in df.columns:
         print("is_fireplace_active column not found in processed_data.csv.")

@@ -8,14 +8,16 @@ from typing import Any
 from analyze_performance import fetch_actuals
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, db_exists
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
 
-def fetch_all_predictions(days: int = 7) -> pd.DataFrame:
+def fetch_all_predictions(days: int = 7, *, history: ArchiveHistory | None = None) -> pd.DataFrame:
     """Fetch ALL archived predictions from the SQLite DB for the given period."""
     if not db_exists():
         print(f"⚠️ Database not found.")
         return pd.DataFrame()
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    end = pd.to_datetime(history.cutoff, unit='s', utc=True) if history is not None else datetime.now(timezone.utc)
+    cutoff = (end - timedelta(days=days)).isoformat()
     try:
         conn = get_db_connection()
         query = f"""
@@ -23,7 +25,7 @@ def fetch_all_predictions(days: int = 7) -> pd.DataFrame:
                    battery_action, version, grid_import_kwh, import_price, 
                    grid_export_kwh, export_price
             FROM predictions
-            WHERE target_timestamp >= '{cutoff}'
+            WHERE julianday(target_timestamp) >= julianday('{cutoff}')
         """
         df = pd.read_sql_query(query, conn)
         conn.close()
@@ -33,6 +35,9 @@ def fetch_all_predictions(days: int = 7) -> pd.DataFrame:
             
         df['target_timestamp'] = pd.to_datetime(df['target_timestamp'], utc=True)
         df['generated_at'] = pd.to_datetime(df['generated_at'], utc=True)
+        if history is not None:
+            df = df.loc[(df.target_timestamp >= end - timedelta(days=days)) &
+                        (df.target_timestamp < end) & (df.generated_at <= end)].copy()
         
         # Calculate lead time in hours
         df['lead_time_hours'] = (df['target_timestamp'] - df['generated_at']).dt.total_seconds() / 3600.0
@@ -42,15 +47,16 @@ def fetch_all_predictions(days: int = 7) -> pd.DataFrame:
         print(f"Error reading archived predictions: {e}")
         return pd.DataFrame()
 
-def analyze_evolution(days: int = 7) -> None:
+def analyze_evolution(days: int = 7, *, history: ArchiveHistory | None = None) -> None:
     print(f"=== Plan Evolution Analysis (Last {days} days) ===")
     
-    df_actual = fetch_actuals(days=days)
+    options = {'history': history} if history is not None else {}
+    df_actual = fetch_actuals(days=days, **options)
     if df_actual.empty:
         print("⚠️ No actuals found. Cannot analyze accuracy.")
         return
 
-    df_all = fetch_all_predictions(days=days)
+    df_all = fetch_all_predictions(days=days, **options)
     if df_all.empty:
         print("⚠️ No archived predictions found.")
         return
@@ -134,6 +140,7 @@ def analyze_evolution(days: int = 7) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--days', type=int, default=7, help='Number of days to analyze')
+    add_history_arguments(parser)
     args = parser.parse_args()
     
-    analyze_evolution(days=args.days)
+    analyze_evolution(days=args.days, history=history_from_arguments(args))

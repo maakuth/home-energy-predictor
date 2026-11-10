@@ -26,6 +26,7 @@ Usage::
 """
 
 import os
+import argparse
 import sys
 from typing import Optional
 
@@ -38,11 +39,13 @@ from dotenv import load_dotenv
 
 from utils.sqlite_utils import get_db_connection, db_exists
 from utils.db_utils import fetch_states_history
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
+from utils.archive_evaluation import quarter_measurements
 
 load_dotenv(override=True)
 
 
-def load_archived_forecasts() -> pd.DataFrame:
+def load_archived_forecasts(*, history: ArchiveHistory | None = None) -> pd.DataFrame:
     """Load the most recent archived solar forecast per target interval."""
     if not db_exists():
         print("⚠️ No database found; nothing to analyze.")
@@ -71,6 +74,11 @@ def load_archived_forecasts() -> pd.DataFrame:
         # duplicates once parsed. Dedup on the parsed instant instead, keeping
         # the most recently generated forecast.
         df['target_timestamp'] = pd.to_datetime(df['target_timestamp'], utc=True)
+        df['generated_at'] = pd.to_datetime(df['generated_at'], utc=True)
+        if history is not None:
+            end = pd.to_datetime(history.cutoff, unit='s', utc=True)
+            generated = pd.to_datetime(df.generated_at, utc=True)
+            df = df.loc[(generated <= end) & (df.target_timestamp < end)].copy()
         df = df.sort_values('generated_at')
         df = df.drop_duplicates(subset='target_timestamp', keep='last')
         return df.set_index('target_timestamp').sort_index()
@@ -79,8 +87,13 @@ def load_archived_forecasts() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def fetch_actual_solar(days: int) -> pd.DataFrame:
+def fetch_actual_solar(days: int, *, history: ArchiveHistory | None = None) -> pd.DataFrame:
     """Fetch measured solar production, resampled to 15-minute intervals."""
+    if history is not None:
+        raw = quarter_measurements(history, history.cutoff - days * 86400, history.cutoff, ['solar_actual'])
+        out = raw.rename(columns={'solar_actual': 'solar_actual_kw'})
+        out.attrs = raw.attrs
+        return out
     entity = os.getenv('SOLAR_PRODUCTION_ENTITY', 'sensor.solarh_63038_real_power_kw')
     hist = fetch_states_history([entity], hours=days * 24)
     df = hist.get(entity)
@@ -97,7 +110,7 @@ def analyze(df: pd.DataFrame) -> dict[str, float]:
     """Compute solar forecast calibration metrics from a forecast/actual frame."""
     out: dict[str, float] = {}
 
-    valid = df[df['solar_forecast_kw'].notna() & (df['solar_forecast_kw'] > 0)]
+    valid = df[df['solar_actual_kw'].notna() & df['solar_forecast_kw'].notna() & (df['solar_forecast_kw'] > 0)]
     if valid.empty:
         return out
 
@@ -132,7 +145,7 @@ def daily_shortfall_kwh(df: pd.DataFrame) -> pd.Series:
     intervals (0.25 h each). This sizes an Aug-12-style miss in kWh, which is
     the quantity the Phase-2 cheap-window hedge decision needs.
     """
-    valid = df[df['solar_forecast_kw'].notna() & (df['solar_forecast_kw'] > 0)]
+    valid = df[df['solar_actual_kw'].notna() & df['solar_forecast_kw'].notna() & (df['solar_forecast_kw'] > 0)]
     if valid.empty:
         return pd.Series(dtype=float)
     short = (valid['solar_forecast_kw'] - valid['solar_actual_kw']).clip(lower=0) * 0.25
@@ -156,7 +169,8 @@ def _print_results(metrics: dict[str, float], per_day: pd.DataFrame) -> None:
 
     if not per_day.empty:
         print("\n=== Worst mis-forecast days (actual below p50) ===")
-        daily = per_day.groupby(per_day.index.date).apply(
+        observed = per_day.dropna(subset=['solar_actual_kw', 'solar_forecast_kw'])
+        daily = observed.groupby(observed.index.date).apply(
             lambda g: (g['solar_actual_kw'] < g['solar_forecast_kw']).mean()
         )
         daily = daily.sort_values(ascending=False).head(5)
@@ -171,16 +185,18 @@ def _print_results(metrics: dict[str, float], per_day: pd.DataFrame) -> None:
 
 
 def main() -> None:
-    days = 14
-    for arg in sys.argv[1:]:
-        if arg.startswith('--days='):
-            days = int(arg.split('=', 1)[1])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--days', type=int, default=14)
+    add_history_arguments(parser)
+    args = parser.parse_args()
+    days = args.days
+    history = history_from_arguments(args)
 
-    forecasts = load_archived_forecasts()
+    forecasts = load_archived_forecasts(history=history)
     if forecasts.empty:
         return
 
-    actuals = fetch_actual_solar(days)
+    actuals = fetch_actual_solar(days, history=history)
     if actuals.empty:
         print("Calibration skipped (no actual solar history available).")
         return
@@ -192,7 +208,9 @@ def main() -> None:
 
     df = forecasts.join(actuals, how='inner')
     # Drop the most recent partial interval (actual may be incomplete).
-    df = df.iloc[:-1]
+    # Archive quarters already carry exact completeness masks, including edges.
+    if history is None:
+        df = df.iloc[:-1]
 
     metrics = analyze(df)
     _print_results(metrics, df)

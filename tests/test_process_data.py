@@ -68,7 +68,7 @@ class TestProcessData(unittest.TestCase):
         from process_data import process_data
         raw_path = os.path.join(self.test_dir, 'state', 'raw_data.csv')
         raw = pd.read_csv(raw_path, index_col=0)
-        raw.index = pd.date_range('2026-10-07', periods=len(raw), freq='15min', tz='Europe/Helsinki')
+        raw.index = pd.date_range('2026-10-08', periods=len(raw), freq='15min', tz='Europe/Helsinki')
         raw.to_csv(raw_path)
         process_data()
         result = pd.read_csv(os.path.join(self.test_dir, 'state', 'processed_data.csv'), index_col=0)

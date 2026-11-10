@@ -4,7 +4,7 @@ import pytest
 from utils.heating_benchmark import analyze_heating, heating_regimes
 
 
-def frame(start='2026-10-07', days=1):
+def frame(start='2026-10-08', days=1):
     index = pd.date_range(start, periods=1440 * days, freq='min', tz='Europe/Helsinki')
     return pd.DataFrame({'gshp_power': 1000.0, 'accumulator_temp': 45.0,
                          'outside_temp': 5.0}, index=index)
@@ -12,7 +12,7 @@ def frame(start='2026-10-07', days=1):
 
 def test_regimes_use_local_calendar_boundaries():
     index = pd.to_datetime(['2026-08-19T20:59Z', '2026-08-19T21:00Z',
-                            '2026-10-05T21:00Z', '2026-10-06T21:00Z',
+                            '2026-10-06T21:00Z', '2026-10-07T21:00Z',
                             '2026-10-18T21:00Z', '2026-10-19T21:00Z',
                             '2026-10-20T21:00Z'])
     assert heating_regimes(index).tolist() == [

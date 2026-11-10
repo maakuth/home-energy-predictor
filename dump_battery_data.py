@@ -111,6 +111,8 @@ from utils.ha_utils import get_ha_state
 from utils.price_utils import fetch_market_prices, estimate_export_prices
 from utils.sqlite_utils import get_db_connection
 from utils.git_utils import get_model_version
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
+from utils.archive_evaluation import quarter_measurements
 
 
 def load_json_file(path: str) -> Optional[Any]:
@@ -298,6 +300,7 @@ def fetch_market_prices_range(
     start_time: datetime,
     end_time: datetime,
     verbose: bool = False,
+    *, history: ArchiveHistory | None = None,
 ) -> list[PriceRecord]:
     """Fetch market prices for the given time range.
     
@@ -306,6 +309,19 @@ def fetch_market_prices_range(
     2. SQLite predictions table (import/export prices)
     3. HA PostgreSQL states table (sensor.nordpool_total)
     """
+    if history is not None:
+        archived = fetch_sqlite_predictions(start_time, end_time, verbose=verbose, history=history)
+        by_time: dict[str, PriceRecord] = {}
+        for row in sorted(archived, key=lambda r: pd.to_datetime(r.get('generated_at', ''), utc=True)):
+            target = row.get('target_timestamp')
+            import_price, export_price = row.get('import_price'), row.get('export_price')
+            if target and import_price is not None and export_price is not None:
+                by_time[target] = {
+                    'timestamp': target,
+                    'import_price': float(import_price),
+                    'export_price': float(export_price),
+                }
+        return list(by_time.values())
     prices = []
     
     if verbose:
@@ -510,6 +526,7 @@ def fetch_sqlite_predictions(
     start_time: datetime,
     end_time: datetime,
     verbose: bool = False,
+    *, history: ArchiveHistory | None = None,
 ) -> list[SqlitePredictionRecord]:
     """Fetch prediction archive from SQLite database, preserving generated_at.
     
@@ -555,10 +572,13 @@ def fetch_sqlite_predictions(
                 available_cols.append(col)
         
         select_clause = ', '.join(available_cols)
+        as_of = (f"AND julianday(generated_at) <= julianday({history.cutoff}, 'unixepoch')"
+                 if history is not None else '')
         query = f"""
             SELECT {select_clause}
             FROM predictions
-            WHERE {timestamp_col} >= ? AND {timestamp_col} <= ?
+            WHERE julianday({timestamp_col}) >= julianday(?) AND julianday({timestamp_col}) <= julianday(?)
+            {as_of}
             ORDER BY {timestamp_col}, generated_at
         """
         
@@ -630,12 +650,24 @@ def fetch_ha_measurements(
     start_time: datetime,
     end_time: datetime,
     verbose: bool = False,
+    *, history: ArchiveHistory | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch actual measurements from Home Assistant PostgreSQL database.
     
     Returns list of measurement records for grid power, solar, battery, GSHP, Leaf,
     and other actual sensor readings for the given time range.
     """
+    if history is not None:
+        names = ['total_power', 'solar_actual', 'gshp_power', 'leaf_power', 'battery_power', 'outside_temp']
+        raw = quarter_measurements(history, start_time.timestamp(), end_time.timestamp(), names)
+        renamed = raw.rename(columns={'total_power': 'total_power_kw', 'solar_actual': 'solar_actual_kw',
+            'gshp_power': 'gshp_power_w', 'leaf_power': 'leaf_power_w',
+            'battery_power': 'battery_power_w', 'outside_temp': 'outside_temp_c'})
+        records = build_measurement_records(renamed)
+        for record, (_, row) in zip(records, raw.iterrows()):
+            record['measurement_policy'] = history.legacy_policy
+            record['source_verified'] = {name: bool(row[name + '_source_verified']) for name in names}
+        return records
     measurements = []
     
     if verbose:
@@ -728,31 +760,34 @@ def fetch_sqlite_history(
     start_time: datetime,
     end_time: datetime,
     verbose: bool = False,
+    *, history: ArchiveHistory | None = None,
 ) -> dict[str, Any]:
     """Wrapper to maintain backward compatibility. Combines predictions and measurements."""
-    history: dict[str, Any] = {}
+    output: dict[str, Any] = {}
     
     if verbose:
         print(f"\nFetching history from SQLite and PostgreSQL for {start_time} to {end_time}...")
     
     # Fetch actual measurements first (needed for synthesis if predictions are missing)
-    measurements = fetch_ha_measurements(start_time, end_time, verbose=verbose)
+    measurements = fetch_ha_measurements(start_time, end_time, verbose=verbose,
+        **({'history': history} if history is not None else {}))
     if measurements:
-        history['measurements'] = measurements
+        output['measurements'] = measurements
     
     # Fetch prediction archive with generated_at preserved
-    predictions = fetch_sqlite_predictions(start_time, end_time, verbose=verbose)
+    predictions = fetch_sqlite_predictions(start_time, end_time, verbose=verbose,
+        **({'history': history} if history is not None else {}))
     
     # If no predictions found and we have measurements, synthesize predictions
-    if not predictions and measurements:
+    if not predictions and measurements and history is None:
         if verbose:
             print(f"\nSynthesizing predictions from measurements...")
         predictions = synthesize_predictions(measurements, start_time, end_time, verbose=verbose)
     
     if predictions:
-        history['predictions_archive'] = predictions
+        output['predictions_archive'] = predictions
     
-    return history
+    return output
 
 
 def get_battery_config() -> BatteryConfig:
@@ -785,6 +820,7 @@ def dump_battery_data(
     end: Optional[str] = None,
     output: str = 'battery_test_data.pkl',
     verbose: bool = False,
+    *, history: ArchiveHistory | None = None,
 ) -> bool:
     """
     Dump battery planning data to pickle file.
@@ -799,7 +835,7 @@ def dump_battery_data(
     load_dotenv(override=True)
     
     # Determine time range
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.fromtimestamp(history.cutoff, tz=timezone.utc) if history is not None else datetime.now(tz=timezone.utc)
     
     if start and end:
         # Both start and end provided
@@ -852,12 +888,15 @@ def dump_battery_data(
     # Fetch current HA state
     if verbose:
         print("\n1️⃣ Fetching Home Assistant snapshots...")
-    data['ha_states'] = fetch_ha_snapshot(verbose=verbose)
+    if history is not None and end_time.timestamp() > history.cutoff:
+        raise ValueError('Export window exceeds archive cutoff')
+    data['ha_states'] = {} if history is not None else fetch_ha_snapshot(verbose=verbose)
     
     # Fetch predictions
     if verbose:
         print("\n2️⃣ Loading predictions...")
-    predictions_list = fetch_predictions(start_time=start_time, end_time=end_time)
+    predictions_list = ([] if history is not None else
+                        fetch_predictions(start_time=start_time, end_time=end_time))
     data['predictions'] = predictions_list
     if verbose:
         print(f"   ✓ Loaded {len(predictions_list)} predictions")
@@ -865,13 +904,19 @@ def dump_battery_data(
     # Fetch market prices
     if verbose:
         print("\n3️⃣ Fetching market prices...")
-    prices_list = fetch_market_prices_range(start_time, end_time, verbose=verbose)
+    prices_list = fetch_market_prices_range(start_time, end_time, verbose=verbose,
+        **({'history': history} if history is not None else {}))
     data['market_prices'] = prices_list
     
     # Fetch SQLite history
     if verbose:
         print("\n4️⃣ Fetching SQLite history...")
-    data['history'] = fetch_sqlite_history(start_time, end_time, verbose=verbose)
+    data['history'] = fetch_sqlite_history(start_time, end_time, verbose=verbose,
+        **({'history': history} if history is not None else {}))
+    if history is not None:
+        data['metadata']['measurement_archive_cutoff'] = history.cutoff
+        data['metadata']['measurement_policy'] = history.legacy_policy
+        data['metadata']['legacy_is_source_verified'] = False
     
     # Get configuration
     if verbose:
@@ -926,6 +971,7 @@ Examples:
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Print progress information')
     
+    add_history_arguments(parser)
     args = parser.parse_args()
     
     success = dump_battery_data(
@@ -933,7 +979,8 @@ Examples:
         start=args.start,
         end=args.end,
         output=args.output,
-        verbose=args.verbose
+        verbose=args.verbose,
+        history=history_from_arguments(args),
     )
     
     sys.exit(0 if success else 1)

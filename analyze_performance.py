@@ -13,11 +13,31 @@ from utils.db_utils import fetch_states_history
 from utils.sqlite_utils import get_db_connection, db_exists
 from utils.git_utils import get_model_version
 from utils.baseload_quality import select_training_rows
+from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
+from utils.archive_evaluation import quarter_measurements
+from utils.archive_quality import METERS
 
 load_dotenv(override=True)
 
-def fetch_actuals(days: int = 7) -> pd.DataFrame:
+def fetch_actuals(days: int = 7, *, history: ArchiveHistory | None = None) -> pd.DataFrame:
     """Fetch actual grid meter and solar data from HA/PostgreSQL."""
+    if history is not None:
+        if days <= 0:
+            raise ValueError('Actuals window must be positive')
+        raw = quarter_measurements(history, history.cutoff - days * 86400,
+                                   history.cutoff, list(METERS))
+        out = pd.DataFrame(index=raw.index)
+        out['actual_usage'] = raw.total_power + raw.solar_actual - raw.battery_power / 1000
+        out['solar_actual'] = raw.solar_actual
+        out['gshp_actual_kw'] = raw.gshp_power / 1000
+        base = raw.baseload_power
+        out['baseload_actual_kw'] = base.where(base.ge(0))
+        out['actuals_source_verified'] = raw[[n + '_source_verified' for n in METERS[:3]]].all(axis=1)
+        out['baseload_source_verified'] = raw[[n + '_source_verified' for n in METERS]].all(axis=1) & base.ge(0)
+        out['actuals_eligible'] = out.actual_usage.notna()
+        out['baseload_eligible'] = out.baseload_actual_kw.notna()
+        out.attrs = raw.attrs
+        return out
     print(f"Fetching actuals for last {days} days from PostgreSQL...")
     entities = {
         'sensor.sahkokauppa_nyt': 'total_power',
@@ -66,6 +86,7 @@ def fetch_actuals(days: int = 7) -> pd.DataFrame:
 def get_archived_predictions(
     version: Optional[str] = None,
     include_battery: bool = False,
+    *, history: ArchiveHistory | None = None,
 ) -> pd.DataFrame:
     """Load predictions that were actually made in real-time from the SQLite DB."""
     if not db_exists():
@@ -74,7 +95,10 @@ def get_archived_predictions(
     try:
         conn = get_db_connection()
         # Filter by version first to get the latest prediction made BY THIS VERSION
-        where_clause = f"WHERE version = '{version}'" if version else ""
+        conditions = [f"version = '{version}'"] if version else []
+        if history is not None:
+            conditions.append(f"julianday(generated_at) <= julianday({history.cutoff}, 'unixepoch')")
+        where_clause = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
         
         cols = "target_timestamp, predicted_usage_kw as predicted_usage, solar_forecast_kw, is_fallback_price, version"
         if include_battery:
@@ -83,7 +107,7 @@ def get_archived_predictions(
         query = f"""
             SELECT {cols}
             FROM (
-                SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY generated_at DESC) as rn
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY target_timestamp ORDER BY julianday(generated_at) DESC) as rn
                 FROM predictions
                 {where_clause}
             )
@@ -305,11 +329,11 @@ def store_performance_results(results: dict[str, Any]) -> None:
     except Exception as e:
         print(f"⚠️ Error storing analysis results: {e}")
 
-def backtest_sarima_model(df_actual: pd.DataFrame) -> pd.DataFrame:
+def backtest_sarima_model(df_actual: pd.DataFrame, *, history: ArchiveHistory | None = None) -> pd.DataFrame:
     """Compare archived SARIMA predictions against actuals for hindsight evaluation."""
     from compare_models import get_archived_sarima_predictions
 
-    sarima_df = get_archived_sarima_predictions(days=14)
+    sarima_df = get_archived_sarima_predictions(days=14, **({'history': history} if history is not None else {}))
     if sarima_df.empty:
         print("⚠️ No archived SARIMA predictions found. Skipping SARIMA backtest.")
         return pd.DataFrame()
@@ -326,7 +350,8 @@ def backtest_sarima_model(df_actual: pd.DataFrame) -> pd.DataFrame:
     return df_hindsight
 
 
-def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
+def backtest_current_model(df_actual: pd.DataFrame, *, history: ArchiveHistory | None = None,
+                           frame: pd.DataFrame | None = None) -> pd.DataFrame:
     """
     Run a 'hindsight' prediction using the CURRENT model on PAST features.
     This tells us if the NEW model is better at predicting the past than the OLD model was.
@@ -335,7 +360,15 @@ def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
     features_path = 'state/model_features.json'
     processed_path = 'state/processed_data.csv'
 
-    if not all(os.path.exists(p) for p in [model_path, features_path, processed_path]):
+    if history is not None and frame is None:
+        if df_actual.empty:
+            return pd.DataFrame()
+        start = df_actual.index.min().timestamp()
+        frame = history.features(start, history.cutoff)
+    required_paths = [model_path, features_path]
+    if history is None and frame is None:
+        required_paths.append(processed_path)
+    if not all(os.path.exists(p) for p in required_paths):
         print("⚠️ Model files or processed_data.csv not found. Skipping hindsight backtest.")
         return pd.DataFrame()
 
@@ -347,7 +380,7 @@ def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
             features = json.load(f)
 
         # Load processed features
-        df_proc = pd.read_csv(processed_path, index_col=0)
+        df_proc = frame.copy() if frame is not None else pd.read_csv(processed_path, index_col=0)
         df_proc.index = pd.to_datetime(df_proc.index, utc=True)
 
         # The processed-data schema may have changed (e.g. quality-aware
@@ -382,15 +415,18 @@ def backtest_current_model(df_actual: pd.DataFrame) -> pd.DataFrame:
         print(f"Error during hindsight backtest: {e}")
         return pd.DataFrame()
 
-def analyze(days: int = 2, do_backtest: bool = False) -> None:
+def analyze(days: int = 2, do_backtest: bool = False, *, history: ArchiveHistory | None = None) -> None:
     print(f"=== Starting Performance Analysis (Window: {days} days) ===")
     
-    df_actual = fetch_actuals(days=days)
+    df_actual = fetch_actuals(days=days, **({'history': history} if history is not None else {}))
+    if history is not None:
+        print(f'Archive actuals policy: {history.legacy_policy}; legacy eligibility is not source verification.')
     if df_actual.empty:
         return
 
     current_version = get_model_version()
-    df_archived = get_archived_predictions(version=current_version, include_battery=True)
+    df_archived = get_archived_predictions(version=current_version, include_battery=True,
+        **({'history': history} if history is not None else {}))
     
     # 1. Real-time Analysis (What actually happened)
     # Scope to current model version
@@ -473,7 +509,8 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
 
     # 2a. Hindsight Backtest (How would the current XGBoost model have done?)
     if do_backtest:
-        df_hindsight = backtest_current_model(df_actual)
+        df_hindsight = (backtest_current_model(df_actual, history=history) if history is not None
+                        else backtest_current_model(df_actual))
         if not df_hindsight.empty:
             hindsight_comp = df_hindsight.join(
                 df_actual[['baseload_actual_kw']].rename(columns={'baseload_actual_kw': 'actual_usage'}),
@@ -497,7 +534,7 @@ def analyze(days: int = 2, do_backtest: bool = False) -> None:
             print("  (skipped - see reason above)")
     # 2b. SARIMA Backtest (Archived SARIMA predictions vs actuals)
     if do_backtest:
-        df_sarima_bt = backtest_sarima_model(df_actual)
+        df_sarima_bt = backtest_sarima_model(df_actual, **({'history': history} if history is not None else {}))
         if not df_sarima_bt.empty:
             s_res_3h = df_sarima_bt.resample('3h').mean(numeric_only=True).dropna()
             
@@ -520,6 +557,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--days', type=int, default=2, help='Number of days to look back')
     parser.add_argument('--backtest', action='store_true', help='Compare with currently trained model in hindsight')
+    add_history_arguments(parser)
     args = parser.parse_args()
     
-    analyze(days=args.days, do_backtest=args.backtest)
+    analyze(days=args.days, do_backtest=args.backtest, history=history_from_arguments(args))
