@@ -72,6 +72,32 @@ quarter energy as complete-quarter truth.
 
 ## Rollout and remaining work
 
+### UTC calendar inference correction (1.47.2)
+
+Training normalizes timestamps to UTC before computing `hour`, `minute`,
+`quarter_hour`, `day_of_week`, `month` and all six cyclic calendar features.
+Inference now uses the same UTC model clock, including across Helsinki midnight,
+month/year boundaries and both DST transitions. Aware UTC and Helsinki timestamps
+for the same instant produce identical calendar inputs; the repeated autumn
+local hour still represents two distinct UTC hours. Legacy naive inputs retain
+their clock values, interpreted as UTC for model features (not host-local time).
+
+Only model calendar inputs change. Sauna/EV heuristics still use the caller's
+clock (Europe/Helsinki in production prediction); scheduling, forecast lookup,
+lag anchors, horizon/interval stepping and output timestamp zones are unchanged.
+This does not redesign local-clock DST horizon stepping.
+
+The 18-feature v2 contract, units, saved metadata and strict artifact validation
+remain unchanged: this fixes inference to match existing UTC training, rather
+than changing training semantics or requiring retraining. No saved model is
+rewritten. The v2 contract does not itself attest calendar timezone; models
+trained outside the repository's UTC processing path need independent provenance
+verification, not an assumption that a matching feature list proves timezone.
+The pinned forward-shadow protocol/model/artifacts are not changed; shadow
+already supplies UTC timestamps and declares UTC calendar provenance. Its frozen
+code pin remains authoritative for the ongoing run. This fix neither promotes a
+model nor establishes forecast quality from the short initial shadow window.
+
 Merge/redeploy the processor and trainers together, then regenerate training
 data before retraining. No live retraining or deployment is part of this change.
 Model version is bumped because target and predictor behaviour intentionally

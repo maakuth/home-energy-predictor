@@ -154,7 +154,10 @@ def generate_inference_data(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Generate inference data rows for the model.
-    Extracted for testability.
+    Model calendar features use UTC, matching process_frame training inputs.
+    Heuristics, interval stepping and output timestamps retain the caller's clock
+    (Europe/Helsinki in predict). Naive model timestamps are interpreted as UTC,
+    as in process_frame, without changing existing bare-datetime callers.
     """
     inference_data = []
     timestamps = []
@@ -235,6 +238,10 @@ def generate_inference_data(
         if current_ts < (now + timedelta(hours=2)):
             ev_pos_proj = current_states.get('ev_pos_val', ev_pos_proj)
 
+        # Separate the model clock from local sauna/EV projection above. Never
+        # call astimezone on a naive datetime: that would depend on the host TZ.
+        model_ts = (current_ts.astimezone(timezone.utc) if current_ts.tzinfo is not None
+                    else current_ts.replace(tzinfo=timezone.utc))
         row = {
             'outside_temp': forecast_temp,
             'wind_speed': forecast_wind,
@@ -252,17 +259,17 @@ def generate_inference_data(
             'baseload_lag_1h': lag1h_val,
             'baseload_lag_24h': lag24h_val,
             'is_extended_complex': 1,
-            'hour': current_ts.hour,
-            'minute': current_ts.minute,
-            'quarter_hour': current_ts.minute // 15,
-            'day_of_week': current_ts.weekday(),
-            'month': current_ts.month,
-            'hour_sin': np.sin(2 * np.pi * current_ts.hour / 24),
-            'hour_cos': np.cos(2 * np.pi * current_ts.hour / 24),
-            'day_sin': np.sin(2 * np.pi * current_ts.weekday() / 7),
-            'day_cos': np.cos(2 * np.pi * current_ts.weekday() / 7),
-            'month_sin': np.sin(2 * np.pi * (current_ts.month - 1) / 12),
-            'month_cos': np.cos(2 * np.pi * (current_ts.month - 1) / 12),
+            'hour': model_ts.hour,
+            'minute': model_ts.minute,
+            'quarter_hour': model_ts.minute // 15,
+            'day_of_week': model_ts.weekday(),
+            'month': model_ts.month,
+            'hour_sin': np.sin(2 * np.pi * model_ts.hour / 24),
+            'hour_cos': np.cos(2 * np.pi * model_ts.hour / 24),
+            'day_sin': np.sin(2 * np.pi * model_ts.weekday() / 7),
+            'day_cos': np.cos(2 * np.pi * model_ts.weekday() / 7),
+            'month_sin': np.sin(2 * np.pi * (model_ts.month - 1) / 12),
+            'month_cos': np.cos(2 * np.pi * (model_ts.month - 1) / 12),
             'is_sauna_active': is_sauna_proj
         }
         inference_data.append(row)
