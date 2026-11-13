@@ -20,6 +20,19 @@ artifact sidecars prevent publishing stale outputs. Returning to no arguments
 selects explicit CSV rollback. See [archive pipelines](ARCHIVE_PIPELINES.md).
 No deployed timer/service was switched by this implementation.
 
+## Prepared data-only SQLite collector (not yet deployed)
+
+`deploy/systemd/hepo-measurement-collector.service.in` and its timer prepare a
+separate raw-data collector at **:02/:07/:12/... every hour**. It shares staging's
+`historical-backfill.lock` with manual ingestion/shadow work, uses read-only
+PostgreSQL transactions, and writes only the identity-pinned staging archive and
+collector reports. Lock contention skips a run; failures remain visible in the
+journal/reports. It does not invoke training, inference, optimization or controls.
+
+Host installation and a verified first run must precede timer enablement; see
+[collector deployment](MEASUREMENT_COLLECTOR.md). This prepared schedule does not
+change the deployed CSV jobs above or install any unit automatically.
+
 Writing the active plan is itself an actuation boundary: `run_often.py` consumes
 it without needing `push_to_ha.py`. Use isolated shadow tools, not a pipeline
 execution with the final publisher removed, for non-actuating validation.

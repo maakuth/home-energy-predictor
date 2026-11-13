@@ -1,0 +1,16 @@
+{
+  "format_version": 1,
+  "archive": "/ABSOLUTE/STAGE/measurements.sqlite",
+  "archive_uuid": "00000000-0000-0000-0000-000000000000",
+  "recorder_namespace": "CONFIRMED-RECORDER-GENERATION",
+  "sources": "/ABSOLUTE/STAGE/collector/sources.yaml",
+  "sources_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "measurements": ["outside_temp", "wind_speed", "total_power", "solar_actual", "battery_power", "gshp_power", "leaf_power"],
+  "bootstrap_from": "2026-11-10T15:28:00Z",
+  "env_file": "/ABSOLUTE/REPOSITORY/.env",
+  "lock_file": "/ABSOLUTE/STAGE/historical-backfill.lock",
+  "reports_dir": "/ABSOLUTE/STAGE/collector/reports",
+  "overlap_seconds": 900,
+  "chunk_seconds": 86400,
+  "retries": 2
+}

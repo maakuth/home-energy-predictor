@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh HEPO measurement archive every five minutes (data only)
+
+[Timer]
+OnCalendar=*-*-* *:02/5:00
+Persistent=true
+Unit=hepo-measurement-collector.service
+
+[Install]
+WantedBy=timers.target

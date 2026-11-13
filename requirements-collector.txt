@@ -1,0 +1,5 @@
+# Data-only collector environment: no ML, HTTP, planner or control dependencies.
+pandas>=3.0
+PyYAML>=6.0
+python-dotenv>=1.2
+psycopg2-binary>=2.9
