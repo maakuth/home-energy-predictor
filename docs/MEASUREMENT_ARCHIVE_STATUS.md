@@ -1,15 +1,20 @@
-# Measurement archive migration status — 2026-11-10
+# Measurement archive migration status — integration update 2026-11-13
 
-Implementation branch: `task/measurement-archive-finish` (extends
-`task/measurement-archive-reader`, preserving all prior archive work). Nothing
-has been merged into `master` or enabled in the live pipeline. Model version:
-1.47.1. No production models were retrained. Subsequent authorized staging
+The implementation chain through `task/measurement-storage-replay` at `dbc7d4f`
+was fast-forwarded into `master` with explicit operator approval on November 13.
+Model code version: **1.47.2**. Existing scheduled defaults remain CSV; no archive
+consumer cutover, shadow timer installation, model-artifact replacement or
+service restart was performed. Inference/training fixes are now on `master` and
+are picked up by subsequent normal jobs; merging is not behavior-neutral for
+those code paths. No production models were retrained by the integration.
+Authorized staging
 imports, recorder backfill, operator confirmations and the isolated candidate
 evaluation are recorded in the [migration run](MEASUREMENT_MIGRATION_RUN_2026-11-10.md).
 The original pre-migration findings below describe the retained original archive;
 the separate migration candidate now contains newer CSV and recorder data.
-Physical-bound support and the migration record extend the implementation on
-`task/measurement-battery-bounds`; neither branch is merged into `master`.
+The integrated chain includes physical-bound support, forward shadow tooling,
+the UTC calendar fix and controlled CSV/SQLite replay. The manually invoked
+host shadow remains pinned to its separate `512681d` checkout and protocol.
 
 ## Available for explicit offline use
 
@@ -104,12 +109,10 @@ is not proof of original sensor fidelity or a model ranking.
 The remaining work depends on these answers/data, not another implicit fallback
 or fabricated eligibility rule. Merge and operational rollout are distinct.
 
-Integrated validation including predictor removal: **897 non-slow tests passed**, 55 slow tests
-deselected, four passing subtests; repository-wide Pyright and shell syntax
-checks passed. Full-suite validation: **951 passed, 1 skipped**, four passing
-subtests (including slow tests). These are isolated test results, not production
-retraining or representative model-quality evaluation. All task commits remain
-unmerged; only the intentional `.pruner` workspace aid is left untracked.
+Latest integrated full-suite validation: **1,007 passed, 1 skipped**, four passing
+subtests (including slow tests); repository-wide Pyright and diff checks passed.
+These are isolated test results, not production retraining or live-rollout
+approval. Integration preserved the operator's unrelated main-worktree changes.
 
 **The system is not migration-ready.** Do not delete source CSVs, snapshots or
 the staging archive, and do not switch schedules as part of code validation.
