@@ -126,3 +126,14 @@ and later scoring in unique shadow directories. No active artifact replacement,
 planner execution or publication is included. See
 [forward shadow contracts](FORWARD_SHADOW.md). Preparation/dry-run is not a
 claim that a live forecast vintage has already been captured.
+
+## Controlled data-backend replay
+
+Subsequent real forward captures were compared under a common model and captured
+forecast inputs, independently of candidate-versus-active-model MAE. The
+November 12 replay produced 102 identical baseload predictions from CSV and
+SQLite, with a 0.0685 W difference in the observed heating mean. Other origins
+were blocked by missing CSV context or a trailing PV-value/flag gap. Raw
+aggregation differences were independently checked against recorded events.
+See [controlled replay evidence and limits](STORAGE_REPLAY.md). Full optimizer
+plan equivalence remains untested because required origin inputs were not saved.
