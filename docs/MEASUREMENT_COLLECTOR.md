@@ -25,29 +25,55 @@ It never creates or upgrades an archive and has no CSV fallback.
 ## Host preparation (operator-run)
 
 Run on **murrikka**, as `markuz`, not in the development container. Review these
-paths before executing. Use the tested `task/measurement-collector` branch; do
-not move the collector checkout when updating the main application checkout.
+paths before executing. Use the existing `~/src/home-energy-predictor` checkout
+with the tested collector code integrated into `master`. No additional code
+checkout or worktree is created: updating the main checkout also updates collector code
+on subsequent runs. Stop the collector timer/service before changing code or
+dependencies, validate the update, then resume it. The archive UUID and source
+mapping hash remain pinned independently; code is not pinned to a separate release.
 No live database calls occur in this preparation block.
 
 ```bash
 set -euo pipefail
 REPO=/home/markuz/src/home-energy-predictor
-CODE=/home/markuz/.local/share/hepo/collector-code
-PYTHON=/home/markuz/.local/share/hepo/collector-venv/bin/python3
+CODE="$REPO"
+PYTHON="$REPO/.venv-collector/bin/python3"
 STAGE="$REPO/state/measurement-migration-20261110T152856Z"
 CONFIG="$STAGE/collector/config.json"
 export REPO CODE PYTHON STAGE CONFIG
 
-mkdir -p /home/markuz/.local/share/hepo
-COMMIT=$(git -C "$REPO" rev-parse task/measurement-collector)
-git -C "$REPO" worktree add --detach "$CODE" "$COMMIT"
-python3 -m venv /home/markuz/.local/share/hepo/collector-venv
+test ! -e "$REPO/.venv-collector"
+python3 -m venv "$REPO/.venv-collector"
 "$PYTHON" -m pip install -r "$CODE/requirements-collector.txt"
 ```
 
-Install only collector dependencies, not the ML environment. The worktree must
-be a new path; if it already exists, stop and inspect rather than overwriting it.
-The virtualenv must likewise be new or dedicated to this collector.
+Install only collector dependencies into `.venv-collector`, not the live ML
+environment. If that directory already exists, stop and inspect rather than
+overwriting it. Keep this local environment untracked. Configuration, reports,
+frozen mappings and the archive remain under the existing staging directory.
+`code-commit.txt` records the preparation-time commit only, not a release pin.
+
+### Existing CSV job dependencies
+
+The live `run_frequent.sh` activates the project's **`.venv`**, not the collector
+environment. Updating source code does not install new dependencies there.
+`PyYAML>=6.0` is already declared in `requirements.txt`, but archive modules are
+imported during CSV prediction startup too. A stale live environment can therefore
+fail with `ModuleNotFoundError: No module named 'yaml'` even without SQLite enabled.
+
+On the host, refresh the live environment from the project's dependency file:
+
+```bash
+cd /home/markuz/src/home-energy-predictor
+.venv/bin/python3 -m pip install -r requirements.txt
+.venv/bin/python3 -c "import yaml; import predict_future"
+```
+
+Coordinate installation with the existing scheduled jobs so they do not start
+mid-update. The import check does not run prediction, connect to the recorder or
+publish controls. Inspect the next normal 15-minute run in the journal; do not
+manually execute the full live pipeline merely to test imports. Installing
+collector requirements into `.venv-collector` does **not** repair the live `.venv`.
 
 The following renders the exact host configuration and units without installing
 or starting them. It freezes the **exact audited mapping bytes**, including all
