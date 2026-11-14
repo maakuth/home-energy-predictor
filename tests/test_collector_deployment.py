@@ -11,13 +11,16 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_collector_uses_existing_checkout_and_a_local_dedicated_environment():
+def test_collector_uses_existing_checkout_and_shared_environment():
     doc = (ROOT / 'docs/MEASUREMENT_COLLECTOR.md').read_text()
     assert 'CODE="$REPO"' in doc
-    assert 'PYTHON="$REPO/.venv-collector/bin/python3"' in doc
+    assert 'PYTHON="$REPO/.venv/bin/python3"' in doc
     assert 'git worktree add' not in doc
     assert '/.local/share/hepo/' not in doc
-    assert 'python3 -m venv "$REPO/.venv-collector"' in doc
+    assert '.venv-collector' not in doc
+    assert 'requirements-collector.txt' not in doc
+    assert 'python3 -m venv' not in doc
+    assert '"$PYTHON" -m pip install -r "$CODE/requirements.txt"' in doc
     assert 'updating the main checkout also updates collector code' in doc
 
 
@@ -48,7 +51,7 @@ def test_documented_renderer_preserves_audited_sources_and_local_paths(tmp_path)
                     '-c', 'user.email=test@example.invalid', 'commit',
                     '--allow-empty', '-qm', 'Fixture'], check=True)
     config = stage / 'collector' / 'config.json'
-    python = repo / '.venv-collector' / 'bin' / 'python3'
+    python = repo / '.venv' / 'bin' / 'python3'
     env = dict(os.environ, REPO=str(repo), CODE=str(repo), STAGE=str(stage),
                PYTHON=str(python), CONFIG=str(config))
     subprocess.run([sys.executable, '-c', blocks[0]], env=env, check=True)

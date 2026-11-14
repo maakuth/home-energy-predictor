@@ -37,26 +37,25 @@ No live database calls occur in this preparation block.
 set -euo pipefail
 REPO=/home/markuz/src/home-energy-predictor
 CODE="$REPO"
-PYTHON="$REPO/.venv-collector/bin/python3"
+PYTHON="$REPO/.venv/bin/python3"
 STAGE="$REPO/state/measurement-migration-20261110T152856Z"
 CONFIG="$STAGE/collector/config.json"
 export REPO CODE PYTHON STAGE CONFIG
 
-test ! -e "$REPO/.venv-collector"
-python3 -m venv "$REPO/.venv-collector"
-"$PYTHON" -m pip install -r "$CODE/requirements-collector.txt"
+test -x "$PYTHON"
+"$PYTHON" -m pip install -r "$CODE/requirements.txt"
 ```
 
-Install only collector dependencies into `.venv-collector`, not the live ML
-environment. If that directory already exists, stop and inspect rather than
-overwriting it. Keep this local environment untracked. Configuration, reports,
-frozen mappings and the archive remain under the existing staging directory.
+Use the existing project's `.venv` and `requirements.txt`, shared with the live
+jobs. Do not create another environment. Coordinate dependency installation
+with all scheduled jobs using this environment so they do not start mid-update.
+Configuration, reports, frozen mappings and the archive remain under the existing staging directory.
 `code-commit.txt` records the preparation-time commit only, not a release pin.
 
 ### Existing CSV job dependencies
 
-The live `run_frequent.sh` activates the project's **`.venv`**, not the collector
-environment. Updating source code does not install new dependencies there.
+The live `run_frequent.sh` and collector both use the project's **`.venv`**.
+Updating source code does not install new dependencies there.
 `PyYAML>=6.0` is already declared in `requirements.txt`, but archive modules are
 imported during CSV prediction startup too. A stale live environment can therefore
 fail with `ModuleNotFoundError: No module named 'yaml'` even without SQLite enabled.
@@ -72,8 +71,8 @@ cd /home/markuz/src/home-energy-predictor
 Coordinate installation with the existing scheduled jobs so they do not start
 mid-update. The import check does not run prediction, connect to the recorder or
 publish controls. Inspect the next normal 15-minute run in the journal; do not
-manually execute the full live pipeline merely to test imports. Installing
-collector requirements into `.venv-collector` does **not** repair the live `.venv`.
+manually execute the full live pipeline merely to test imports. If the preparation
+step above already refreshed this environment, only the import check is needed here.
 
 The following renders the exact host configuration and units without installing
 or starting them. It freezes the **exact audited mapping bytes**, including all

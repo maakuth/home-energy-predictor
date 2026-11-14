@@ -32,8 +32,9 @@ journal/reports. It does not invoke training, inference, optimization or control
 Host installation and a verified first run must precede timer enablement; see
 [collector deployment](MEASUREMENT_COLLECTOR.md). This prepared schedule does not
 change the deployed CSV jobs above or install any unit automatically. The
-collector uses the existing project checkout, with a dedicated local
-`.venv-collector` environment; updating that checkout updates collector code too.
+collector uses the existing project checkout and shares its `.venv` and
+`requirements.txt` with the live jobs; updating that checkout updates collector
+code too. Coordinate shared dependency updates with all scheduled jobs.
 
 Writing the active plan is itself an actuation boundary: `run_often.py` consumes
 it without needing `push_to_ha.py`. Use isolated shadow tools, not a pipeline
