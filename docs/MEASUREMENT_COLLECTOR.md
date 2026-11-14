@@ -105,9 +105,8 @@ config.update(
 config_path = Path(os.environ['CONFIG'])
 with config_path.open('x') as stream:
     stream.write(json.dumps(config, indent=2) + '\n')
-values = {'USER': 'markuz', 'CODE_DIR': str(code), 'PYTHON': os.environ['PYTHON'],
-          'CONFIG': str(config_path), 'STAGE_DIR': str(stage),
-          'SOURCES': str(sources), 'ENV_FILE': str(repo / '.env')}
+values = {'CODE_DIR': str(code), 'PYTHON': os.environ['PYTHON'],
+          'CONFIG': str(config_path)}
 service = (code / 'deploy/systemd/hepo-measurement-collector.service.in').read_text()
 for key, value in values.items():
     service = service.replace('@' + key + '@', value)
@@ -143,14 +142,24 @@ a recorder rebuild/restore requires stopping and reviewing identity first.
 These commands explicitly perform host installation and the first live read.
 Review rendered units first. Do not run existing frequent/weekly archive
 pipelines for this step: writing the active plan can actuate control.
+Install as `markuz` into the **user** manager, like the existing HEPO units; no
+root installation or `User=` setting is needed. Check for an existing collector
+unit before installing and inspect it rather than overwriting another deployment.
+If units were rendered from an older template, regenerate them from the updated
+template before installing; the exclusive-creation preparation block will not
+overwrite existing files. Preserve the existing config and frozen mapping.
 
 ```bash
-systemd-analyze verify "$STAGE/collector/hepo-measurement-collector.service" "$STAGE/collector/hepo-measurement-collector.timer"
-sudo install -m 0644 "$STAGE/collector/hepo-measurement-collector.service" /etc/systemd/system/hepo-measurement-collector.service
-sudo install -m 0644 "$STAGE/collector/hepo-measurement-collector.timer" /etc/systemd/system/hepo-measurement-collector.timer
-sudo systemctl daemon-reload
-sudo systemctl start hepo-measurement-collector.service
-sudo journalctl -u hepo-measurement-collector.service -n 60 --no-pager
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+mkdir -p "$UNIT_DIR"
+test ! -e "$UNIT_DIR/hepo-measurement-collector.service"
+test ! -e "$UNIT_DIR/hepo-measurement-collector.timer"
+systemd-analyze --user verify "$STAGE/collector/hepo-measurement-collector.service" "$STAGE/collector/hepo-measurement-collector.timer"
+install -m 0644 "$STAGE/collector/hepo-measurement-collector.service" "$UNIT_DIR/hepo-measurement-collector.service"
+install -m 0644 "$STAGE/collector/hepo-measurement-collector.timer" "$UNIT_DIR/hepo-measurement-collector.timer"
+systemctl --user daemon-reload
+systemctl --user start hepo-measurement-collector.service
+journalctl --user -u hepo-measurement-collector.service -n 60 --no-pager
 ```
 
 Inspect the latest `collector/reports/collector-*.json` before enabling the timer:
@@ -163,13 +172,27 @@ backfill/shadow finishes. Do not remove the shared lock file.
 Only after that verification:
 
 ```bash
-sudo systemctl enable --now hepo-measurement-collector.timer
-systemctl list-timers hepo-measurement-collector.timer --all
+systemctl --user enable --now hepo-measurement-collector.timer
+systemctl --user list-timers hepo-measurement-collector.timer --all
 ```
 
+For operation after logout and from boot, check the existing user-manager setup
+with `loginctl show-user markuz -p Linger`. If it reports `Linger=no`, arrange
+lingering separately with the host administrator before relying on unattended
+collection. Do not change it silently as part of installation. Run user-manager
+commands in the host user's normal login session, not from the container.
+
 The schedule is at :02/:07/:12/... each hour, with missed-run catch-up. The
-service writes only inside staging; code, mappings, config and credentials are
-read-only under systemd. First catch-up can exceed five minutes: systemd does
+collector's application code writes only inside staging, but this user unit is
+**not a filesystem sandbox**: it runs with the same filesystem access as `markuz`.
+Mount-namespace restrictions from the system-service template have been removed
+to avoid requiring unprivileged user namespaces on the host. `NoNewPrivileges`,
+private file permissions and the data-only code path remain; upstream read-only
+transactions, identity checks and the shared lock are unchanged. The unit does
+not depend on the system manager's `network-online.target`; network failures are
+reported and the next timer run retries.
+
+First catch-up can exceed five minutes: systemd does
 not start a second instance of an already-running oneshot. A 20-minute timeout
 interrupts long catch-ups; completed chunks remain for the next run.
 
@@ -188,8 +211,8 @@ use SQLite-aware backups rather than copying an open WAL database alone.
 To stop collection without affecting the live CSV/control jobs:
 
 ```bash
-sudo systemctl disable --now hepo-measurement-collector.timer
-sudo systemctl stop hepo-measurement-collector.service
+systemctl --user disable --now hepo-measurement-collector.timer
+systemctl --user stop hepo-measurement-collector.service
 ```
 
 Do not delete the archive, CSVs, lock, reports or snapshots. Updating collector

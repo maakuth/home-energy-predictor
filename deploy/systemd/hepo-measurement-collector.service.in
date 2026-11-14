@@ -1,11 +1,8 @@
 [Unit]
 Description=HEPO data-only measurement archive collector (no control)
-Wants=network-online.target
-After=network-online.target
 
 [Service]
 Type=oneshot
-User=@USER@
 WorkingDirectory=@CODE_DIR@
 ExecStart="@PYTHON@" -m utils.measurement_collector --config "@CONFIG@" --execute
 Environment=PYTHONDONTWRITEBYTECODE=1
@@ -17,12 +14,4 @@ IOSchedulingClass=idle
 TimeoutStartSec=20min
 SuccessExitStatus=75
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths="@STAGE_DIR@"
-ReadOnlyPaths="@CODE_DIR@" "@CONFIG@" "@SOURCES@" "@ENV_FILE@"
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 RestrictSUIDSGID=true

@@ -31,6 +31,23 @@ def test_live_dependency_recovery_targets_the_frequent_jobs_environment():
     assert 'PyYAML>=6.0' in (ROOT / 'requirements.txt').read_text().splitlines()
 
 
+def test_installation_and_management_use_the_user_systemd_manager():
+    doc = (ROOT / 'docs/MEASUREMENT_COLLECTOR.md').read_text()
+    assert 'UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"' in doc
+    assert 'systemd-analyze --user verify' in doc
+    assert 'journalctl --user -u hepo-measurement-collector.service' in doc
+    for command in ('daemon-reload', 'start hepo-measurement-collector.service',
+                    'enable --now hepo-measurement-collector.timer',
+                    'list-timers hepo-measurement-collector.timer --all',
+                    'disable --now hepo-measurement-collector.timer',
+                    'stop hepo-measurement-collector.service'):
+        assert f'systemctl --user {command}' in doc
+    assert 'sudo ' not in doc
+    assert '/etc/systemd/system' not in doc
+    assert 'loginctl show-user markuz -p Linger' in doc
+    assert 'not a filesystem sandbox' in doc
+
+
 def test_documented_renderer_preserves_audited_sources_and_local_paths(tmp_path):
     doc = (ROOT / 'docs/MEASUREMENT_COLLECTOR.md').read_text()
     blocks = re.findall(r"<<'PY'\n(.*?)\nPY", doc, re.S)

@@ -192,8 +192,12 @@ def test_systemd_templates_are_data_only_and_leave_existing_jobs_alone():
     assert '-m utils.measurement_collector' in service
     assert '--execute' in service
     assert 'SuccessExitStatus=75' in service
-    assert 'ProtectSystem=strict' in service
-    assert 'ReadWritePaths="@STAGE_DIR@"' in service
+    assert 'NoNewPrivileges=true' in service
+    assert 'UMask=0077' in service
+    assert not any(line.startswith('User=') for line in service.splitlines())
+    assert 'network-online.target' not in service
+    assert all(word not in service for word in ['ProtectSystem=', 'ProtectHome=',
+        'PrivateTmp=', 'ReadWritePaths=', 'ReadOnlyPaths=', 'ProtectKernel', 'ProtectControlGroups='])
     assert all(word not in service for word in ['predict_future', 'optimize_plan', 'push_to_ha', 'train_model'])
     assert 'OnCalendar=*-*-* *:02/5:00' in timer
     assert 'Persistent=true' in timer

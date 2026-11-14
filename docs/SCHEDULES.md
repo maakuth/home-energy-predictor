@@ -35,6 +35,11 @@ change the deployed CSV jobs above or install any unit automatically. The
 collector uses the existing project checkout and shares its `.venv` and
 `requirements.txt` with the live jobs; updating that checkout updates collector
 code too. Coordinate shared dependency updates with all scheduled jobs.
+Install these as user units under `~/.config/systemd/user` (or
+`$XDG_CONFIG_HOME/systemd/user`) and manage them with `systemctl --user`, like the
+existing HEPO units. Unattended operation requires the user manager to remain
+running (check lingering). The portable user template does not provide a
+filesystem write sandbox; staging-only writes are an application contract.
 
 Writing the active plan is itself an actuation boundary: `run_often.py` consumes
 it without needing `push_to_ha.py`. Use isolated shadow tools, not a pipeline
