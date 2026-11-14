@@ -13,6 +13,8 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
+import time
 from typing import Any
 
 import numpy as np
@@ -23,7 +25,7 @@ from utils.archive_history import ArchiveHistory, add_history_arguments, history
 from utils.archive_quality import METERS, apply_training_policy
 from utils.baseload_model import validate_baseload_model
 from utils.measurement_reader import MeasurementReader
-from utils.shadow_csv import freeze_csv, validate_sidecar
+from utils.shadow_csv import CsvNotReady, freeze_csv, validate_sidecar
 
 
 def _timestamp(value: Any) -> pd.Timestamp:
@@ -77,10 +79,25 @@ def capture_inputs(session: Any, host: str, token: str) -> dict[str, Any]:
 
 
 def capture_with_csv(session: Any, host: str, token: str, csv: str | Path,
-                     csv_output: str | Path) -> dict[str, Any]:
+                     csv_output: str | Path, *, wait_seconds: float = 0) -> dict[str, Any]:
     """Freeze before HA reads, retaining the real capture clock and cutoff."""
-    cutoff = math.floor(datetime.now(timezone.utc).timestamp() / 60) * 60
-    metadata = freeze_csv(csv, csv_output, cutoff)
+    if not math.isfinite(wait_seconds) or not 0 <= wait_seconds <= 1800:
+        raise ValueError('CSV wait must be finite and between 0 and 1800 seconds')
+    deadline = time.monotonic() + wait_seconds
+    announced = False
+    while True:
+        cutoff = math.floor(datetime.now(timezone.utc).timestamp() / 60) * 60
+        try:
+            metadata = freeze_csv(csv, csv_output, cutoff)
+            break
+        except CsvNotReady:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            if not announced:
+                print('Waiting for the normal CSV refresh before any HA capture...', file=sys.stderr, flush=True)
+                announced = True
+            time.sleep(min(2., remaining))
     snapshot = capture_inputs(session, host, token)
     snapshot['csv_sidecar'] = metadata
     validate_sidecar(snapshot)
@@ -280,6 +297,8 @@ def main(argv: list[str] | None = None) -> None:
     capture.add_argument('--output', type=Path, required=True)
     capture.add_argument('--csv', type=Path, help='Optional recent CSV to freeze before HA capture')
     capture.add_argument('--csv-output', type=Path, help='New explicit frozen CSV sidecar path; requires --csv')
+    capture.add_argument('--wait-for-csv-seconds', type=float, default=0,
+                         help='Wait up to this many seconds for normal CSV refresh before HA reads (0..1800)')
     for command in ('generate', 'score'):
         sub = commands.add_parser(command, help='Offline; no HA/PostgreSQL/feedback DB calls')
         add_history_arguments(sub)
@@ -296,6 +315,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == 'capture':
         if bool(args.csv) != bool(args.csv_output):
             parser.error('--csv and --csv-output must be supplied together')
+        if args.wait_for_csv_seconds != 0 and args.csv is None:
+            parser.error('--wait-for-csv-seconds requires --csv and --csv-output')
         if args.csv_output is not None and args.csv_output.resolve() == args.output.resolve():
             parser.error('CSV and snapshot output paths must be distinct')
         import requests
@@ -304,7 +325,7 @@ def main(argv: list[str] | None = None) -> None:
         with requests.Session() as session:
             if args.csv is not None and args.csv_output is not None:
                 result = capture_with_csv(session, config.get('HA_HOST') or '', config.get('HA_TOKEN') or '',
-                                          args.csv, args.csv_output)
+                                          args.csv, args.csv_output, wait_seconds=args.wait_for_csv_seconds)
             else:
                 result = capture_inputs(session, config.get('HA_HOST') or '', config.get('HA_TOKEN') or '')
     else:

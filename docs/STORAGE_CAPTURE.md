@@ -12,25 +12,37 @@ The original protocol supplies frozen model/source/policy/archive identities;
 its old `required_code_commit` applies only to that old runner. This workflow
 uses the newly tested integrated code and records its commit separately.
 
-Validation: **1,069 passed, 1 skipped, four passing subtests** in the full
+Initial sidecar implementation validation: **1,069 passed, 1 skipped, four passing subtests** in the full
 repository suite; repository-wide Pyright and diff checks passed. Focused tests
 cover pre-capture freezing, full context, malformed/changed CSVs, cutoff rollover,
 exclusive outputs and sidecar hash checks during generation/replay. Host command
 syntax was checked without making live requests. These tests do not constitute
 a real forecast capture or operational cutover approval.
 
-## 1. Capture on the host, just after a normal CSV refresh
+The subsequent bounded-wait fix passed **57 focused tests** with Pyright clean;
+its integration was approved without waiting for the full-suite rerun. The
+full-suite count above describes the initial sidecar implementation, not that fix.
+
+## 1. Capture on the host, waiting for a normal CSV refresh
 
 Run as `markuz` on murrikka, **not in the development container**. This step
 explicitly performs the existing four Home Assistant state GETs and read-only
 `weather.get_forecasts` request. It does not contact PostgreSQL or call controls.
 
-The CSV updates every 15 minutes. Run during the **same minute** in which its
-normal extraction has finished (usually :00/:15/:30/:45). Do not manually run
-the full frequent pipeline to obtain a CSV: that pipeline actuates controls.
-The capture refuses stale CSV history instead of shifting its cutoff. If a
-minute rolls over during CSV preparation, the capture also fails; use a new
-directory at the next suitable refresh. Original timestamps are never backdated.
+The CSV updates every 15 minutes. The command below waits up to **900 seconds**
+for that normal refresh, checking every two seconds and recomputing the real
+current-minute cutoff on each attempt. You can start it between refreshes: no
+CSV sidecar is written and no HA requests occur until complete, stable timestamp
+context is available. It does not request another extraction or shift the cutoff
+to an older CSV. Do not manually run the full frequent pipeline to obtain a CSV:
+that pipeline actuates controls.
+
+Without the optional wait flag, capture still fails immediately on stale context.
+Malformed schemas/timestamps, existing outputs and permission errors are not
+retried. The maximum permitted wait is 1,800 seconds. A timeout reports the
+missing minute count and required/available endpoints; it leaves no sidecar or
+input snapshot. If a minute rolls over after successful freezing but before HA
+capture starts, validation still fails rather than backdating; use a new directory.
 
 ```bash
 set -euo pipefail
@@ -43,6 +55,7 @@ export PYTHON_DOTENV_DISABLED=1
 git rev-parse HEAD > "$RUN/code-commit.txt"
 .venv/bin/python3 -m utils.forward_shadow capture \
   --env-file "$PWD/.env" --csv "$PWD/state/raw_data.csv" \
+  --wait-for-csv-seconds 900 \
   --csv-output "$RUN/shadow-history.csv" --output "$RUN/shadow-inputs.json"
 ```
 
@@ -60,6 +73,11 @@ values remain unchanged; full timestamp coverage is not full measurement validit
 Outputs must be new and distinct. If capture fails, inspect the directory;
 a frozen CSV may remain without a completed input snapshot. Keep the evidence
 and choose a new run directory. Do not replace it with a later CSV extract.
+In particular, the earlier "CSV lacks the full preceding 1440 minutes" error
+can mean an otherwise complete CSV simply ends at the previous quarter-hour.
+Use the wait-enabled command in a new run directory instead of editing data or
+reusing an old cutoff. Failed directories containing only `code-commit.txt` are
+safe to retain; there is no issued forecast in them.
 
 ## 2. Let the collector catch up, then generate and compare
 

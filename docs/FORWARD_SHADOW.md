@@ -12,6 +12,8 @@ For fresh common-contract CSV/SQLite comparisons, use the
 `--csv` / `--csv-output` arguments; they are optional for existing shadow users.
 The sidecar is frozen before HA requests, and its byte hash/cutoff/timing are
 bound into the input snapshot and verified before generation/replay.
+`capture --wait-for-csv-seconds 900` can wait for the next normal CSV refresh
+before freezing or contacting HA; it never requests ingestion or backdates capture.
 
 ## Three explicit operations
 

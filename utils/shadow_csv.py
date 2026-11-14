@@ -22,6 +22,10 @@ _ACTIVE_NAMES = {'hepo.db', 'future_predictions.json', 'future_predictions_metad
                  'raw_data.csv', 'raw_data_weekly.csv', 'processed_data.csv', 'processed_data_weekly.csv'}
 
 
+class CsvNotReady(ValueError):
+    """Normal extraction has not yet supplied stable, complete timestamp context."""
+
+
 def freeze_csv(source: str | Path, output: str | Path, cutoff: float) -> dict[str, Any]:
     source, output = Path(source), Path(output)
     if output.name in _ACTIVE_NAMES or output.resolve() == source.resolve():
@@ -39,7 +43,7 @@ def freeze_csv(source: str | Path, output: str | Path, cutoff: float) -> dict[st
     if len(contents) > MAX_CSV_BYTES:
         raise ValueError('CSV size limit exceeded while reading')
     if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
-        raise ValueError('CSV changed while freezing; retry into a new capture directory')
+        raise CsvNotReady('CSV changed while freezing; retry after normal extraction finishes')
     header = next(csv.reader(io.StringIO(contents.decode('utf-8-sig'))), [])
     required = {'timestamp', *METERS, *(name+'_source_valid' for name in METERS)}
     if len(set(header)) != len(header) or not required <= set(header):
@@ -52,8 +56,11 @@ def freeze_csv(source: str | Path, output: str | Path, cutoff: float) -> dict[st
     if frame.index.has_duplicates or not frame.index.is_monotonic_increasing:
         raise ValueError('CSV timestamps must be sorted and unique')
     expected = pd.date_range(pd.Timestamp(cutoff-86400, unit='s', tz='UTC'), periods=1440, freq='min')
-    if not expected.isin(frame.index).all():
-        raise ValueError('CSV lacks the full preceding 1440 minutes; capture just after the normal CSV refresh')
+    missing = expected[~expected.isin(frame.index)]
+    if len(missing):
+        raise CsvNotReady(f'CSV missing {len(missing)} of the preceding 1440 minutes; '
+            f'required through {expected[-1].isoformat()}, available through {frame.index[-1].isoformat()}, '
+            f'first missing {missing[0].isoformat()}. Use --wait-for-csv-seconds 900 or capture after the normal refresh.')
     window = frame.reindex(expected)
     valid = {name: int((np.isfinite(pd.to_numeric(window[name], errors='coerce')) &
                        window[name+'_source_valid'].astype(str).str.lower().eq('true')).sum()) for name in METERS}

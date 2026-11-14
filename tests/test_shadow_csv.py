@@ -149,7 +149,7 @@ def test_source_replacement_during_copy_is_rejected(csv_input, monkeypatch):
 
 
 @pytest.mark.parametrize('extra', [['--csv', 'raw.csv'], ['--csv-output', 'sidecar.csv'],
-    ['--csv', 'raw.csv', '--csv-output', 'snapshot.json']])
+    ['--csv', 'raw.csv', '--csv-output', 'snapshot.json'], ['--wait-for-csv-seconds', '900']])
 def test_cli_rejects_incomplete_or_colliding_outputs_before_ha(tmp_path, extra, monkeypatch):
     capture = Mock()
     monkeypatch.setattr(shadow, 'capture_inputs', capture)
@@ -157,3 +157,82 @@ def test_cli_rejects_incomplete_or_colliding_outputs_before_ha(tmp_path, extra, 
     with pytest.raises(SystemExit):
         shadow.main(['capture', '--env-file', 'unused.env', '--output', 'snapshot.json', *extra])
     capture.assert_not_called()
+
+
+def test_waits_for_normal_csv_refresh_before_freezing_and_capturing(csv_input, monkeypatch):
+    source, output, frame = csv_input
+    frame.iloc[:-1].to_csv(source, index_label='timestamp')
+    ready = CUTOFF+pd.Timedelta(minutes=15)
+    clock = Mock(wraps=shadow.datetime)
+    clock.now.side_effect = [CUTOFF.to_pydatetime(), ready.to_pydatetime()]
+    monkeypatch.setattr(shadow, 'datetime', clock)
+    monkeypatch.setattr(shadow.time, 'monotonic', Mock(side_effect=[0., 0.]))
+    def refresh(seconds):
+        assert not output.exists()
+        frame.index += pd.Timedelta(minutes=15)
+        frame.to_csv(source, index_label='timestamp')
+    sleep = Mock(side_effect=refresh)
+    monkeypatch.setattr(shadow.time, 'sleep', sleep)
+    capture = Mock(side_effect=lambda *args: {'history_cutoff': ready.timestamp(),
+                                              'started_at': pd.Timestamp.now(tz='UTC').isoformat()})
+    monkeypatch.setattr(shadow, 'capture_inputs', capture)
+    snapshot = shadow.capture_with_csv(Mock(), 'ha', 'secret', source, output, wait_seconds=900)
+    assert snapshot['history_cutoff'] == snapshot['csv_sidecar']['history_cutoff'] == ready.timestamp()
+    sleep.assert_called_once_with(2.)
+    capture.assert_called_once()
+
+
+def test_wait_timeout_keeps_no_sidecar_and_does_not_contact_ha(csv_input, monkeypatch):
+    source, output, frame = csv_input
+    frame.iloc[:-1].to_csv(source, index_label='timestamp')
+    clock = Mock(wraps=shadow.datetime)
+    clock.now.return_value = CUTOFF.to_pydatetime()
+    monkeypatch.setattr(shadow, 'datetime', clock)
+    monkeypatch.setattr(shadow.time, 'monotonic', Mock(side_effect=[0., 901.]))
+    capture, sleep = Mock(), Mock()
+    monkeypatch.setattr(shadow, 'capture_inputs', capture)
+    monkeypatch.setattr(shadow.time, 'sleep', sleep)
+    with pytest.raises(ValueError, match='missing'):
+        shadow.capture_with_csv(Mock(), 'ha', 'secret', source, output, wait_seconds=900)
+    capture.assert_not_called()
+    sleep.assert_not_called()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize('wait', [-1, float('nan'), float('inf'), 1801])
+def test_invalid_wait_budget_does_not_freeze_or_contact_ha(csv_input, wait, monkeypatch):
+    source, output, _ = csv_input
+    capture = Mock()
+    monkeypatch.setattr(shadow, 'capture_inputs', capture)
+    with pytest.raises(ValueError, match='wait'):
+        shadow.capture_with_csv(Mock(), 'ha', 'secret', source, output, wait_seconds=wait)
+    assert not output.exists()
+    capture.assert_not_called()
+
+
+def test_wait_does_not_retry_malformed_csv(csv_input, monkeypatch):
+    source, output, frame = csv_input
+    frame.drop(columns=['solar_actual_source_valid']).to_csv(source, index_label='timestamp')
+    clock = Mock(wraps=shadow.datetime)
+    clock.now.return_value = CUTOFF.to_pydatetime()
+    monkeypatch.setattr(shadow, 'datetime', clock)
+    sleep, capture = Mock(), Mock()
+    monkeypatch.setattr(shadow.time, 'sleep', sleep)
+    monkeypatch.setattr(shadow, 'capture_inputs', capture)
+    with pytest.raises(ValueError, match='flags'):
+        shadow.capture_with_csv(Mock(), 'ha', 'secret', source, output, wait_seconds=900)
+    sleep.assert_not_called()
+    capture.assert_not_called()
+
+
+def test_cli_forwards_wait_budget_to_sidecar_capture(csv_input, tmp_path, monkeypatch):
+    source, output, _ = csv_input
+    env = tmp_path/'capture.env'
+    env.write_text('HA_HOST=http://invalid\nHA_TOKEN=private-secret\n')
+    snapshot = tmp_path/'shadow-inputs.json'
+    capture = Mock(return_value={'shadow_only': True})
+    monkeypatch.setattr(shadow, 'capture_with_csv', capture)
+    shadow.main(['capture', '--env-file', str(env), '--csv', str(source),
+        '--csv-output', str(output), '--wait-for-csv-seconds', '900', '--output', str(snapshot)])
+    assert capture.call_args.kwargs['wait_seconds'] == 900
+    assert 'private-secret' not in snapshot.read_text()
