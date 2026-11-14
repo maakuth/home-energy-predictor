@@ -7,6 +7,12 @@ SQLite writer. There is no default output, model directory or history archive.
 New output paths are required; active artifact filenames are rejected. No
 timer/service is installed and existing schedules remain unchanged.
 
+For fresh common-contract CSV/SQLite comparisons, use the
+[origin-frozen CSV sidecar workflow](STORAGE_CAPTURE.md). Capture accepts paired
+`--csv` / `--csv-output` arguments; they are optional for existing shadow users.
+The sidecar is frozen before HA requests, and its byte hash/cutoff/timing are
+bound into the input snapshot and verified before generation/replay.
+
 ## Three explicit operations
 
 ```sh

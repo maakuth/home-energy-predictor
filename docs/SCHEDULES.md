@@ -45,6 +45,10 @@ The next migration step, [isolated SQLite analysis](ARCHIVE_ANALYSIS.md), is a
 manual read-only report command. No analysis service/timer or active consumer
 switch is installed by that implementation.
 
+[Fresh CSV/SQLite shadow captures](STORAGE_CAPTURE.md) are also manual host
+operations, coordinated with the existing CSV refresh and collector. They add
+no timer and write only isolated capture/replay artifacts, never an active plan.
+
 Writing the active plan is itself an actuation boundary: `run_often.py` consumes
 it without needing `push_to_ha.py`. Use isolated shadow tools, not a pipeline
 execution with the final publisher removed, for non-actuating validation.

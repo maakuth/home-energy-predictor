@@ -11,6 +11,11 @@ Leaf energy, without filling missing meters or treating corrected zeros as
 verified truth. Autonomous heating is compared using the same preceding-day
 observed-mean assumption, with valid-minute counts reported.
 
+New captures can retain a [pre-origin frozen CSV sidecar](STORAGE_CAPTURE.md).
+When the snapshot contains sidecar metadata, replay requires that exact CSV
+hash and matching capture cutoff; a later extract cannot be substituted. Older
+snapshots without sidecar metadata retain the retrospective semantics below.
+
 ```sh
 venv/bin/python3 -m utils.storage_replay \
   --archive /staging/measurements.sqlite --cutoff 2026-11-12T19:41:00Z \

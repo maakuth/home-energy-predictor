@@ -25,6 +25,7 @@ from utils.forward_shadow import _finite, _forecast_table, _metrics, _provenance
 from utils.measurement_policy import MeasurementPolicy, load_policies, require_policy_entries
 from utils.measurement_reader import MeasurementReader
 from utils.measurement_shadow import _differences, _read_csv
+from utils.shadow_csv import validate_sidecar
 
 ANCHORS = ('baseload_lag_1h', 'baseload_lag_24h', 'leaf_power_lag_1h', 'leaf_energy_24h')
 
@@ -93,6 +94,7 @@ def compare(*, csv: str | Path, history: ArchiveHistory, model_dir: str | Path,
     if snapshot_hash != vintage.get('input_snapshot_sha256'):
         raise ValueError('Captured snapshot changed; cannot isolate history backend')
     model_dir, csv = Path(model_dir), Path(csv)
+    validate_sidecar(snapshot, csv_path=csv)
     artifact_hashes = {name: _digest(model_dir/name) for name in
                        ('energy_model.json', 'model_features.json', 'model_training_metadata.json')}
     if artifact_hashes['energy_model.json'] != vintage.get('model_sha256'):

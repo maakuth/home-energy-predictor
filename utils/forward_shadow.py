@@ -23,6 +23,7 @@ from utils.archive_history import ArchiveHistory, add_history_arguments, history
 from utils.archive_quality import METERS, apply_training_policy
 from utils.baseload_model import validate_baseload_model
 from utils.measurement_reader import MeasurementReader
+from utils.shadow_csv import freeze_csv, validate_sidecar
 
 
 def _timestamp(value: Any) -> pd.Timestamp:
@@ -75,6 +76,17 @@ def capture_inputs(session: Any, host: str, token: str) -> dict[str, Any]:
             'current_temperature': temperature, 'current_weather': weather}
 
 
+def capture_with_csv(session: Any, host: str, token: str, csv: str | Path,
+                     csv_output: str | Path) -> dict[str, Any]:
+    """Freeze before HA reads, retaining the real capture clock and cutoff."""
+    cutoff = math.floor(datetime.now(timezone.utc).timestamp() / 60) * 60
+    metadata = freeze_csv(csv, csv_output, cutoff)
+    snapshot = capture_inputs(session, host, token)
+    snapshot['csv_sidecar'] = metadata
+    validate_sidecar(snapshot)
+    return snapshot
+
+
 def _provenance(history: ArchiveHistory) -> dict[str, Any]:
     if history.allow_legacy or history.legacy_policy != 'verified-only':
         raise ValueError('Forward shadow requires recorder-only verified history')
@@ -115,6 +127,7 @@ def generate_shadow(history: ArchiveHistory, model_dir: str | Path, snapshot: di
             or not started <= completed <= origin or origin-completed > pd.Timedelta(minutes=15)
             or history.cutoff != started.floor('min').timestamp()):
         raise ValueError('Snapshot/cutoff/forecast availability mismatch')
+    validate_sidecar(snapshot)
     provenance = _provenance(history)
     weather_state = snapshot['current_weather']
     if str(weather_state.get('state')).lower() in {'unknown', 'unavailable', 'none'}:
@@ -265,6 +278,8 @@ def main(argv: list[str] | None = None) -> None:
     capture = commands.add_parser('capture', help='Host-only HA reads; never a control call')
     capture.add_argument('--env-file', type=Path, required=True)
     capture.add_argument('--output', type=Path, required=True)
+    capture.add_argument('--csv', type=Path, help='Optional recent CSV to freeze before HA capture')
+    capture.add_argument('--csv-output', type=Path, help='New explicit frozen CSV sidecar path; requires --csv')
     for command in ('generate', 'score'):
         sub = commands.add_parser(command, help='Offline; no HA/PostgreSQL/feedback DB calls')
         add_history_arguments(sub)
@@ -279,11 +294,19 @@ def main(argv: list[str] | None = None) -> None:
     if args.output.exists():
         parser.error('Output must be a new explicit path')
     if args.command == 'capture':
+        if bool(args.csv) != bool(args.csv_output):
+            parser.error('--csv and --csv-output must be supplied together')
+        if args.csv_output is not None and args.csv_output.resolve() == args.output.resolve():
+            parser.error('CSV and snapshot output paths must be distinct')
         import requests
         from dotenv import dotenv_values
         config = {**dotenv_values(args.env_file), **os.environ}
         with requests.Session() as session:
-            result = capture_inputs(session, config.get('HA_HOST') or '', config.get('HA_TOKEN') or '')
+            if args.csv is not None and args.csv_output is not None:
+                result = capture_with_csv(session, config.get('HA_HOST') or '', config.get('HA_TOKEN') or '',
+                                          args.csv, args.csv_output)
+            else:
+                result = capture_inputs(session, config.get('HA_HOST') or '', config.get('HA_TOKEN') or '')
     else:
         history = history_from_arguments(args)
         if history is None:

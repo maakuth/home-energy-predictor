@@ -10,6 +10,7 @@ import yaml
 from tests.test_forward_shadow import CUTOFF, runtime
 from utils.forward_shadow import generate_shadow
 from utils import storage_replay
+from utils.shadow_csv import freeze_csv
 
 
 @pytest.fixture
@@ -118,3 +119,20 @@ def test_changed_controls_cannot_be_presented_as_storage_only(replay, problem):
         history.policy_path.write_text(history.policy_path.read_text()+'# changed\n')
     with pytest.raises(ValueError, match='control|provenance|model|snapshot'):
         run(replay)
+
+
+def test_origin_frozen_sidecar_is_bound_to_generation_and_replay(replay, tmp_path):
+    history, model_dir, snapshot, _, model, csv, _ = replay
+    frozen = tmp_path/'shadow-history.csv'
+    metadata = freeze_csv(csv, frozen, history.cutoff)
+    metadata['frozen_at'] = (CUTOFF-pd.Timedelta(seconds=1)).isoformat()
+    snapshot['csv_sidecar'] = metadata
+    vintage = generate_shadow(history, model_dir, snapshot, now=CUTOFF+pd.Timedelta(minutes=1))
+    bound = [history, model_dir, snapshot, vintage, model, frozen, replay[-1]]
+    assert run(bound)['status'] == 'compared'
+    frozen.write_text(frozen.read_text()+'\n')
+    with pytest.raises(ValueError, match='hash'): run(bound)
+    model.predict.reset_mock()
+    with pytest.raises(ValueError, match='hash'):
+        generate_shadow(history, model_dir, snapshot, now=CUTOFF+pd.Timedelta(minutes=1))
+    model.predict.assert_not_called()
