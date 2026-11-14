@@ -203,6 +203,9 @@ replaced with the final result. Exit codes: 0 success, 1 failure, 75 shared lock
 busy (expected skip), 130 graceful interruption. Invalid configuration can fail
 before a report exists; inspect the journal too. Abrupt termination or power loss
 may leave a `running` report: check the service before treating it as active.
+The host's `get-logs.sh` captures both collector service and timer journals from
+the user manager into `logs/recentlog-collector.txt`, using the same seven-day
+window as the existing HEPO log captures. Run it from the project directory.
 Reports and ingestion diagnostics may contain upstream error text; keep staging
 private. There is no automatic report pruning or backup installation. Retain
 the existing snapshots and CSVs, monitor disk usage and repeated failures, and
