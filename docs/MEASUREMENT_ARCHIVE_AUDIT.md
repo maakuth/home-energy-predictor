@@ -1,5 +1,10 @@
 # Read-only migration audit
 
+For a repeatable isolated seven-measurement report with pinned archive/source/
+policy identities and a new output directory, see [SQLite analysis](ARCHIVE_ANALYSIS.md).
+It composes the existing audit below in one read transaction without changing
+any scheduled consumer.
+
 This command reports evidence, **not migration approval**. It never opens the
 archive writable, imports data, loads recorder credentials, calls HA/PostgreSQL,
 or changes pipelines. `migration_ready` remains false: source/unit evidence,
