@@ -393,9 +393,13 @@ def plan_gshp_dispatch(
     import_prices: np.ndarray,
     export_prices: Optional[np.ndarray] = None,
     solar_forecast_kw: Optional[np.ndarray] = None,
+    *,
+    gshp_failed: bool | None = None,
 ) -> list[dict[str, Any]]:
     # Constants/Defaults (can be overridden by .env)
-    gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True) and not gshp_is_failed()
+    gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True) and not (
+        gshp_is_failed() if gshp_failed is None else gshp_failed
+    )
     resistive_enabled = get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False)
     use_resistive = resistive_enabled and not gshp_enabled
     heat_source_enabled = gshp_enabled or use_resistive

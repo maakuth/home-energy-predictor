@@ -197,6 +197,9 @@ class BatteryPlannerContext(TypedDict, total=False):
         ``True`` when the fireplace is actively heating the accumulator. This
         reduces expected GSHP load and may create extra margin for battery
         discharge.
+    gshp_failed : bool
+        Explicit captured failure latch; when absent the joint planner reads
+        the normal runtime latch.
     model_version : str
         Semantic version string (e.g. ``"1.2.0"``) from the ``VERSION`` file.
     solar_p10_kwh : np.ndarray
@@ -212,6 +215,7 @@ class BatteryPlannerContext(TypedDict, total=False):
     sarima_lower: NotRequired[np.ndarray]
     sarima_upper: NotRequired[np.ndarray]
     is_fallback_price: NotRequired[np.ndarray]
+    gshp_failed: NotRequired[bool]
     tomorrow_valid: NotRequired[bool]
     planned_gshp_kw: NotRequired[np.ndarray]
     current_acc_temp: NotRequired[float]
