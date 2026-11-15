@@ -19,11 +19,12 @@ from datetime import datetime
 
 from .base import BatteryPlanner, BatteryPlanEntry, BatteryPlannerContext, BatteryPlannerProtocol, should_idle_interval, compute_discharge_budget
 from utils.type_defs import BatteryAction
+from utils.planning_config import planning_getenv
 
 
 def get_env_float(name, default):
     """Safely get a float from environment variable."""
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     if raw is None:
         return float(default)
     try:
@@ -35,7 +36,7 @@ def get_env_float(name, default):
 
 def get_env_bool(name, default=False):
     """Safely get a boolean from environment variable."""
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     if raw is None:
         return bool(default)
     return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -43,7 +44,7 @@ def get_env_bool(name, default=False):
 
 def get_plan_interval_hours():
     """Get planning interval in hours from environment."""
-    plan_interval_minutes = int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
+    plan_interval_minutes = int(planning_getenv('PLAN_INTERVAL_MINUTES', '15'))
     return max(plan_interval_minutes, 1) / 60.0
 
 

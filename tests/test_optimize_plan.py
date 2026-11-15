@@ -76,6 +76,21 @@ class OptimizeArchivingTests(unittest.TestCase):
         # No cleanup needed - conftest.py handles it via tmp_path fixture
         pass
 
+    @patch('optimize_plan.publish_optimization')
+    @patch('optimize_plan.calculate_optimization')
+    @patch('optimize_plan.get_ha_state')
+    @patch('optimize_plan.fetch_market_prices')
+    def test_optimize_passes_calculated_plan_to_publisher(self, mock_prices, mock_ha, mock_calculate, mock_publish):
+        mock_prices.return_value = ([0.1], [0], 'Nordpool', False, False, None)
+        mock_ha.return_value = {'state': '50.0'}
+        plan = [{'timestamp': '2026-04-05T13:15:00+03:00'}]
+        mock_calculate.return_value = plan
+
+        optimize()
+
+        mock_calculate.assert_called_once()
+        mock_publish.assert_called_once_with(plan, history=None)
+
     @patch('builtins.print')
     @patch('optimize_plan.get_ha_state')
     @patch('optimize_plan.fetch_market_prices')

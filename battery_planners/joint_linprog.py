@@ -22,10 +22,11 @@ from .base import BatteryPlanEntry, BatteryPlanner, BatteryPlannerContext
 from .nemotron_linprog import NemotronLinprogPlanner
 from utils.type_defs import BatteryAction
 from utils.gshp_health import gshp_is_failed
+from utils.planning_config import planning_contains, planning_getenv
 
 
 def get_env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     try:
         return float(raw) if raw is not None else float(default)
     except ValueError:
@@ -33,7 +34,7 @@ def get_env_float(name: str, default: float) -> float:
 
 
 def get_env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     try:
         return int(raw) if raw is not None else int(default)
     except ValueError:
@@ -41,7 +42,7 @@ def get_env_int(name: str, default: int) -> int:
 
 
 def get_env_bool(name: str, default: bool) -> bool:
-    val = os.getenv(name)
+    val = planning_getenv(name)
     if val is None:
         return default
     return val.strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -189,7 +190,7 @@ class JointLinprogPlanner(BatteryPlanner):
                         break
                     except (TypeError, ValueError):
                         continue
-        env_bias = os.getenv('LOAD_FORECAST_BIAS_KW') or os.getenv('PREDICTION_BIAS_KW') or os.getenv('FORECAST_BIAS_KW')
+        env_bias = planning_getenv('LOAD_FORECAST_BIAS_KW') or planning_getenv('PREDICTION_BIAS_KW') or planning_getenv('FORECAST_BIAS_KW')
         if env_bias is not None:
             try:
                 load_forecast_bias_kw = float(env_bias)
@@ -221,7 +222,7 @@ class JointLinprogPlanner(BatteryPlanner):
         resistive_enabled = get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False)
         p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
         p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)
-        if 'GSHP_ELECTRIC_POWER_KW' in os.environ and 'GSHP_POWER_MIN_KW' not in os.environ and 'GSHP_POWER_MAX_KW' not in os.environ:
+        if planning_contains('GSHP_ELECTRIC_POWER_KW') and not planning_contains('GSHP_POWER_MIN_KW') and not planning_contains('GSHP_POWER_MAX_KW'):
             p_min = p_max = get_env_float('GSHP_ELECTRIC_POWER_KW', 4.0)
 
         cop = get_env_float('GSHP_COP', 3.5)

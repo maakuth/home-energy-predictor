@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from typing import Any, Optional
 from dotenv import load_dotenv
 from utils.ha_utils import get_ha_state, parse_ha_bool
@@ -26,9 +27,12 @@ from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.db_utils import fetch_states_history
 from battery_planners import BatteryPlannerFactory, BatteryPlanEntry, BatteryPlannerContext
 from battery_planners.joint_linprog import JointLinprogPlanner, leaf_charging_allowed
+from battery_planners.heuristic import HeuristicBatteryPlanner
+from battery_planners.nemotron_linprog import NemotronLinprogPlanner
 from utils.plan_time import current_plan_entry
 from utils.uncontrolled_heating import load_uncontrolled_heating_forecast
 from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
+from utils.planning_config import frozen_config, planning_contains, planning_getenv
 
 load_dotenv(override=True)
 
@@ -114,13 +118,13 @@ def plan_battery_dispatch(
     return [entry.to_dict() for entry in entries]
 
 def get_plan_interval_minutes() -> int:
-    return int(os.getenv('PLAN_INTERVAL_MINUTES', '15'))
+    return int(planning_getenv('PLAN_INTERVAL_MINUTES', '15'))
 
 def get_plan_interval_hours() -> float:
     return max(get_plan_interval_minutes(), 1) / 60.0
 
 def get_env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     if raw is None:
         return float(default)
     try:
@@ -159,7 +163,7 @@ def _is_gshp_compressor_running(
 
 
 def get_env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     if raw is None:
         return bool(default)
     return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -395,6 +399,9 @@ def plan_gshp_dispatch(
     solar_forecast_kw: Optional[np.ndarray] = None,
     *,
     gshp_failed: bool | None = None,
+    initial_temp: float | None = None,
+    compressor_running: bool | None = None,
+    resistive_running: bool | None = None,
 ) -> list[dict[str, Any]]:
     # Constants/Defaults (can be overridden by .env)
     gshp_enabled = get_env_bool('GSHP_OPTIMIZE_ENABLED', True) and not (
@@ -406,7 +413,7 @@ def plan_gshp_dispatch(
     p_min = get_env_float('GSHP_POWER_MIN_KW', 3.4)
     p_max = get_env_float('GSHP_POWER_MAX_KW', 4.2)
     # Maintain fallback for GSHP_ELECTRIC_POWER_KW if both are equal (no ramp)
-    if 'GSHP_ELECTRIC_POWER_KW' in os.environ and 'GSHP_POWER_MIN_KW' not in os.environ and 'GSHP_POWER_MAX_KW' not in os.environ:
+    if planning_contains('GSHP_ELECTRIC_POWER_KW') and not planning_contains('GSHP_POWER_MIN_KW') and not planning_contains('GSHP_POWER_MAX_KW'):
         p_min = p_max = get_env_float('GSHP_ELECTRIC_POWER_KW', 4.0)
 
     cop = get_env_float('GSHP_COP', 3.5)
@@ -421,8 +428,8 @@ def plan_gshp_dispatch(
     baseline_demand_kw = get_env_float('GSHP_BASELINE_DEMAND_KW', 1.0)
     sauna_demand_kw = get_env_float('SAUNA_HOT_WATER_DEMAND_KW', 6.0)
     
-    initial_temp = get_env_float('GSHP_INITIAL_TEMP', 50.0)
-    is_hp_running = get_env_bool('GSHP_IS_RUNNING', False)
+    initial_temp = get_env_float('GSHP_INITIAL_TEMP', 50.0) if initial_temp is None else initial_temp
+    is_hp_running = get_env_bool('GSHP_IS_RUNNING', False) if compressor_running is None else compressor_running
     layering_drop = get_env_float('GSHP_INITIAL_TEMP_DROP', 3.0)
 
     if use_resistive:
@@ -432,7 +439,8 @@ def plan_gshp_dispatch(
         effective_l = get_env_float('RESISTIVE_HEATER_EFFECTIVE_LITERS', 150.0)
         heating_kwh_per_degree = (effective_l * 4.18) / 3600.0
         max_temp = get_env_float('RESISTIVE_HEATER_MAX_TEMP', 60.0)
-        is_hp_running = get_env_bool('RESISTIVE_HEATER_IS_RUNNING', False)
+        is_hp_running = (get_env_bool('RESISTIVE_HEATER_IS_RUNNING', False)
+                         if resistive_running is None else resistive_running)
         layering_drop = 0.0
     elif not heat_source_enabled:
         is_hp_running = False
@@ -804,9 +812,64 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
         '1' if parse_ha_bool(resistive_state, default=False) else '0'
     )
 
+    final_plan = calculate_optimization(
+        predictions_data, predictions, prediction_timestamps, sarima_lower, sarima_upper,
+        market_prices, import_prices, export_prices, is_fallback_price, tomorrow_valid,
+        solar_array, solar_array_p10, solar_array_p90, current_acc_temp,
+        is_hp_currently_running, is_fireplace_currently_on, history=history,
+    )
+    publish_optimization(final_plan, history=history)
+
+
+@dataclass(frozen=True)
+class FrozenOptimizationRuntime:
+    """Resolved runtime observations for a future isolated replay.
+
+    This does not freeze environment configuration.
+    """
+    ev_soc_state: dict[str, Any] | None
+    allow_export: bool
+    battery_soc_pct: float | None
+    battery_enabled: bool
+    uncontrolled_heating_kw: np.ndarray
+    model_version: str
+    gshp_failed: bool
+    output_timezone: str
+    resistive_running: bool
+    config: dict[str, str]
+
+
+def calculate_optimization(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    """Calculate with scoped captured configuration when frozen inputs are supplied."""
+    runtime = kwargs.get('frozen_runtime')
+    if runtime is None:
+        return _calculate_optimization(*args, **kwargs)
+    if not isinstance(runtime, FrozenOptimizationRuntime):
+        raise ValueError('Invalid frozen optimization runtime')
+    with frozen_config(runtime.config):
+        return _calculate_optimization(*args, **kwargs)
+
+
+def _calculate_optimization(
+    predictions_data: Any, predictions: Any, prediction_timestamps: Any,
+    sarima_lower: Any, sarima_upper: Any, market_prices: Any, import_prices: Any,
+    export_prices: Any, is_fallback_price: Any, tomorrow_valid: bool,
+    solar_array: np.ndarray, solar_array_p10: np.ndarray, solar_array_p90: np.ndarray,
+    current_acc_temp: float, is_hp_currently_running: bool,
+    is_fireplace_currently_on: bool, *, history: ArchiveHistory | None,
+    frozen_runtime: FrozenOptimizationRuntime | None = None,
+) -> list[dict[str, Any]]:
+    """Calculate a plan; configuration is not yet frozen."""
     outside_temps = [p.get('outside_temp', 5.0) for p in predictions_data]
     is_sauna_active = [p.get('is_sauna_active', 0) for p in predictions_data]
-    gshp_plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, export_prices, solar_array)
+    if frozen_runtime is None:
+        gshp_plan = plan_gshp_dispatch(prediction_timestamps, is_sauna_active, outside_temps, import_prices, export_prices, solar_array)
+    else:
+        gshp_plan = plan_gshp_dispatch(
+            prediction_timestamps, is_sauna_active, outside_temps, import_prices, export_prices, solar_array,
+            gshp_failed=frozen_runtime.gshp_failed, initial_temp=current_acc_temp,
+            compressor_running=is_hp_currently_running, resistive_running=frozen_runtime.resistive_running,
+        )
 
     # Combine Baseload + Planned GSHP + Planned EV (XPZ) for Battery optimization
     planned_gshp_kw = np.array([g['gshp_electric_kw'] for g in gshp_plan])
@@ -821,7 +884,8 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
     ev_capacity_kwh = get_env_float('EV_CAPACITY_KWH', 60.0)
     
     # Try to get current SoC from HA
-    ev_soc_state = get_ha_state('sensor.xpz_491_battery_level')
+    ev_soc_state = (get_ha_state('sensor.xpz_491_battery_level') if frozen_runtime is None
+                    else frozen_runtime.ev_soc_state)
     current_soc = None
     if ev_soc_state and ev_soc_state.get('state') not in ['unknown', 'unavailable']:
         try:
@@ -877,8 +941,13 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
     
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.
-    uncontrolled_heating_kw = (load_uncontrolled_heating_forecast(prediction_timestamps, history=history)
-                               if history is not None else load_uncontrolled_heating_forecast(prediction_timestamps))
+    if frozen_runtime is not None:
+        uncontrolled_heating_kw = np.asarray(frozen_runtime.uncontrolled_heating_kw, dtype=float)
+        if uncontrolled_heating_kw.shape != predictions.shape or not np.isfinite(uncontrolled_heating_kw).all():
+            raise ValueError('Frozen uncontrolled heating must be finite and aligned')
+    else:
+        uncontrolled_heating_kw = (load_uncontrolled_heating_forecast(prediction_timestamps, history=history)
+                                   if history is not None else load_uncontrolled_heating_forecast(prediction_timestamps))
     battery_optimization_load_kw = predictions + uncontrolled_heating_kw + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw
 
     # NOTE: planned_ev_kw is NOT included in total_planned_load_kw.
@@ -906,22 +975,26 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
     committed_load_kwh = (planned_ev_kw + planned_leaf_kw) * get_plan_interval_hours()
     
     # Fetch live battery-export toggle from Home Assistant (falls back to .env)
-    allow_export_entity = os.getenv('BATTERY_ALLOW_EXPORT_ENTITY', 'input_boolean.battery_allow_export')
-    allow_export_state = get_ha_state(allow_export_entity)
-    allow_export = parse_ha_bool(allow_export_state, default=get_env_bool('BATTERY_ALLOW_EXPORT', True))
+    allow_export_entity = planning_getenv('BATTERY_ALLOW_EXPORT_ENTITY', 'input_boolean.battery_allow_export')
+    if frozen_runtime is None:
+        allow_export_state = get_ha_state(allow_export_entity)
+        allow_export = parse_ha_bool(allow_export_state, default=get_env_bool('BATTERY_ALLOW_EXPORT', True))
+    else:
+        allow_export = frozen_runtime.allow_export
     print(f"Battery allow_export from HA ({allow_export_entity}): {allow_export}")
     
     # Fetch live battery SoC from Home Assistant
-    batt_state = get_ha_state('sensor.be_soc')
-    current_battery_soc_pct = None
-    if batt_state and batt_state.get('state') not in ['unknown', 'unavailable', None]:
-        try:
-            current_battery_soc_pct = float(batt_state['state'])
-            print(f"Battery live SoC from HA: {current_battery_soc_pct:.1f}%")
-        except (ValueError, TypeError):
-            print("⚠️ Could not parse battery SoC state, using fallback")
-    else:
-        print("Battery live SoC unavailable, using fallback from environment")
+    current_battery_soc_pct = frozen_runtime.battery_soc_pct if frozen_runtime is not None else None
+    if frozen_runtime is None:
+        batt_state = get_ha_state('sensor.be_soc')
+        if batt_state and batt_state.get('state') not in ['unknown', 'unavailable', None]:
+            try:
+                current_battery_soc_pct = float(batt_state['state'])
+                print(f"Battery live SoC from HA: {current_battery_soc_pct:.1f}%")
+            except (ValueError, TypeError):
+                print("⚠️ Could not parse battery SoC state, using fallback")
+        else:
+            print("Battery live SoC unavailable, using fallback from environment")
     
     # Build optional context dict for the planner
     battery_context: BatteryPlannerContext = {
@@ -935,13 +1008,26 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
         'planned_gshp_kw': np.array(planned_gshp_kw, dtype=float),
         'current_acc_temp': current_acc_temp,
         'is_fireplace_currently_on': is_fireplace_currently_on,
-        'model_version': get_model_version(),
+        'model_version': get_model_version() if frozen_runtime is None else frozen_runtime.model_version,
         'solar_p10_kwh': np.array(solar_p10_kwh, dtype=float),
     }
 
     # Use battery optimization if available, otherwise fall back to no-battery plan
-    if is_battery_enabled():
-        planner = BatteryPlannerFactory.create()
+    if frozen_runtime is not None:
+        battery_context['gshp_failed'] = frozen_runtime.gshp_failed
+    if is_battery_enabled() if frozen_runtime is None else frozen_runtime.battery_enabled:
+        if frozen_runtime is None:
+            planner = BatteryPlannerFactory.create()
+        else:
+            planner_types = {
+                'heuristic': HeuristicBatteryPlanner,
+                'nemotron-linprog': NemotronLinprogPlanner,
+                'joint-linprog': JointLinprogPlanner,
+            }
+            planner_name = planning_getenv('BATTERY_PLANNER_TYPE', 'heuristic').lower()
+            if planner_name not in planner_types:
+                raise ValueError(f'Unsupported frozen planner type: {planner_name}')
+            planner = planner_types[planner_name]()
         is_joint = isinstance(planner, JointLinprogPlanner)
         if is_joint:
             planner_load_kwh = (predictions + uncontrolled_heating_kw) * get_plan_interval_hours()
@@ -989,9 +1075,8 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
     for i, ts in enumerate(prediction_timestamps):
         # Ensure ts is local-aware for consistent display
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc).astimezone()
-        else:
-            ts = ts.astimezone()
+            ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.astimezone(ZoneInfo(frozen_runtime.output_timezone) if frozen_runtime is not None else None)
             
         p_baseload_kw = float(predictions[i])
         p_gshp_kw = float(planned_gshp_kw[i])
@@ -1050,6 +1135,10 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
             'gshp_temp_simulated': g['gshp_temp_sim'],
             **b,
         }
+        if frozen_runtime is not None:
+            # Planner entries contain their input timestamp; the frozen output
+            # contract explicitly selects the presentation timezone.
+            entry['timestamp'] = ts.isoformat()
         entry['planned_gshp_kw'] = p_gshp_kw
         entry['gshp_intent'] = g['gshp_intent']
         entry['planned_resistive_kw'] = p_resistive_kw
@@ -1060,7 +1149,12 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
         entry['leaf_intent'] = leaf_intents[i]
         entry['effective_cost'] = compute_effective_cost(entry)
         final_plan.append(entry)
-        
+
+    return final_plan
+
+
+def publish_optimization(final_plan: list[dict[str, Any]], *, history: ArchiveHistory | None) -> None:
+    """Publish a computed plan and archive it using the operational sinks."""
     # A plan completed after the interval boundary must not revise discrete
     # loads already committed for that interval. Future intervals remain free
     # to use the newly optimized allocation.

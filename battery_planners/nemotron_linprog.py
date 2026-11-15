@@ -9,10 +9,11 @@ from scipy.optimize import linprog
 
 from .base import BatteryPlanEntry, BatteryPlanner, BatteryPlannerContext
 from utils.type_defs import BatteryAction
+from utils.planning_config import planning_getenv
 
 
 def get_env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     try:
         return float(raw) if raw is not None else float(default)
     except ValueError:
@@ -20,7 +21,7 @@ def get_env_float(name: str, default: float) -> float:
 
 
 def get_env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
+    raw = planning_getenv(name)
     try:
         return int(raw) if raw is not None else int(default)
     except ValueError:
@@ -142,7 +143,7 @@ class NemotronLinprogPlanner(BatteryPlanner):
                         break
                     except (TypeError, ValueError):
                         continue
-        env_bias = os.getenv('LOAD_FORECAST_BIAS_KW') or os.getenv('PREDICTION_BIAS_KW') or os.getenv('FORECAST_BIAS_KW')
+        env_bias = planning_getenv('LOAD_FORECAST_BIAS_KW') or planning_getenv('PREDICTION_BIAS_KW') or planning_getenv('FORECAST_BIAS_KW')
         if env_bias is not None:
             try:
                 load_forecast_bias_kw = float(env_bias)
