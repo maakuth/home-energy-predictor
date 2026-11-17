@@ -178,6 +178,40 @@ def test_prediction_fixed_cutoff_and_success_metadata(prediction_runtime):
     assert rows[0]['solar_forecast'] == 1.  # Planner forecast survives predictor removal.
 
 
+def test_archive_prediction_can_use_separate_model_directory(prediction_runtime, tmp_path):
+    context, model = prediction_runtime
+    import shutil
+    candidate = tmp_path / 'candidate'
+    candidate.mkdir()
+    for name in ('model_features.json', 'model_training_metadata.json'):
+        shutil.copyfile(Path('state') / name, candidate / name)
+    (candidate / 'energy_model.json').write_text('synthetic model')
+    Path('state/model_features.json').write_text('[]')
+    prediction.predict(history=context, model_dir=candidate)
+    model.load_model.assert_called_once_with(str(candidate / 'energy_model.json'))
+    output = Path(os.environ['TEST_PREDICTIONS_FILE'])
+    metadata = json.loads(output.with_name('future_predictions_metadata.json').read_text())
+    assert metadata['model_directory'] == str(candidate.resolve())
+    assert len(metadata['model_files_sha256']['energy_model.json']) == 64
+
+
+def test_archive_prediction_rejects_model_changed_during_inference(prediction_runtime, tmp_path):
+    context, model = prediction_runtime
+    import shutil
+    candidate = tmp_path / 'candidate'
+    candidate.mkdir()
+    for name in ('model_features.json', 'model_training_metadata.json'):
+        shutil.copyfile(Path('state') / name, candidate / name)
+    (candidate / 'energy_model.json').write_text('initial model')
+    def mutate(features):
+        (candidate / 'energy_model.json').write_text('changed model')
+        return np.ones(len(features))
+    model.predict.side_effect = mutate
+    with pytest.raises(ValueError, match='model.*changed'):
+        prediction.predict(history=context, model_dir=candidate)
+    assert not Path(os.environ['TEST_PREDICTIONS_FILE']).exists()
+
+
 @pytest.mark.parametrize('problem', ['old_features', 'missing_contract', 'old_booster'])
 def test_archive_prediction_rejects_incompatible_models_before_writing_outputs(prediction_runtime, problem):
     context, model = prediction_runtime

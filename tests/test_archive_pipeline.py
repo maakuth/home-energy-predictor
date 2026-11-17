@@ -31,6 +31,19 @@ def test_frequent_plan_is_incremental_fixed_cutoff_without_csv_or_implicit_publi
     assert not any('extract_data.py' in command or 'process_data.py' in command for command in commands)
 
 
+def test_frequent_plan_forwards_separate_archive_model_directory():
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', model_dir='/isolated/model')
+    predict = next(step['argv'] for step in plan if step['name'] == 'predict')
+    assert predict[predict.index('--model-dir') + 1] == '/isolated/model'
+
+
+def test_weekly_plan_refuses_separate_model_directory():
+    with pytest.raises(ValueError, match='weekly'):
+        build_plan('weekly', request(), bootstrap_start=CUTOFF - 86400,
+                   recorder_namespace='ha', model_dir='/isolated/model')
+
+
 def test_weekly_training_uses_local_archive_and_evaluation_uses_same_cutoff():
     plan = build_plan('weekly', request(), bootstrap_start=CUTOFF - 730 * 86400,
                       recorder_namespace='ha', approve_publish=True)

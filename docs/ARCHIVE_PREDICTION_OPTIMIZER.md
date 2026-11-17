@@ -12,6 +12,14 @@ Optional `--sources`, `--measurement-policy`, `--allow-legacy`,
 immutable `ArchiveHistory` context. Omitting archive options preserves the
 compatibility route. Archive errors never retry PostgreSQL or CSV.
 
+Archive prediction may also take `--model-dir /absolute/candidate/state` to
+select a separate model bundle rather than `state/`. It reads the model, feature
+list and training metadata from that directory, checks their compatibility and
+hashes, and refuses output if the bundle changes during inference. The success
+sidecar records the directory and hashes. The option requires archive history;
+the CSV route retains its existing `state/` model. This does not itself promote
+the candidate or change schedules.
+
 ## Success contract for the pipeline
 
 Archive-mode success writes `state/future_predictions_metadata.json` or

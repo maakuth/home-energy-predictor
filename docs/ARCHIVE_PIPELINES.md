@@ -66,6 +66,13 @@ training window remains 730 local-archive days; `--training-days` and
 The trainer uses `--require-success`:
 retaining an older model after a failed quality gate is not pipeline success.
 
+Frequent archive mode optionally accepts `--model-dir /absolute/path/to/state`
+to use a separate archive-trained model bundle. This prevents the unchanged CSV
+weekly job from replacing that bundle. Weekly archive mode rejects this option:
+its trainer still writes the normal state directory, so it must not appear to
+train one bundle and predict with another. Bundle selection is not a promotion
+or approval of the candidate.
+
 Before advancing, the runner validates model training metadata and the
 success-only prediction/plan sidecars against archive path, fixed cutoff and
 legacy policy. Available source/policy/precedence fields are checked as well.

@@ -53,9 +53,13 @@ def _required_measurements() -> list[str]:
 def build_plan(mode: str, history: ArchiveHistory, *, bootstrap_start: float,
                recorder_namespace: str, approve_publish: bool = False,
                training_days: int = 730,
-               analysis_days: int = 14) -> list[dict[str, Any]]:
+               analysis_days: int = 14, model_dir: str | Path | None = None) -> list[dict[str, Any]]:
     if mode not in {'frequent', 'weekly'}:
         raise ValueError('Archive pipeline mode must be frequent or weekly')
+    if model_dir is not None and mode != 'frequent':
+        raise ValueError('Separate model directory is not supported for weekly training')
+    if model_dir is not None and not Path(model_dir).is_absolute():
+        raise ValueError('Archive model directory must be absolute')
     if (not math.isfinite(bootstrap_start) or bootstrap_start % 60
             or bootstrap_start >= history.cutoff or not recorder_namespace.strip()):
         raise ValueError('Require a minute-aligned bootstrap floor and explicit recorder namespace')
@@ -76,7 +80,8 @@ def build_plan(mode: str, history: ArchiveHistory, *, bootstrap_start: float,
                 *_history_flags(history, window_start=history.cutoff - training_days * 86400)]},
         ]
     plan += [
-        {'name': 'predict', 'argv': [sys.executable, 'predict_future.py', *_history_flags(history)]},
+        {'name': 'predict', 'argv': [sys.executable, 'predict_future.py', *_history_flags(history),
+                                    *(['--model-dir', str(model_dir)] if model_dir is not None else [])]},
         {'name': 'optimize', 'argv': [sys.executable, 'optimize_plan.py', *_history_flags(history)]},
     ]
     if approve_publish:
@@ -204,6 +209,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--analysis-days', type=int, default=14)
     parser.add_argument('--lock-path', default='/tmp/hepo.lock')
     parser.add_argument('--writer-lock', help='Absolute shared archive writer lock used by the collector')
+    parser.add_argument('--model-dir', help='Separate absolute archive model directory (frequent mode only)')
     args = parser.parse_args(argv)
     try:
         if not args.archive:
@@ -230,7 +236,7 @@ def main(argv: list[str] | None = None) -> None:
                 raise ValueError('Missing source mappings for required archive consumers')
         plan = build_plan(args.mode, history, bootstrap_start=args.bootstrap_from,
             recorder_namespace=args.recorder_namespace, approve_publish=args.approve_publish,
-            training_days=args.training_days, analysis_days=args.analysis_days)
+            training_days=args.training_days, analysis_days=args.analysis_days, model_dir=args.model_dir)
         if not args.execute:
             policy_preflight = None
             if args.measurement_policy:

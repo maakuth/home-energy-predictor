@@ -6,6 +6,7 @@ import xgboost as xgb
 import json
 import sqlite3
 import argparse
+import hashlib
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
@@ -327,7 +328,14 @@ def archive_sauna_history(history: ArchiveHistory, current_temp: float) -> tuple
     return rising, warm
 
 
-def predict(*, history: ArchiveHistory | None = None) -> None:
+def predict(*, history: ArchiveHistory | None = None, model_dir: str | Path | None = None) -> None:
+    if model_dir is not None and history is None:
+        raise ValueError('Separate model directory requires archive history')
+    model_directory = Path(model_dir) if model_dir is not None else Path('state')
+    def model_hashes() -> dict[str, str]:
+        return {name: hashlib.sha256((model_directory / name).read_bytes()).hexdigest()
+                for name in ('energy_model.json', 'model_features.json', 'model_training_metadata.json')}
+    pinned_model = model_hashes() if model_dir is not None else None
     print('Syncing with Home Assistant...')
     
     # fetch solar data
@@ -568,15 +576,16 @@ def predict(*, history: ArchiveHistory | None = None) -> None:
 
     # Load model and features
     model = xgb.XGBRegressor()
+    training_metadata_content: Any = None
     try:
-        model.load_model('state/energy_model.json')
-        with open('state/model_features.json', 'r') as f:
+        model.load_model(str(model_directory / 'energy_model.json'))
+        with (model_directory / 'model_features.json').open('r') as f:
             features = json.load(f)
         if history is not None:
-            with open('state/model_training_metadata.json') as f:
-                metadata = json.load(f)
+            with (model_directory / 'model_training_metadata.json').open() as f:
+                training_metadata_content = json.load(f)
             booster = model.get_booster()
-            validate_baseload_model(features, metadata, booster.attr('baseload_feature_contract'), booster.feature_names)
+            validate_baseload_model(features, training_metadata_content, booster.attr('baseload_feature_contract'), booster.feature_names)
     except FileNotFoundError:
         if history is not None:
             raise
@@ -637,6 +646,8 @@ def predict(*, history: ArchiveHistory | None = None) -> None:
             X_inference[f] = defaults.get(f, 0)
     X_inference = X_inference[features]
     predictions = model.predict(X_inference)
+    if pinned_model is not None and model_hashes() != pinned_model:
+        raise ValueError('Archive model files changed during prediction; refusing output')
     if history is not None and (len(predictions) != len(timestamps) or not np.isfinite(predictions).all()):
         raise ValueError('Missing or nonfinite model predictions')
     
@@ -780,9 +791,11 @@ def predict(*, history: ArchiveHistory | None = None) -> None:
             'generated_at': generated_at,
             'current_telemetry_and_forecasts': 'live',
         }
-        training_metadata = Path('state/model_training_metadata.json')
-        if training_metadata.exists():
-            metadata['model_training'] = json.loads(training_metadata.read_text())
+        if training_metadata_content is not None:
+            metadata['model_training'] = training_metadata_content
+        metadata['model_directory'] = str(model_directory.resolve())
+        if pinned_model is not None:
+            metadata['model_files_sha256'] = pinned_model
         sidecar = Path(predictions_file).with_name('future_predictions_metadata.json')
         temporary = sidecar.with_suffix('.json.tmp')
         try:
@@ -797,5 +810,6 @@ def predict(*, history: ArchiveHistory | None = None) -> None:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate baseload predictions')
     add_history_arguments(parser)
+    parser.add_argument('--model-dir', help='Explicit archive model directory; never used by CSV compatibility mode')
     args = parser.parse_args()
-    predict(history=history_from_arguments(args))
+    predict(history=history_from_arguments(args), model_dir=args.model_dir)
