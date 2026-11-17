@@ -60,3 +60,20 @@ def test_virtual_accumulator_advances():
     temp1 = update_virtual_accumulator_temp(0.0, 0.0, now=t1, path=state_file, cop=3.5, reservoir_liters=500.0)
     assert temp1 != temp0
     assert get_virtual_accumulator_temp(path=state_file) == temp1
+
+
+def test_virtual_accumulator_outage_requires_new_thermal_reference(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from utils.sg_ready import load_virtual_accumulator_state
+    path = str(tmp_path / 'virtual.json')
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    update_virtual_accumulator_temp(2.0, 0.0, now=t0, path=path, initial_temp=48.0)
+    assert update_virtual_accumulator_temp(None, 0.0, now=t0 + timedelta(minutes=1), path=path) is None
+    assert load_virtual_accumulator_state(path) is None
+    assert update_virtual_accumulator_temp(4.0, 0.0, now=t0 + timedelta(hours=12), path=path) is None
+    assert get_virtual_accumulator_temp(path=path) is None
+    restored = update_virtual_accumulator_temp(
+        4.0, 0.0, now=t0 + timedelta(hours=13), path=path, reference_temp=43.0,
+    )
+    assert restored == 43.0
+    assert get_virtual_accumulator_temp(path=path) == 43.0

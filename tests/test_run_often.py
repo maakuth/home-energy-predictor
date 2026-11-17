@@ -71,6 +71,20 @@ class TestRunOften(unittest.TestCase):
     @patch('run_often.call_ha_service')
     @patch('run_often.push_battery_control')
     @patch('run_often.push_ha_state')
+    @patch('run_often.update_gshp_health', return_value={'status': 'normal'})
+    @patch('run_often.update_virtual_accumulator_temp', return_value=None)
+    @patch('run_often.get_ha_state')
+    def test_unavailable_gshp_is_passed_as_unknown(self, get_state, virtual, health, *_):
+        from run_often import main
+        with patch.dict(os.environ, {'GSHP_POWER_ENTITY': 'sensor.test_gshp'}):
+            get_state.side_effect = lambda entity: {'state': 'unavailable' if entity == 'sensor.test_gshp' else '50'}
+            main()
+        self.assertIsNone(virtual.call_args.args[0])
+        self.assertIsNone(health.call_args.args[1])
+
+    @patch('run_often.call_ha_service')
+    @patch('run_often.push_battery_control')
+    @patch('run_often.push_ha_state')
     @patch('run_often.get_ha_state')
     def test_blank_accumulator_entity_does_not_query_empty_id(
         self, mock_get_state, mock_push_state, mock_push_battery, mock_service,

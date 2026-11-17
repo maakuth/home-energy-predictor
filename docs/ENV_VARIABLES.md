@@ -121,13 +121,13 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 |----------|-------------|---------|--------------|
 | `GSHP_INITIAL_TEMP` | Starting accumulator / buffer temperature. | `50.0` | °C. Fallback when the physical accumulator sensor is unavailable in HA. |
 | `GSHP_ACCUMULATOR_TEMP_ENTITY` | HA entity ID for physical accumulator temperature. | `sensor.mlp_varaajan_lampotila` | °C. Preferred source for planning and runtime safety when the old accumulator instrumentation is restored. Set to an empty value to disable it temporarily. |
-| `GSHP_VIRTUAL_ACCUMULATOR_STATE_FILE` | Persisted virtual accumulator state file. | `state/gshp_virtual_acc.json` | Used only when the physical accumulator sensor is unavailable. |
+| `GSHP_VIRTUAL_ACCUMULATOR_STATE_FILE` | Persisted virtual accumulator state file. | `state/gshp_virtual_acc.json` | A detected GSHP power telemetry gap invalidates the estimate until power returns and a physical accumulator or supply temperature re-anchors it. |
 | `GSHP_SUPPLY_TEMP_ENTITY` | HA entity ID for heating-circuit supply temperature. | `sensor.gshp_supply_temp` | °C. Runtime fallback thermal reference if the physical accumulator is unavailable. |
 | `GSHP_RETURN_TEMP_ENTITY` | HA entity ID for heating-circuit return temperature. | `sensor.gshp_return_temp` | °C. Used for heating-circuit ΔT diagnostics only; no thermal power is calculated without a flow sensor. |
 | `GSHP_MIN_TEMP` | Hard minimum accumulator temperature. | `42.0` | °C. If the temperature drops to or below this, the heat pump **must** start regardless of price. |
 | `THERMAL_MIN_TEMP_MARGIN_C` | Thermal safety margin above the hard minimum. | `0.5` | °C. The joint planner penalizes any physical shortfall below `GSHP_MIN_TEMP + margin`. When bulk heating is enabled, real-time control runs the bulk element continuously below this floor. |
 | `GSHP_MAX_TEMP` | Hard maximum accumulator temperature. | `55.0` | °C. If the temperature reaches this, the heat pump **must** stop. |
-| `GSHP_IS_RUNNING` | Initial on/off state of the heat pump. | `false` | bool. Fallback when `sensor.mlp_teho` is unavailable in HA. |
+| `GSHP_IS_RUNNING` | Initial on/off state of the heat pump. | `false` | bool. Used for explicitly configured/offline planning; live optimization refuses to publish a new plan when shared-power telemetry is unavailable. Existing plans are not removed. |
 | `GSHP_ELECTRIC_POWER_KW` | Fallback nominal electrical power. | `4.0` | kW. **Only used when both `GSHP_POWER_MIN_KW` and `GSHP_POWER_MAX_KW` are absent.** In that case both min and max are set to this value. |
 | `GSHP_COP` | Coefficient of Performance. | `3.5` | —. `thermal_kw = electric_kw * COP`. |
 | `GSHP_HEAT_LOSS_K` | House heat-loss coefficient. | `0.1` | kW/°C. Used in the demand formula: `max(0, (20.0 - outside_temp) * heat_loss_k)`. Code default is `0.135`. |

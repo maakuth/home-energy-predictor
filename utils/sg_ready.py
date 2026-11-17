@@ -64,7 +64,7 @@ def _state_file(path: Optional[str] = None) -> str:
     return path or os.getenv("GSHP_VIRTUAL_ACCUMULATOR_STATE_FILE", "state/gshp_virtual_acc.json")
 
 
-def load_virtual_accumulator_state(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def _load_virtual_accumulator_state(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     path = _state_file(path)
     try:
         with open(path) as f:
@@ -74,6 +74,11 @@ def load_virtual_accumulator_state(path: Optional[str] = None) -> Optional[Dict[
     except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError, TypeError, ValueError):
         return None
     return None
+
+
+def load_virtual_accumulator_state(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    state = _load_virtual_accumulator_state(path)
+    return None if state is not None and state.get("valid") is False else state
 
 
 def save_virtual_accumulator_state(state: Dict[str, Any], path: Optional[str] = None) -> None:
@@ -90,14 +95,15 @@ def save_virtual_accumulator_state(state: Dict[str, Any], path: Optional[str] = 
 
 
 def update_virtual_accumulator_temp(
-    observed_gshp_kw: float,
+    observed_gshp_kw: Optional[float],
     outside_temp: float,
     now: Optional[datetime] = None,
     path: Optional[str] = None,
     cop: Optional[float] = None,
     reservoir_liters: Optional[float] = None,
     initial_temp: Optional[float] = None,
-) -> float:
+    reference_temp: Optional[float] = None,
+) -> Optional[float]:
     """Advance the virtual accumulator temperature using observed GSHP power.
 
     ``observed_gshp_kw`` is the new unit's electric power.  Heat delivered uses
@@ -112,7 +118,17 @@ def update_virtual_accumulator_temp(
     if initial_temp is None:
         initial_temp = _get_env_float("GSHP_INITIAL_TEMP", 50.0)
 
-    state = load_virtual_accumulator_state(path)
+    state = _load_virtual_accumulator_state(path)
+    if observed_gshp_kw is None:
+        save_virtual_accumulator_state({"valid": False, "timestamp": now.isoformat()}, path)
+        return None
+    if state is not None and state.get("valid") is False:
+        if reference_temp is None:
+            return None
+        save_virtual_accumulator_state(
+            {"temp": float(reference_temp), "timestamp": now.isoformat(), "valid": True}, path,
+        )
+        return float(reference_temp)
     if state is None:
         temp = float(initial_temp)
         last = now

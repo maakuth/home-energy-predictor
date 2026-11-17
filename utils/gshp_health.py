@@ -13,9 +13,16 @@ def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None, accum
         state = {'status': 'normal', 'bad_samples': 0, 'good_samples': 0}
     minimum_kw = float(os.getenv('GSHP_FAILURE_MIN_COMPRESSOR_KW', '1.0'))
     # Telemetry may be unavailable rather than zero. In that case there is no
-    # evidence of a failed compressor response, so do not accumulate bad samples
-    # or overwrite the last known compressor power.
+    # evidence of a failed compressor response. Break consecutive sample runs
+    # without clearing a latched fault or overwriting the last known power.
     if shared_power_kw is None:
+        state.update({'bad_samples': 0, 'good_samples': 0})
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('w') as f:
+                json.dump(state, f)
+        except OSError:
+            pass
         return state
     if not plan or plan.get('gshp_intent') != 'START' or float(plan.get('planned_gshp_kw', 0) or 0) < float(os.getenv('GSHP_FAILURE_MIN_PLANNED_KW', '1.0')):
         if element_power_kw <= 0.0 and shared_power_kw >= minimum_kw:

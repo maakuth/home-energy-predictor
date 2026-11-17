@@ -46,7 +46,9 @@ class TestEVLogic(unittest.TestCase):
         mock_build_tariff.return_value = (np.array([0.01, 0.10, 0.05, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
         mock_fetch_prices.return_value = ([0.01, 0.10, 0.05, 0.20], [0,0,0,0], "Mock", False, False, None)
         
-        mock_ha.return_value = {"state": "unknown"} # for various sensors
+        mock_ha.side_effect = lambda entity: {
+            "state": "0" if entity == os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho') else "unknown"
+        }
         
         # Set EV_CHARGE_HOURS to 0.25 (1 interval)
         with patch.dict(os.environ, {"EV_CHARGE_HOURS": "0.25", "PLAN_INTERVAL_MINUTES": "15"}):
@@ -74,7 +76,9 @@ class TestEVLogic(unittest.TestCase):
 
         mock_build_tariff.return_value = (np.array([0.01, 0.10, 0.05, 0.20]), np.array([0.0, 0.0, 0.0, 0.0]))
         mock_fetch_prices.return_value = ([0.01, 0.10, 0.05, 0.20], [0,0,0,0], "Mock", False, False, None)
-        mock_ha.return_value = {"state": "unknown"}
+        mock_ha.side_effect = lambda entity: {
+            "state": "0" if entity == os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho') else "unknown"
+        }
         
         with patch.dict(os.environ, {"EV_CHARGE_HOURS": "1.0", "PLAN_INTERVAL_MINUTES": "15"}):
             optimize()

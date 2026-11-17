@@ -8,7 +8,7 @@ from utils.ha_utils import call_ha_service, get_ha_state, parse_ha_bool, push_ha
 from typing import cast
 from utils.type_defs import BatteryAction
 from utils.gshp_health import health_attributes, update_gshp_health
-from utils.sg_ready import update_virtual_accumulator_temp, get_virtual_accumulator_temp, derive_sg_ready_bits, derive_sg_ready_mode
+from utils.sg_ready import update_virtual_accumulator_temp, derive_sg_ready_bits, derive_sg_ready_mode
 from utils.plan_time import slot_start
 from utils.battery_diagnostics import new_battery_diagnostic, emit_battery_diagnostic
 from utils.native_follow import (
@@ -381,12 +381,10 @@ def main():
     return_temp = _get_float(return_temp_state)
     outside_temp = _get_float(outside_temp_state)
     try:
-        if gshp_kw is None:
-            # Telemetry unavailable: do not assume zero heating. Hold the last
-            # persisted virtual-accumulator estimate instead of advancing it.
-            virtual_acc_temp = get_virtual_accumulator_temp()
-        else:
-            virtual_acc_temp = update_virtual_accumulator_temp(gshp_kw, outside_temp if outside_temp is not None else 10.0)
+        virtual_acc_temp = update_virtual_accumulator_temp(
+            gshp_kw, outside_temp if outside_temp is not None else 10.0,
+            reference_temp=accumulator_temp if accumulator_temp is not None else supply_temp,
+        )
     except Exception:
         virtual_acc_temp = None
 

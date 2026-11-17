@@ -92,3 +92,24 @@ def test_default_startup_delay_requires_nine_bad_samples(tmp_path):
 
     state = update_gshp_health(plan, shared_power_kw=0.0, element_power_kw=0.0, path=path)
     assert state['status'] == 'failed'
+
+
+def test_unavailable_breaks_sample_sequences_without_clearing_latch(tmp_path):
+    path = tmp_path / 'health.json'
+    path.write_text('{"status": "failed", "bad_samples": 8, "good_samples": 1, "compressor_kw": 3.0}')
+    plan = {'gshp_intent': 'START', 'planned_gshp_kw': 3.0}
+    state = update_gshp_health(plan, None, 0.0, path=path)
+    assert state == {'status': 'failed', 'bad_samples': 0, 'good_samples': 0, 'compressor_kw': 3.0}
+    state = update_gshp_health(plan, 3.0, 0.0, path=path)
+    assert state['status'] == 'failed'
+    assert state['good_samples'] == 1
+
+
+def test_missing_telemetry_does_not_complete_bad_sample_sequence(tmp_path):
+    path = tmp_path / 'health.json'
+    path.write_text('{"status": "normal", "bad_samples": 8, "good_samples": 0}')
+    plan = {'gshp_intent': 'START', 'planned_gshp_kw': 3.0}
+    update_gshp_health(plan, None, 0.0, path=path)
+    state = update_gshp_health(plan, 0.0, 0.0, path=path)
+    assert state['status'] == 'normal'
+    assert state['bad_samples'] == 1

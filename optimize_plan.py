@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import math
 import json
 import numpy as np
 import pandas as pd
@@ -152,6 +153,8 @@ def _is_gshp_compressor_running(
         shared_power_w = float(raw_state)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(shared_power_w):
+        return None
     element_powers_kw = []
     if parse_ha_bool(resistive_state, default=False):
         element_powers_kw.append(get_env_float('RESISTIVE_HEATER_POWER_KW', 6.0))
@@ -168,6 +171,12 @@ def _is_gshp_compressor_running(
     )
     compressor_power_kw = max(0.0, shared_power_kw - element_power_kw)
     return compressor_power_kw >= minimum_kw
+
+
+def _require_gshp_compressor_state(state: bool | None) -> bool:
+    if state is None:
+        raise RuntimeError('GSHP power telemetry unavailable; refusing to publish a plan with unknown compressor state')
+    return state
 
 
 def get_env_bool(name: str, default: bool = False) -> bool:
@@ -775,12 +784,9 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
     gshp_power_state = get_ha_state(os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'))
     resistive_state = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
     bulk_state = get_ha_state(os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'))
-    is_hp_currently_running = _is_gshp_compressor_running(
+    is_hp_currently_running = _require_gshp_compressor_state(_is_gshp_compressor_running(
         gshp_power_state, resistive_state, bulk_state,
-    )
-    if is_hp_currently_running is None:
-        print('⚠️ GSHP shared-power telemetry unavailable; treating compressor state as unknown/not running.')
-        is_hp_currently_running = False
+    ))
 
     accumulator_entity = os.getenv(
         'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
@@ -811,10 +817,9 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
                 # Check if accumulator is rising fast and GSHP is mostly off
                 # Using the same heuristic as in process_data.py
                 is_fireplace_currently_on = (acc_roc_15m > 0.3) and (
-    gshp_power_state is not None
-    and str(gshp_power_state.get('state', '')).strip().lower() not in {'', 'unknown', 'unavailable', 'none'}
-    and float(gshp_power_state.get('state', 0)) < 100
-)
+                    gshp_power_state is not None
+                    and float(gshp_power_state.get('state', 0)) < 100
+                )
     except Exception as e:
         print(f"⚠️ Error detecting fireplace status: {e}")
 

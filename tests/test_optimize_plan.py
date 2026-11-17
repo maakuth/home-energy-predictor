@@ -24,6 +24,34 @@ from unittest.mock import patch, MagicMock
 
 
 class GshpPowerStateTests(unittest.TestCase):
+    def test_unknown_compressor_aborts_planning(self):
+        from optimize_plan import _require_gshp_compressor_state
+        with self.assertRaisesRegex(RuntimeError, 'telemetry unavailable'):
+            _require_gshp_compressor_state(None)
+        self.assertFalse(_require_gshp_compressor_state(False))
+        self.assertTrue(_require_gshp_compressor_state(True))
+
+    def test_optimize_does_not_publish_when_power_unavailable(self):
+        values = np.array([0.1])
+        with patch('optimize_plan.load_predictions', return_value=(
+            [], values, [datetime.now(timezone.utc)], values, values, values, values, values,
+        )), patch('optimize_plan.fetch_market_prices', return_value=(
+            values, [False], None, False, False, values,
+        )), patch('optimize_plan.build_tariff_prices', return_value=(values, values)), \
+             patch('optimize_plan.get_gshp_initial_temp', return_value=45.0), \
+             patch('optimize_plan.get_ha_state', return_value={'state': 'unavailable'}), \
+             patch('optimize_plan.calculate_optimization') as calculate, \
+             patch('optimize_plan.publish_optimization') as publish:
+            with self.assertRaisesRegex(RuntimeError, 'telemetry unavailable'):
+                optimize()
+        calculate.assert_not_called()
+        publish.assert_not_called()
+
+    def test_unavailable_and_nonfinite_power_are_unknown(self):
+        for state in (None, {'state': 'unavailable'}, {'state': 'nan'}, {'state': 'inf'}):
+            with self.subTest(state=state):
+                self.assertIsNone(_is_gshp_compressor_running(state, None, None))
+
     def test_active_element_is_removed_from_shared_power(self):
         with patch.dict(os.environ, {
             'RESISTIVE_HEATER_POWER_KW': '6.0',
