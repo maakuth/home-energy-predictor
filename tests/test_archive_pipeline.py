@@ -52,8 +52,31 @@ def test_weekly_training_uses_local_archive_and_evaluation_uses_same_cutoff():
     assert '--archive' in by_name['train-xgboost']
     assert 'train-sarima' not in by_name
     assert all('train_sarima.py' not in command for command in by_name.values())
-    assert 'push_to_ha.py' in by_name['publish']
+    assert not {'predict', 'optimize', 'publish'} & by_name.keys()
     assert '--cutoff' in by_name['evaluate-performance']
+
+
+def test_weekly_archive_execution_requires_explicit_model_write_approval(tmp_path):
+    plan = build_plan('weekly', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    with patch('utils.archive_pipeline.subprocess.run') as run:
+        with pytest.raises(ValueError, match='approval'):
+            execute_plan(plan, request(), mode='weekly', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=tmp_path / 'writer.lock')
+    run.assert_not_called()
+
+
+def test_weekly_archive_execution_trains_without_any_plan_or_publisher(tmp_path):
+    plan = build_plan('weekly', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    with patch('utils.archive_pipeline.subprocess.run') as run, \
+         patch('utils.archive_pipeline._verify_output'):
+        execute_plan(plan, request(), mode='weekly', lock_path=tmp_path / 'pipeline.lock',
+                     writer_lock_path=tmp_path / 'writer.lock', approve_model_write=True)
+    commands = [call.args[0] for call in run.call_args_list]
+    assert any('train_model.py' in cmd for cmd in commands)
+    assert not any(name in cmd for cmd in commands
+                   for name in ('predict_future.py', 'optimize_plan.py', 'push_to_ha.py'))
 
 
 def test_dry_run_does_not_connect_lock_or_write(tmp_path, monkeypatch, capsys):

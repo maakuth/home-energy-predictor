@@ -27,32 +27,23 @@ fi
   echo "=== Starting Weekly HEPO Pipeline: $(date) ==="
 
   # 1. Extract Data (Full 2 Years for Training)
-  echo "[1/6] Extracting Data (730 days for training)..."
+  echo "[1/5] Extracting Data (730 days for training)..."
   python extract_data.py --days 730 --output state/raw_data_weekly.csv
 
   # 2. Process Data
-  echo "[2/6] Processing Data..."
+  echo "[2/5] Processing Data..."
   python process_data.py --input state/raw_data_weekly.csv --output state/processed_data_weekly.csv
 
   # 3. Retrain XGBoost Model
-  echo "[3/6] Retraining XGBoost Model (full dataset)..."
+  echo "[3/5] Retraining XGBoost Model (full dataset)..."
   python train_model.py --data-path state/processed_data_weekly.csv
 
-  # 5. Predict Future
-  echo "[5/6] Predicting Future..."
-  python predict_future.py
-
-  # 6. Optimize & Push
-  echo "[6/6] Optimizing & Pushing Plan..."
-  python optimize_plan.py
-  python push_to_ha.py
-
-  # 7. Performance Analysis (weekly: analyze 14 days)
-  echo "[7/6] Analyzing Performance (Last 14 Days)..."
+  # 4. Performance Analysis (weekly: analyze 14 days)
+  echo "[4/5] Analyzing Performance (Last 14 Days)..."
   python analyze_performance.py --days 14 --backtest
 
-  # 8. Evolution Analysis (weekly: analyze 14 days)
-  echo "[8/6] Analyzing Plan Evolution (Last 14 Days)..."
+  # 5. Evolution Analysis (weekly: analyze 14 days)
+  echo "[5/5] Analyzing Plan Evolution (Last 14 Days)..."
   python analyze_evolution.py --days 14
 
   echo "=== Weekly Pipeline Complete: $(date) ==="

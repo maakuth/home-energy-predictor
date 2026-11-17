@@ -7,12 +7,14 @@ This app runs as a number of scripts scheduled as systemd units:
 | `run_often.py` | Every 20 seconds | Reads current HA state and plan; requests native battery load following or a fixed power setpoint |
 | `run_frequent.sh` | Every 15 minutes (at spot pricing period break) | Extracts 3 days, predicts from "now", optimizes battery/GSHP/EV, pushes to HA |
 | `run_slow.sh` | At :57 of every hour | Disabled SARIMA benchmark; exits without fitting or writing forecasts |
-| `run_weekly.sh` | 02:00 every Monday | Extracts 730 days, retrains XGBoost, runs analysis for last 14 days |
+| `run_weekly.sh` | 02:00 every Monday | Extracts 730 days, retrains XGBoost, runs analysis for last 14 days; no prediction or plan publication |
 
 These changes take effect only when this code is deployed. The hourly timer can
 remain installed: its script is a no-op. Existing SARIMA artifacts are retained;
 the optimizer may still read the old benchmark forecast for diagnostic bounds,
 and weekly hindsight analysis may still report archived SARIMA predictions.
+Weekly analysis retains its existing diagnostics and may publish accuracy
+metrics to Home Assistant; it no longer writes or publishes optimization plans.
 
 The table describes deployed no-argument **CSV compatibility** jobs. Explicit
 `--archive` invocations of frequent/weekly instead preview incremental ingestion,

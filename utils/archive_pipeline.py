@@ -79,13 +79,14 @@ def build_plan(mode: str, history: ArchiveHistory, *, bootstrap_start: float,
                 '--require-success', '--feature-chunk-seconds', '86400',
                 *_history_flags(history, window_start=history.cutoff - training_days * 86400)]},
         ]
-    plan += [
-        {'name': 'predict', 'argv': [sys.executable, 'predict_future.py', *_history_flags(history),
-                                    *(['--model-dir', str(model_dir)] if model_dir is not None else [])]},
-        {'name': 'optimize', 'argv': [sys.executable, 'optimize_plan.py', *_history_flags(history)]},
-    ]
-    if approve_publish:
-        plan.append({'name': 'publish', 'argv': [sys.executable, 'push_to_ha.py']})
+    if mode == 'frequent':
+        plan += [
+            {'name': 'predict', 'argv': [sys.executable, 'predict_future.py', *_history_flags(history),
+                                        *(['--model-dir', str(model_dir)] if model_dir is not None else [])]},
+            {'name': 'optimize', 'argv': [sys.executable, 'optimize_plan.py', *_history_flags(history)]},
+        ]
+        if approve_publish:
+            plan.append({'name': 'publish', 'argv': [sys.executable, 'push_to_ha.py']})
     if mode == 'weekly':
         plan += [
             {'name': 'evaluate-performance', 'argv': [sys.executable, 'analyze_performance.py',
@@ -155,10 +156,17 @@ def _reset_net_metering(cutoff: float) -> None:
 
 def execute_plan(plan: list[dict[str, Any]], history: ArchiveHistory, *, mode: str,
                  lock_path: str | Path = '/tmp/hepo.lock',
-                 writer_lock_path: str | Path | None = None) -> None:
+                 writer_lock_path: str | Path | None = None,
+                 approve_model_write: bool = False) -> None:
     """Operational execution only after explicit opt-in. No implicit retries/routes."""
-    if not any(step['name'] == 'publish' for step in plan):
+    if mode == 'frequent' and not any(step['name'] == 'publish' for step in plan):
         raise ValueError('Full pipeline execution requires rollout approval: active plan files can actuate without HA publication')
+    if mode == 'weekly' and (not approve_model_write or not any(step['name'] == 'train-xgboost' for step in plan)):
+        raise ValueError('Weekly archive training requires explicit active-model-write approval')
+    if mode == 'weekly' and any(step['name'] in {'predict', 'optimize', 'publish'} for step in plan):
+        raise ValueError('Weekly archive pipeline must not predict, optimize or publish a plan')
+    if mode not in {'frequent', 'weekly'}:
+        raise ValueError('Unknown pipeline mode')
     if writer_lock_path is None or not Path(writer_lock_path).is_absolute():
         raise ValueError('Execution requires an absolute shared archive writer lock path')
     writer_path = Path(writer_lock_path).resolve()
@@ -204,7 +212,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--recorder-namespace', required=True)
     parser.add_argument('--execute', action='store_true', help='Actually ingest, fit, predict and optimize')
     parser.add_argument('--approve-publish', action='store_true',
-                        help='Approve active model/plan writes and HA publication; mandatory for full execution')
+                        help='Approve active model writes or plan writes/publication; mandatory for execution')
     parser.add_argument('--training-days', type=int, default=730)
     parser.add_argument('--analysis-days', type=int, default=14)
     parser.add_argument('--lock-path', default='/tmp/hepo.lock')
@@ -218,7 +226,7 @@ def main(argv: list[str] | None = None) -> None:
             args.cutoff = math.floor(time.time() / 60) * 60
         if args.execute:
             if not args.approve_publish:
-                raise ValueError('--execute requires --approve-publish: writing an active plan can actuate through run_often.py')
+                raise ValueError('--execute requires --approve-publish: weekly training writes active models and frequent plans can actuate through run_often.py')
             if not args.sources or not args.measurement_policy:
                 raise ValueError('Execution requires explicit --sources and --measurement-policy evidence configuration')
             if not args.writer_lock or not Path(args.writer_lock).is_absolute():
@@ -248,14 +256,14 @@ def main(argv: list[str] | None = None) -> None:
                                     'complete': not missing,
                                     'note': 'Uses current process configuration, not the execution dotenv; entry presence is not policy approval or data coverage.'}
             print(json.dumps({'dry_run': True, 'migration_ready': False,
-                'cutoff': _iso(history.cutoff), 'will_publish_if_executed': args.approve_publish,
+                'cutoff': _iso(history.cutoff), 'will_publish_if_executed': args.approve_publish and args.mode == 'frequent',
                 'execution_requires_rollout_approval': True,
                 'writer_lock': args.writer_lock,
                 'policy_preflight': policy_preflight,
                 'commands': plan}, indent=2))
             return
         execute_plan(plan, history, mode=args.mode, lock_path=args.lock_path,
-                     writer_lock_path=args.writer_lock)
+                     writer_lock_path=args.writer_lock, approve_model_write=args.approve_publish)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f'Archive pipeline stopped: {error}\n')
 

@@ -43,6 +43,9 @@ unproven wind/forecast units or freshness limits on the operator's behalf.
 
 Only after deployment/data/model review may an operator append both
 `--execute --approve-publish`. These are not development-test flags.
+The approval flag also authorizes active model writes in weekly mode; weekly
+mode trains and evaluates but does not run prediction, optimize or publish a
+plan. Existing analysis may still publish accuracy metrics.
 
 **Writing `optimization_plan.json` can actuate through `run_often.py` even if
 `push_to_ha.py` is skipped.** Therefore execution without rollout approval is
