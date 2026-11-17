@@ -1,5 +1,9 @@
 # SARIMA archive input (opt-in)
 
+Scheduled SARIMA training and prediction are disabled in this code. The
+standalone commands below remain available for explicitly isolated offline
+analysis; they do not authorize a production schedule or artifact change.
+
 CSV remains the default compatibility route. No scheduled pipeline has been
 switched by this implementation. Both entry points accept the same explicit,
 timezone-aware, inclusive `--from` and exclusive `--to` archive window:
@@ -53,10 +57,6 @@ Existing `SLOW_DATA_PATH`, `SLOW_PARAMS_PATH`, and `TEST_SARIMA_PARAMS`
 compatibility overrides remain supported by their existing entry points.
 # Slow-task wrapper and rollback
 
-`run_slow.sh` forwards explicit SARIMA arguments. Passing `--archive PATH` skips
-the processed-CSV copy while retaining model-parameter synchronization. Supply
-the same explicit bounds/source/policy options as the predictor CLI. Archive
-errors terminate the job, never retrying a CSV. Returning to the no-argument
-invocation retains the original CSV compatibility route. No timer configuration
-or live pipeline has been changed. Isolated shell tests cover CSV absence,
-argument forwarding, failure propagation, and default rollback behavior.
+`run_slow.sh` now exits without running a forecast and rejects arguments.
+No timer configuration is changed; after deployment the existing hourly
+invocation becomes a no-op. Existing artifacts are retained.

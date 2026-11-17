@@ -38,10 +38,6 @@ fi
   echo "[3/6] Retraining XGBoost Model (full dataset)..."
   python train_model.py --data-path state/processed_data_weekly.csv
 
-  # 4. Retrain SARIMA Model (extended 30-day window for better stability)
-  echo "[4/6] Retraining SARIMA Model (30-day window for weekly runs)..."
-  python train_sarima.py --days 30 --data-path state/processed_data_weekly.csv
-
   # 5. Predict Future
   echo "[5/6] Predicting Future..."
   python predict_future.py

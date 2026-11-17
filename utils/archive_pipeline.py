@@ -9,7 +9,6 @@ import json
 import math
 import os
 from pathlib import Path
-import pickle
 import subprocess
 import sys
 import time
@@ -53,14 +52,14 @@ def _required_measurements() -> list[str]:
 
 def build_plan(mode: str, history: ArchiveHistory, *, bootstrap_start: float,
                recorder_namespace: str, approve_publish: bool = False,
-               training_days: int = 730, sarima_days: int = 30,
+               training_days: int = 730,
                analysis_days: int = 14) -> list[dict[str, Any]]:
     if mode not in {'frequent', 'weekly'}:
         raise ValueError('Archive pipeline mode must be frequent or weekly')
     if (not math.isfinite(bootstrap_start) or bootstrap_start % 60
             or bootstrap_start >= history.cutoff or not recorder_namespace.strip()):
         raise ValueError('Require a minute-aligned bootstrap floor and explicit recorder namespace')
-    if any(not isinstance(days, int) or days <= 0 for days in (training_days, sarima_days, analysis_days)):
+    if any(not isinstance(days, int) or days <= 0 for days in (training_days, analysis_days)):
         raise ValueError('Training/evaluation day windows must be positive integers')
     required = _required_measurements()
     ingest = [sys.executable, '-m', 'utils.measurement_ingest_cli', '--archive', str(history.path),
@@ -75,8 +74,6 @@ def build_plan(mode: str, history: ArchiveHistory, *, bootstrap_start: float,
             {'name': 'train-xgboost', 'argv': [sys.executable, 'train_model.py',
                 '--require-success', '--feature-chunk-seconds', '86400',
                 *_history_flags(history, window_start=history.cutoff - training_days * 86400)]},
-            {'name': 'train-sarima', 'argv': [sys.executable, 'train_sarima.py',
-                '--require-success', *_history_flags(history, window_start=history.cutoff - sarima_days * 86400)]},
         ]
     plan += [
         {'name': 'predict', 'argv': [sys.executable, 'predict_future.py', *_history_flags(history)]},
@@ -127,12 +124,6 @@ def _verify_output(step: str, history: ArchiveHistory) -> None:
         _verify_context(metadata.get('archive_training') or {}, history)
         if not Path('state/energy_model.json').is_file():
             raise ValueError('Missing trained XGBoost model artifact')
-    elif step == 'train-sarima':
-        # Local model parameters are an existing trusted pickle format, not input
-        # supplied by an archive or downloaded by this command.
-        with Path('state/sarima_model_params.pkl').open('rb') as stream:
-            metadata = pickle.load(stream)
-        _verify_context(metadata.get('training_metadata', {}).get('archive_training') or {}, history)
     elif step in {'predict', 'optimize'}:
         filename = 'future_predictions' if step == 'predict' else 'optimization_plan'
         variable = 'TEST_PREDICTIONS_FILE' if step == 'predict' else 'TEST_PLAN_FILE'
@@ -188,7 +179,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--approve-publish', action='store_true',
                         help='Approve active model/plan writes and HA publication; mandatory for full execution')
     parser.add_argument('--training-days', type=int, default=730)
-    parser.add_argument('--sarima-days', type=int, default=30)
     parser.add_argument('--analysis-days', type=int, default=14)
     parser.add_argument('--lock-path', default='/tmp/hepo.lock')
     args = parser.parse_args(argv)
@@ -215,11 +205,21 @@ def main(argv: list[str] | None = None) -> None:
                 raise ValueError('Missing source mappings for required archive consumers')
         plan = build_plan(args.mode, history, bootstrap_start=args.bootstrap_from,
             recorder_namespace=args.recorder_namespace, approve_publish=args.approve_publish,
-            training_days=args.training_days, sarima_days=args.sarima_days, analysis_days=args.analysis_days)
+            training_days=args.training_days, analysis_days=args.analysis_days)
         if not args.execute:
+            policy_preflight = None
+            if args.measurement_policy:
+                required = _required_measurements()
+                registry = load_policies(args.measurement_policy)
+                missing = sorted(set(required) - set(registry))
+                policy_preflight = {'required_measurements': required,
+                                    'missing_measurements': missing,
+                                    'complete': not missing,
+                                    'note': 'Uses current process configuration, not the execution dotenv; entry presence is not policy approval or data coverage.'}
             print(json.dumps({'dry_run': True, 'migration_ready': False,
                 'cutoff': _iso(history.cutoff), 'will_publish_if_executed': args.approve_publish,
                 'execution_requires_rollout_approval': True,
+                'policy_preflight': policy_preflight,
                 'commands': plan}, indent=2))
             return
         execute_plan(plan, history, mode=args.mode, lock_path=args.lock_path)

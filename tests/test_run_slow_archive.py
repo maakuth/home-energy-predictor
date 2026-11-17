@@ -26,34 +26,18 @@ def run_script(tmp_path, args, python_exit=0):
     env = {**os.environ, 'PATH': str(commands) + ':' + os.environ['PATH'], 'COMMAND_LOG': str(log)}
     result = subprocess.run(['bash', str(tmp_path / 'run_slow.sh'), *args], cwd=tmp_path,
                             env=env, text=True, capture_output=True, check=False)
-    return result, log.read_text()
+    return result, log.read_text() if log.exists() else ''
 
 
-def test_archive_slow_pipeline_uses_explicit_window_with_csv_absent(tmp_path):
+def test_archive_slow_pipeline_is_disabled(tmp_path):
     result, log = run_script(tmp_path, ['--archive', '/offline/history.sqlite',
         '--from', '2026-10-21T00:00:00Z', '--to', '2026-10-24T00:00:00Z',
         '--no-archive-results'])
-    assert result.returncode == 0
-    assert 'cp state/processed_data.csv' not in log
-    assert 'cp state/sarima_model_params.pkl' in log
-    assert '--archive /offline/history.sqlite' in log
-    assert '--from 2026-10-21T00:00:00Z --to 2026-10-24T00:00:00Z' in log
-    assert '--no-archive-results' in log
-    assert 'push_to_ha' not in log
-
-
-def test_no_arguments_retains_explicit_csv_rollback_and_parameter_sync(tmp_path):
+    assert result.returncode != 0
+    assert 'disabled' in (result.stdout + result.stderr).lower()
+    assert log == ''
+def test_scheduled_slow_pipeline_does_not_run_sarima(tmp_path):
     result, log = run_script(tmp_path, [])
     assert result.returncode == 0
-    assert 'cp state/processed_data.csv' in log
-    assert 'cp state/sarima_model_params.pkl' in log
-    assert 'python3 sarimax_predictor.py' in log
-    assert '--archive' not in log
-
-
-def test_archive_failure_stops_without_trying_csv(tmp_path):
-    result, log = run_script(tmp_path, ['--archive', '/missing.sqlite'], python_exit=2)
-    assert result.returncode == 2
-    assert 'cp state/processed_data.csv' not in log
-    assert log.count('python3 ') == 1
-    assert 'Slow Task Complete' not in result.stdout
+    assert 'disabled' in result.stdout.lower()
+    assert log == ''

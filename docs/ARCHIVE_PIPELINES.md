@@ -10,6 +10,10 @@ data, units, freshness or model quality have been approved.
 `utils.archive_pipeline`. It captures one UTC-minute cutoff (or accepts an
 explicit `--cutoff`) and prints its plan without taking locks, connecting to the
 recorder, creating an archive, fitting models, resetting metering or publishing.
+When a measurement policy is supplied, the preview lists required and missing
+policy entries. This uses the current process configuration, not the `.env`
+loaded only during execution; entry presence does not prove policy approval,
+source coverage or migration readiness.
 
 From a development virtualenv the same preview is:
 
@@ -51,11 +55,11 @@ under that lock. Ingestion is incremental with fixed bounds and explicit
 recorder namespace. Namespace mismatch fails closed before mixing rebuilt
 recorder IDs. All subprocess failures terminate the job; there is no CSV retry.
 
-Weekly execution trains XGBoost from projected day-sized feature chunks and
-SARIMA from its explicit 30-day archive window. It never re-extracts 730 days to
-CSV. The default XGBoost training window remains 730 local-archive days;
-`--training-days`, `--sarima-days` and `--analysis-days` select explicit windows,
-not empirically tuned model parameters. Both trainers use `--require-success`:
+Weekly execution trains XGBoost from projected day-sized feature chunks; SARIMA
+training is disabled. It never re-extracts 730 days to CSV. The default XGBoost
+training window remains 730 local-archive days; `--training-days` and
+`--analysis-days` select explicit windows, not empirically tuned model parameters.
+The trainer uses `--require-success`:
 retaining an older model after a failed quality gate is not pipeline success.
 
 Before advancing, the runner validates model training metadata and the
@@ -70,9 +74,8 @@ attest to the complete JSON artifacts, not optional SQLite feedback writes.
 
 Keep CSVs, snapshots and previous model/plan backups. Return the shell service
 invocation to **no arguments** for the existing CSV compatibility pipeline.
-Archive failure never selects this mode automatically. `run_slow.sh` likewise
-retains its copied-CSV default and explicit archive window option, with model
-parameter synchronization retained. No rollback command deletes the archive.
+Archive failure never selects this mode automatically. `run_slow.sh` is disabled
+in both cases. No rollback command deletes the archive or SARIMA artifacts.
 
 The shell dispatch, pipeline planning and subprocess/failure tests run against
 isolated fixtures/stubs with CSV files absent. They do not execute real HA,

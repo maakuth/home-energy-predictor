@@ -37,8 +37,8 @@ def test_weekly_training_uses_local_archive_and_evaluation_uses_same_cutoff():
     by_name = {step['name']: step['argv'] for step in plan}
     assert 'train_model.py' in by_name['train-xgboost']
     assert '--archive' in by_name['train-xgboost']
-    assert 'train_sarima.py' in by_name['train-sarima']
-    assert '--to' in by_name['train-sarima']
+    assert 'train-sarima' not in by_name
+    assert all('train_sarima.py' not in command for command in by_name.values())
     assert 'push_to_ha.py' in by_name['publish']
     assert '--cutoff' in by_name['evaluate-performance']
 
@@ -54,6 +54,21 @@ def test_dry_run_does_not_connect_lock_or_write(tmp_path, monkeypatch, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report['dry_run'] is True
     assert list(tmp_path.iterdir()) == before
+
+
+def test_dry_run_reports_missing_policy_entries_without_executing(tmp_path, capsys):
+    policy = tmp_path / 'policy.yaml'
+    policy.write_text('outside_temp:\n  kind: numeric\n  input_unit: C\n  canonical_unit: C\n  sign: 1\n')
+    with patch('utils.archive_pipeline.execute_plan') as execute:
+        main(['--mode', 'frequent', '--archive', '/not-created.sqlite',
+              '--bootstrap-from', '2026-01-01T00:00:00Z',
+              '--cutoff', '2026-11-10T08:00:00Z', '--recorder-namespace', 'ha',
+              '--measurement-policy', str(policy)])
+    execute.assert_not_called()
+    readiness = json.loads(capsys.readouterr().out)['policy_preflight']
+    assert 'outside_temp' not in readiness['missing_measurements']
+    assert 'sauna_temp' in readiness['missing_measurements']
+    assert readiness['complete'] is False
 
 
 def test_failed_ingest_stops_before_predict_optimize_or_publish(tmp_path):
