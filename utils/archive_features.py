@@ -270,9 +270,11 @@ def load_archive_training_features(path: str | Path, start: float, end: float, *
                'outside_temp_training_eligible', 'wind_speed_training_eligible', 'heating_regime']
     frames = []
     quality_summary: dict[str, dict[str, int]] = {}
+    estimated_leaf_rows = 0
     stream = iter_archive_features(path, start, end, **options)
     try:
         for frame in stream:
+            estimated_leaf_rows += int(frame['leaf_energy_24h_estimated_minutes'].gt(0).sum())
             for name in BASELOAD_INPUTS:
                 counts = quality_summary.setdefault(name, {'source_verified_bins': 0, 'unit_verified_bins': 0,
                                                            'conflict_bins': 0, 'training_eligible_bins': 0})
@@ -289,4 +291,5 @@ def load_archive_training_features(path: str | Path, start: float, end: float, *
     out = pd.concat(frames)
     out.attrs['archive_training']['projected_training_frame'] = True
     out.attrs['archive_training']['requested_window_quality_summary'] = quality_summary
+    out.attrs['archive_training']['leaf_energy_estimated_rows'] = estimated_leaf_rows
     return out

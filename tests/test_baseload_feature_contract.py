@@ -8,7 +8,7 @@ import pytest
 from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract, select_training_rows
 from utils.baseload_model import validate_baseload_model
 from utils.archive_features import BASELOAD_INPUTS, load_archive_features
-from utils.archive_quality import apply_training_policy
+from utils.archive_quality import LEAF_ENERGY_ESTIMATE_POLICY, apply_training_policy
 
 
 def test_solar_forecast_is_not_a_model_or_required_history_input():
@@ -73,8 +73,16 @@ def test_archive_contract_rejects_legacy_or_mixed_artifacts(problem):
 
 def test_contract_accepts_only_matching_declared_and_embedded_features():
     contract = baseload_feature_contract()
-    validate_baseload_model(list(BASELOAD_FEATURES), {'feature_contract': contract},
+    validate_baseload_model(list(BASELOAD_FEATURES), {'feature_contract': contract,
+                            'archive_training': {'leaf_energy_estimate_policy': LEAF_ENERGY_ESTIMATE_POLICY}},
                             json.dumps(contract), list(BASELOAD_FEATURES))
+
+
+def test_archive_rejects_model_without_matching_leaf_estimate_policy():
+    contract = baseload_feature_contract()
+    with pytest.raises(ValueError, match='Leaf|leaf'):
+        validate_baseload_model(list(BASELOAD_FEATURES), {'feature_contract': contract},
+                                json.dumps(contract), list(BASELOAD_FEATURES))
 
 
 def test_training_omits_forecast_and_persists_explicit_contract(tmp_path, monkeypatch):
@@ -107,5 +115,6 @@ def test_small_real_model_roundtrips_the_embedded_contract(tmp_path):
     model.save_model(path)
     loaded = xgb.XGBRegressor()
     loaded.load_model(path)
-    validate_baseload_model(list(BASELOAD_FEATURES), {'feature_contract': contract},
+    validate_baseload_model(list(BASELOAD_FEATURES), {'feature_contract': contract,
+        'archive_training': {'leaf_energy_estimate_policy': LEAF_ENERGY_ESTIMATE_POLICY}},
         loaded.get_booster().attr('baseload_feature_contract'), loaded.get_booster().feature_names)

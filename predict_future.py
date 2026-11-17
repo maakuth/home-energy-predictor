@@ -284,6 +284,7 @@ def archive_inference_anchors(history: ArchiveHistory) -> tuple[float, float, fl
     The synthetic cutoff row is only a lag-query position, never a measurement.
     Applying the training contract there gives the same complete prior-day Leaf
     energy and exact lags used during fitting without reading future raw data.
+    Short eligible Leaf gaps may be estimated from earlier observations only.
     """
     raw = history.raw(history.cutoff - 86400, history.cutoff, measurements=list(METERS))
     cutoff = pd.to_datetime(history.cutoff, unit='s', utc=True)
@@ -296,6 +297,9 @@ def archive_inference_anchors(history: ArchiveHistory) -> tuple[float, float, fl
     names = ['baseload_lag_1h', 'baseload_lag_24h', 'leaf_power_lag_1h', 'leaf_energy_24h']
     if not all(pd.notna(row[name]) and np.isfinite(row[name]) for name in names):
         raise ValueError('Archive inference anchors/Leaf prior-day coverage unavailable; refusing prediction')
+    estimated_minutes = int(targets['leaf_energy_24h_estimated_minutes'].iloc[-1])
+    if estimated_minutes > 0:
+        print(f"Leaf 24h energy feature estimated {estimated_minutes} missing minute(s) from preceding observations.")
     return (float(targets['baseload_lag_1h'].iloc[-1]),
             float(targets['baseload_lag_24h'].iloc[-1]),
             float(targets['leaf_power_lag_1h'].iloc[-1]),

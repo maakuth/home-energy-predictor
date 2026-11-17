@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from utils.archive_history import ArchiveHistory
+from utils.archive_quality import LEAF_ENERGY_ESTIMATE_POLICY
 from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
 from utils.measurement_archive import MeasurementArchive
 from utils import forward_shadow as shadow
@@ -37,6 +38,7 @@ def runtime(tmp_path, monkeypatch):
     (model_dir / 'model_features.json').write_text(json.dumps(BASELOAD_FEATURES))
     (model_dir / 'model_training_metadata.json').write_text(json.dumps({
         'feature_contract': baseload_feature_contract(), 'model_version': '1.47.1',
+        'archive_training': {'leaf_energy_estimate_policy': LEAF_ENERGY_ESTIMATE_POLICY},
         'last_eligible': str(CUTOFF-pd.Timedelta(days=2))}))
     model = Mock()
     model.get_booster.return_value.feature_names = list(BASELOAD_FEATURES)

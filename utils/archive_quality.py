@@ -13,6 +13,10 @@ from utils.baseload_quality import baseload_targets, baseload_feature_contract
 LEGACY_POLICIES = ('verified-only', 'complete-legacy')
 METERS = ('total_power', 'solar_actual', 'battery_power', 'gshp_power', 'leaf_power')
 PREDICTOR_INPUTS = ('outside_temp', 'wind_speed')
+LEAF_ENERGY_ESTIMATE_POLICY = {
+    'version': 1, 'resolution_seconds': 60, 'max_missing_minutes': 2,
+    'method': 'previous_eligible_recorder_value',
+}
 
 
 def _true(values: pd.Series) -> pd.Series:
@@ -62,6 +66,27 @@ def apply_training_policy(raw: pd.DataFrame, features: pd.DataFrame,
         out[name] = targets[name]
         if name != 'baseload_power':
             out[name + '_training_eligible'] = targets[name].notna()
+    # Estimate only this derived feature, never the meter or baseload target.
+    # A previous eligible observation is the only permitted source, so each
+    # historical training row uses no data from after its own origin.
+    index = pd.DatetimeIndex(raw.index)
+    if len(index) > 1 and index.to_series().diff().dropna().eq(pd.Timedelta(minutes=1)).all():
+        valid = measurement_eligibility(raw, 'leaf_power', policy)
+        values = pd.to_numeric(raw['leaf_power'], errors='coerce').where(valid)
+        recorder = raw['leaf_power_provenance'].eq('recorder')
+        conflict_free = raw['leaf_power_conflict'].astype(str).str.lower().eq('false')
+        estimate = values.ffill(limit=2).where(~valid & recorder & conflict_free)
+        combined = values.combine_first(estimate)
+        missing = (~valid).astype(int).rolling('24h', closed='left', min_periods=1440).sum()
+        estimated = estimate.notna().astype(int).rolling('24h', closed='left', min_periods=1440).sum()
+        energy = combined.rolling('24h', closed='left', min_periods=1440).sum() / 60000
+        acceptable = missing.le(2) & estimated.eq(missing)
+        out['leaf_energy_24h'] = energy.where(acceptable)
+        out['leaf_energy_24h_training_eligible'] = out['leaf_energy_24h'].notna()
+        out['leaf_energy_24h_estimated_minutes'] = estimated.where(acceptable)
+    else:
+        out['leaf_energy_24h_estimated_minutes'] = targets['leaf_energy_24h'].notna().map(
+            {True: 0., False: np.nan})
     out['baseload_training_exclusion_reason'] = targets.baseload_exclusion_reason
     if 'baseload_target_valid' not in out:
         out['baseload_target_valid'] = baseload_targets(raw).baseload_target_valid
@@ -71,5 +96,6 @@ def apply_training_policy(raw: pd.DataFrame, features: pd.DataFrame,
         'contract_version': 1,
         'legacy_is_source_verified': False,
         'feature_contract': baseload_feature_contract(),
+        'leaf_energy_estimate_policy': LEAF_ENERGY_ESTIMATE_POLICY,
     }
     return out

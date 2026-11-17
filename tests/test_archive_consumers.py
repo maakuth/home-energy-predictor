@@ -49,6 +49,20 @@ def test_anchors_exact_unfilled_shared_meter_and_complete_day(history):
     reader.assert_called_once_with(context.cutoff - 86400, context.cutoff, measurements=list(METERS))
 
 
+def test_archive_forecast_uses_labelled_short_leaf_estimate(history, capsys):
+    context, frame, _ = history
+    frame.loc[frame.index[200:202], 'leaf_power'] = np.nan
+    assert prediction.archive_inference_anchors(context) == pytest.approx((6., 6., 1000., 24.))
+    assert 'estimated 2 missing minute' in capsys.readouterr().out
+
+
+def test_archive_forecast_still_rejects_long_leaf_gaps(history):
+    context, frame, _ = history
+    frame.loc[frame.index[200:203], 'leaf_power'] = np.nan
+    with pytest.raises(ValueError, match='Leaf'):
+        prediction.archive_inference_anchors(context)
+
+
 @pytest.mark.parametrize('defect', ['gap', 'conflict', 'coverage', 'missing_meter', 'negative'])
 def test_anchor_defects_fail_closed(history, defect):
     context, frame, _ = history
@@ -126,7 +140,10 @@ def prediction_runtime(history, monkeypatch, tmp_path):
     Path('state').mkdir()
     from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
     Path('state/model_features.json').write_text(json.dumps(BASELOAD_FEATURES))
-    Path('state/model_training_metadata.json').write_text(json.dumps({'feature_contract': baseload_feature_contract()}))
+    from utils.archive_quality import LEAF_ENERGY_ESTIMATE_POLICY
+    Path('state/model_training_metadata.json').write_text(json.dumps({
+        'feature_contract': baseload_feature_contract(),
+        'archive_training': {'leaf_energy_estimate_policy': LEAF_ENERGY_ESTIMATE_POLICY}}))
     model = Mock()
     model.get_booster.return_value.feature_names = list(BASELOAD_FEATURES)
     model.get_booster.return_value.attr.return_value = json.dumps(baseload_feature_contract())

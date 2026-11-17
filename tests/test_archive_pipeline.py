@@ -71,13 +71,71 @@ def test_dry_run_reports_missing_policy_entries_without_executing(tmp_path, caps
     assert readiness['complete'] is False
 
 
+def test_ingest_uses_shared_writer_lock_only_for_ingestion(tmp_path):
+    import fcntl
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    writer = tmp_path / 'writer.lock'
+    held = []
+
+    def run(argv, **kwargs):
+        with writer.open('a') as probe:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(False)
+            except BlockingIOError:
+                held.append(True)
+
+    with patch('utils.archive_pipeline.subprocess.run', side_effect=run), \
+         patch('utils.archive_pipeline._verify_output'):
+        execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                     writer_lock_path=writer)
+    assert held == [True, False, False, False]
+
+
+def test_busy_writer_lock_stops_before_reset_or_ingestion(tmp_path):
+    import fcntl
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    writer = tmp_path / 'writer.lock'
+    with writer.open('a') as other:
+        fcntl.flock(other, fcntl.LOCK_EX)
+        with patch('utils.archive_pipeline.subprocess.run') as run, \
+             patch('utils.archive_pipeline._reset_net_metering') as reset:
+            with pytest.raises(BlockingIOError):
+                execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                             writer_lock_path=writer)
+        run.assert_not_called()
+        reset.assert_not_called()
+
+
+@pytest.mark.parametrize('writer', [None, 'relative.lock'])
+def test_execution_requires_explicit_absolute_writer_lock(tmp_path, writer):
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    with patch('utils.archive_pipeline.subprocess.run') as run:
+        with pytest.raises(ValueError, match='writer lock'):
+            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=writer)
+    run.assert_not_called()
+
+
+def test_writer_lock_cannot_alias_archive(tmp_path):
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    with pytest.raises(ValueError, match='Writer lock'):
+        execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                     writer_lock_path='/offline/history.sqlite')
+
+
 def test_failed_ingest_stops_before_predict_optimize_or_publish(tmp_path):
     plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
                       recorder_namespace='ha', approve_publish=True)
     import subprocess
     with patch('utils.archive_pipeline.subprocess.run', side_effect=subprocess.CalledProcessError(1, 'ingest')) as run:
         with pytest.raises(subprocess.CalledProcessError):
-            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock')
+            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=tmp_path / 'writer.lock')
     assert run.call_count == 1
 
 
@@ -87,7 +145,8 @@ def test_missing_prediction_metadata_prevents_optimizer_and_publishing(tmp_path,
                       recorder_namespace='ha', approve_publish=True)
     with patch('utils.archive_pipeline.subprocess.run') as run:
         with pytest.raises((OSError, ValueError), match='metadata|No such file'):
-            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock')
+            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=tmp_path / 'writer.lock')
     assert run.call_count == 2
 
 
@@ -148,7 +207,8 @@ def test_isolated_pipeline_without_any_csv_checks_artifacts_before_explicit_publ
                     'legacy_policy': 'verified-only'}))
 
     with patch('utils.archive_pipeline.subprocess.run', side_effect=run):
-        execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock')
+        execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                     writer_lock_path=tmp_path / 'writer.lock')
     assert len(executed) == 4
     assert 'push_to_ha.py' in executed[-1]
     assert not list(tmp_path.rglob('*.csv'))
@@ -169,5 +229,6 @@ def test_wrong_cutoff_sidecar_is_not_publishable(tmp_path, monkeypatch):
         'legacy_policy': 'verified-only'}))
     with patch('utils.archive_pipeline.subprocess.run') as run:
         with pytest.raises(ValueError, match='stale'):
-            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock')
+            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=tmp_path / 'writer.lock')
     assert run.call_count == 2

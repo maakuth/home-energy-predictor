@@ -33,6 +33,16 @@ window. Archive XGBoost selection also requires eligible temperature and wind
 rather than admitting imputed weather values. No solar-forecast source,
 eligibility column or pipeline ingestion is required for baseload training.
 
+For minute-resolution archive features, the preceding-day Leaf-energy feature
+may estimate up to two missing minutes total from the most recent preceding
+eligible Leaf observation. The estimate is causal, restricted to recorder
+provenance without conflicts, and never changes a raw measurement or baseload
+target. An unanchored gap, a conflict, more than two missing minutes, or
+incomplete 24-hour context remains ineligible. Other resolutions retain the
+complete-window rule. `leaf_energy_24h_estimated_minutes` labels estimated
+feature rows, and archive training metadata records the policy and count.
+The two-minute limit is a conservative initial policy, not an optimized value.
+
 Each measurement retains source validity, coverage fraction, provenance,
 conflict status, contributing import IDs and mapped entities. DataFrame
 `attrs['archive_training']` includes a versioned policy contract, requested and
@@ -49,7 +59,8 @@ feature contract is version 2, with 18 ordered inputs. Training writes it to
 `state/model_training_metadata.json` and embeds it in the booster as
 `baseload_feature_contract`; `state/model_features.json` stores the ordered list.
 Archive prediction and hindsight evaluation require matching metadata, embedded
-contract, ordered feature list and actual booster feature names. Old or mixed
+contract, ordered feature list, actual booster feature names and matching
+archive Leaf-estimation policy in training metadata. Old or mixed
 artifacts fail closed, with no implicit CSV fallback or fabricated features.
 Pipeline training checks also require the current metadata and feature list.
 

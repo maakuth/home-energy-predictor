@@ -50,7 +50,11 @@ refused, rather than misleadingly described as a shadow run. Use the read-only
 [shadow command](MEASUREMENT_SHADOW.md) for non-actuating comparisons.
 
 Execution takes the existing `/tmp/hepo.lock` (nonblocking frequent, waiting
-weekly). Frequent execution preserves quarter-boundary net-metering reset
+weekly), and requires `--writer-lock` with the absolute path to the same shared
+archive writer lock used by the collector. This second lock is nonblocking and
+held only for ingestion, not model fitting or inference. A busy lock stops the
+run before net-metering reset or ingestion; configure the existing shared lock,
+not a new independent file. Frequent execution preserves quarter-boundary net-metering reset
 under that lock. Ingestion is incremental with fixed bounds and explicit
 recorder namespace. Namespace mismatch fails closed before mixing rebuilt
 recorder IDs. All subprocess failures terminate the job; there is no CSV retry.

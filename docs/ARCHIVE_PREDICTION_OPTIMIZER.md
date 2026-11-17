@@ -43,7 +43,9 @@ propagate; artifact/sidecar replacement is not a multi-file transaction.
 
 Prediction anchors use unfilled, aligned minute bins of all five shared meter
 definitions and `apply_training_policy`, at cutoff minus one and 24 hours. Leaf
-energy requires every eligible minute of the preceding day. A synthetic cutoff
+energy uses the same labelled, causal estimate of at most two missing minutes
+per day as archive training; conflicts and longer or unanchored gaps still fail.
+A synthetic cutoff
 query row is missing data, never a future raw read or fabricated measurement.
 Shared heating remains the raw shared meter: no relay subtraction or forecast
 solar substitution is used to make an anchor appear valid. Missing anchors fail

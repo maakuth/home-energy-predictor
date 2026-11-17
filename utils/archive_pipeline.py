@@ -149,23 +149,45 @@ def _reset_net_metering(cutoff: float) -> None:
 
 
 def execute_plan(plan: list[dict[str, Any]], history: ArchiveHistory, *, mode: str,
-                 lock_path: str | Path = '/tmp/hepo.lock') -> None:
+                 lock_path: str | Path = '/tmp/hepo.lock',
+                 writer_lock_path: str | Path | None = None) -> None:
     """Operational execution only after explicit opt-in. No implicit retries/routes."""
     if not any(step['name'] == 'publish' for step in plan):
         raise ValueError('Full pipeline execution requires rollout approval: active plan files can actuate without HA publication')
+    if writer_lock_path is None or not Path(writer_lock_path).is_absolute():
+        raise ValueError('Execution requires an absolute shared archive writer lock path')
+    writer_path = Path(writer_lock_path).resolve()
+    archive_path = Path(history.path).resolve()
+    protected = {Path(lock_path).resolve(), *(Path(str(archive_path) + suffix)
+                 for suffix in ('', '-wal', '-shm', '-journal'))}
+    protected.update(Path(path).resolve() for path in (history.sources_path, history.policy_path) if path is not None)
+    if writer_path in protected or writer_path.name == 'hepo.db':
+        raise ValueError('Writer lock must not replace the pipeline lock or an input artifact')
+    if not plan or plan[0]['name'] != 'incremental-ingest' or any(
+            step['name'] == 'incremental-ingest' for step in plan[1:]):
+        raise ValueError('Pipeline requires exactly one initial ingestion step')
     configuration = _configuration_hashes(history)
     with Path(lock_path).open('a') as lock:
         flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if mode == 'frequent' else 0)
         fcntl.flock(lock, flags)
-        if mode == 'frequent':
-            _reset_net_metering(history.cutoff)
-        for step in plan:
+
+        def run_step(step: dict[str, Any]) -> None:
             if _configuration_hashes(history) != configuration:
                 raise ValueError('Source/policy configuration changed during pipeline run')
             subprocess.run(step['argv'], check=True)
             if _configuration_hashes(history) != configuration:
                 raise ValueError('Source/policy configuration changed during pipeline run')
             _verify_output(step['name'], history)
+
+        with writer_path.open('a') as writer:
+            # Match the collector's nonblocking shared staging lock. Do not hold
+            # it during training, prediction or optimization.
+            fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if mode == 'frequent':
+                _reset_net_metering(history.cutoff)
+            run_step(plan[0])
+        for step in plan[1:]:
+            run_step(step)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -181,6 +203,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--training-days', type=int, default=730)
     parser.add_argument('--analysis-days', type=int, default=14)
     parser.add_argument('--lock-path', default='/tmp/hepo.lock')
+    parser.add_argument('--writer-lock', help='Absolute shared archive writer lock used by the collector')
     args = parser.parse_args(argv)
     try:
         if not args.archive:
@@ -192,6 +215,8 @@ def main(argv: list[str] | None = None) -> None:
                 raise ValueError('--execute requires --approve-publish: writing an active plan can actuate through run_often.py')
             if not args.sources or not args.measurement_policy:
                 raise ValueError('Execution requires explicit --sources and --measurement-policy evidence configuration')
+            if not args.writer_lock or not Path(args.writer_lock).is_absolute():
+                raise ValueError('Execution requires an absolute --writer-lock shared with the collector')
             from dotenv import load_dotenv
             load_dotenv(override=True)
         history = history_from_arguments(args)
@@ -219,10 +244,12 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps({'dry_run': True, 'migration_ready': False,
                 'cutoff': _iso(history.cutoff), 'will_publish_if_executed': args.approve_publish,
                 'execution_requires_rollout_approval': True,
+                'writer_lock': args.writer_lock,
                 'policy_preflight': policy_preflight,
                 'commands': plan}, indent=2))
             return
-        execute_plan(plan, history, mode=args.mode, lock_path=args.lock_path)
+        execute_plan(plan, history, mode=args.mode, lock_path=args.lock_path,
+                     writer_lock_path=args.writer_lock)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f'Archive pipeline stopped: {error}\n')
 

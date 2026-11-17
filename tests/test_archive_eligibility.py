@@ -76,3 +76,45 @@ def test_unknown_policy_rejected():
     raw = raw_frame()
     with pytest.raises(ValueError, match='policy'):
         apply_training_policy(raw, pd.DataFrame(index=raw.index), 'anything')
+
+
+def minute_raw():
+    frame = raw_frame().iloc[:1].copy()
+    frame = pd.concat([frame] * 1443, ignore_index=True)
+    frame.index = pd.date_range('2026-10-21', periods=len(frame), freq='min', tz='UTC')
+    frame['leaf_power_provenance'] = 'recorder'
+    frame['leaf_power_source_valid'] = True
+    return frame
+
+
+def test_leaf_energy_estimates_two_missing_minutes_causally_but_not_meter_truth():
+    raw = minute_raw()
+    raw.loc[raw.index[100:102], 'leaf_power'] = float('nan')
+    raw.loc[raw.index[102], 'leaf_power'] = 1800.
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    row = out.iloc[1440]
+    assert row.leaf_energy_24h_training_eligible
+    assert row.leaf_energy_24h_estimated_minutes == 2
+    assert row.leaf_energy_24h == pytest.approx((1439 * 500 + 1800) / 60000)
+    assert not out.iloc[100].baseload_training_eligible
+    assert pd.isna(out.iloc[100].baseload_power)
+    assert pd.isna(raw.iloc[100].leaf_power)
+
+
+def test_leaf_energy_rejects_more_than_two_minutes_and_unanchored_gap():
+    raw = minute_raw()
+    raw.loc[raw.index[100:103], 'leaf_power'] = float('nan')
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    assert not out.iloc[1440].leaf_energy_24h_training_eligible
+    assert pd.isna(out.iloc[1440].leaf_energy_24h)
+    raw = minute_raw()
+    raw.loc[raw.index[0], 'leaf_power'] = float('nan')
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    assert not out.iloc[1440].leaf_energy_24h_training_eligible
+
+
+def test_leaf_energy_never_estimates_conflicts():
+    raw = minute_raw()
+    raw.loc[raw.index[100], 'leaf_power_conflict'] = True
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    assert not out.iloc[1440].leaf_energy_24h_training_eligible

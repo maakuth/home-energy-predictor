@@ -146,7 +146,10 @@ def test_archive_hindsight_uses_training_policy_without_processed_csv(tmp_path, 
     (state / 'energy_model.json').write_text('{}')
     from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
     (state / 'model_features.json').write_text(json.dumps(BASELOAD_FEATURES))
-    (state / 'model_training_metadata.json').write_text(json.dumps({'feature_contract': baseload_feature_contract()}))
+    from utils.archive_quality import LEAF_ENERGY_ESTIMATE_POLICY
+    (state / 'model_training_metadata.json').write_text(json.dumps({
+        'feature_contract': baseload_feature_contract(),
+        'archive_training': {'leaf_energy_estimate_policy': LEAF_ENERGY_ESTIMATE_POLICY}}))
     history, raw = history_frame()
     frame = pd.DataFrame({'outside_temp': 5.0, 'baseload_power': 3.5}, index=raw.index)
     for name in BASELOAD_FEATURES:
