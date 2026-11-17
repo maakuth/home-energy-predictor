@@ -12,6 +12,11 @@ def update_gshp_health(plan, shared_power_kw, element_power_kw, path=None, accum
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         state = {'status': 'normal', 'bad_samples': 0, 'good_samples': 0}
     minimum_kw = float(os.getenv('GSHP_FAILURE_MIN_COMPRESSOR_KW', '1.0'))
+    # Telemetry may be unavailable rather than zero. In that case there is no
+    # evidence of a failed compressor response, so do not accumulate bad samples
+    # or overwrite the last known compressor power.
+    if shared_power_kw is None:
+        return state
     if not plan or plan.get('gshp_intent') != 'START' or float(plan.get('planned_gshp_kw', 0) or 0) < float(os.getenv('GSHP_FAILURE_MIN_PLANNED_KW', '1.0')):
         if element_power_kw <= 0.0 and shared_power_kw >= minimum_kw:
             state.update({'status': 'normal', 'bad_samples': 0, 'good_samples': 1, 'compressor_kw': shared_power_kw})

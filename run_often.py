@@ -8,7 +8,7 @@ from utils.ha_utils import call_ha_service, get_ha_state, parse_ha_bool, push_ha
 from typing import cast
 from utils.type_defs import BatteryAction
 from utils.gshp_health import health_attributes, update_gshp_health
-from utils.sg_ready import update_virtual_accumulator_temp, derive_sg_ready_bits, derive_sg_ready_mode
+from utils.sg_ready import update_virtual_accumulator_temp, get_virtual_accumulator_temp, derive_sg_ready_bits, derive_sg_ready_mode
 from utils.plan_time import slot_start
 from utils.battery_diagnostics import new_battery_diagnostic, emit_battery_diagnostic
 from utils.native_follow import (
@@ -374,13 +374,19 @@ def main():
     grid_w = (_get_float(grid_power) or 0.0) * 1000.0
     solar_raw = _get_float(solar)
     solar_kw = solar_raw if solar_raw is not None else 0.0
-    gshp_kw = (_get_float(gshp) or 0.0) / 1000.0
+    _gshp_raw = _get_float(gshp)
+    gshp_kw = (_gshp_raw / 1000.0) if _gshp_raw is not None else None
     accumulator_temp = _get_float(accumulator)
     supply_temp = _get_float(supply_temp_state)
     return_temp = _get_float(return_temp_state)
     outside_temp = _get_float(outside_temp_state)
     try:
-        virtual_acc_temp = update_virtual_accumulator_temp(gshp_kw, outside_temp if outside_temp is not None else 10.0)
+        if gshp_kw is None:
+            # Telemetry unavailable: do not assume zero heating. Hold the last
+            # persisted virtual-accumulator estimate instead of advancing it.
+            virtual_acc_temp = get_virtual_accumulator_temp()
+        else:
+            virtual_acc_temp = update_virtual_accumulator_temp(gshp_kw, outside_temp if outside_temp is not None else 10.0)
     except Exception:
         virtual_acc_temp = None
 
@@ -436,7 +442,10 @@ def main():
     print(f'Battery Power: {abs(battery_w):.0f}W ({direction})')
     print(f'Grid Power: {grid_w:.0f}W')
     print(f'Solar: {solar_kw:.2f}kW')
-    print(f'GSHP: {gshp_kw:.2f}kW')
+    if gshp_kw is None:
+        print('GSHP: unavailable')
+    else:
+        print(f'GSHP: {gshp_kw:.2f}kW')
     if supply_temp is not None:
         if return_temp is None:
             print(f'GSHP heating circuit: supply={supply_temp:.1f}°C')
@@ -536,7 +545,7 @@ def main():
     )
     print(
         'GSHP health inputs: '
-        f'shared={gshp_kw:.2f}kW, '
+        f'shared={"unavailable" if gshp_kw is None else f"{gshp_kw:.2f}kW"}, '
         f'upper={str((upper or {}).get("state", "unknown"))} '
         f'({os.getenv("RESISTIVE_HEATER_POWER_KW", "6.0")}kW), '
         f'bulk={str((bulk or {}).get("state", "unknown"))} '
@@ -716,7 +725,7 @@ def main():
             solar_kw=solar_kw,
             grid_w=grid_w,
             battery_w=battery_w,
-            gshp_kw=gshp_kw,
+            gshp_kw=(0.0 if gshp_kw is None else gshp_kw),
             leaf_kw=leaf_kw,
             phase_currents=[i_p1, i_p2, i_p3],
             battery_soc_pct=soc_pct,
