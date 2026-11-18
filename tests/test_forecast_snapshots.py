@@ -3,11 +3,70 @@ import sqlite3
 
 import pytest
 
-from utils.forecast_snapshots import capture, select, map_intervals, vintage_coverage
+from utils.forecast_snapshots import capture, select, map_intervals, vintage_coverage, validate_price_window
 
 
 def clock():
     return datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+
+
+def test_entsoe_price_window_preserves_provenance_and_point_semantics(tmp_path):
+    state = {'state': '1', 'attributes': {'unit_of_measurement': 'EUR/MWh',
+             'prices_today': [{'time': '2026-01-01T11:00:00+01:00', 'price': -2.5}],
+             'prices_tomorrow': []}}
+    payload = validate_price_window(state, 'sensor.entsoe', 'FI', '2026-01-01T10:00:00Z')
+    assert payload == {'source': 'sensor.entsoe', 'zone': 'FI', 'classification': 'unverified',
+                       'schema': 'entsoe', 'state': state}
+    db = tmp_path / 'forecast.sqlite'
+    attempt = capture(db, '2026-01-01T10:00:00Z', lambda: {}, lambda: payload, clock=clock)
+    assert select(db, '2026-01-01T10:00:00Z') == attempt
+
+
+def test_nordpool_interval_window_and_tomorrow_validity():
+    attrs = {'raw_today': [{'start': '2026-01-01T09:45:00Z', 'end': '2026-01-01T10:15:00Z', 'value': 0}],
+             'raw_tomorrow': [], 'tomorrow_valid': False}
+    result = validate_price_window({'state': '0', 'attributes': attrs}, 'sensor.nordpool', 'FI',
+                                   '2026-01-01T10:00:00Z')
+    assert result['schema'] == 'nordpool'
+    attrs['raw_today'] = []
+    attrs['raw_tomorrow'] = [{'start': '2026-01-02T00:00:00Z', 'end': '2026-01-02T01:00:00Z', 'value': 1}]
+    with pytest.raises(ValueError):
+        validate_price_window({'state': '0', 'attributes': attrs}, 'sensor.nordpool', 'FI',
+                              '2026-01-01T10:00:00Z')
+
+
+def test_invalid_price_capture_keeps_weather_but_cannot_be_selected(tmp_path):
+    db = tmp_path / 'forecast.sqlite'
+    attempt = capture(db, '2026-01-01T10:00:00Z', lambda: {'forecast': [1]},
+                      lambda: validate_price_window({'state': '1', 'attributes': {}},
+                                                    'sensor.test', 'FI', clock()), clock=clock)
+    assert attempt['weather']['status'] == 'ok'
+    assert attempt['price']['status'] == 'error'
+    assert select(db, clock()) is None
+
+
+def test_entsoe_combined_prices_accepts_future_point():
+    state = {'state': '1', 'attributes': {'prices': [{'time': '2026-01-01T11:00:00Z', 'price': 1}]}}
+    assert validate_price_window(state, 'sensor.test', 'FI', clock())['state'] == state
+
+
+@pytest.mark.parametrize('attrs', [
+    {}, {'today': [1, 2]}, {'prices_today': []},
+    {'prices_today': [{'time': '2026-01-01T09:59:00Z', 'price': 1}]},
+    {'prices_today': [{'time': '2026-01-01T10:00:00', 'price': 1}]},
+    {'prices_today': [{'time': '2026-01-01T10:00:00Z', 'price': True}]},
+    {'prices_today': [{'time': '2026-01-01T10:00:00Z', 'price': float('nan')}]},
+    {'prices': [{'time': '2026-01-01T11:00:00Z', 'price': 1}], 'raw_today': []},
+    {'prices_today': [{'time': '2026-01-01T10:00:00Z', 'price': 1},
+                      {'time': '2026-01-01T11:00:00+01:00', 'price': 2}]},
+    {'raw_today': [{'start': '2026-01-01T10:00:00Z', 'end': '2026-01-01T10:00:00Z', 'value': 1}]},
+    {'raw_today': [{'start': '2026-01-01T10:00:00Z', 'end': '2026-01-01T11:00:00Z', 'value': 1},
+                   {'start': '2026-01-01T10:30:00Z', 'end': '2026-01-01T11:30:00Z', 'value': 2}]},
+])
+def test_price_window_rejects_invalid_or_stale_data(attrs):
+    with pytest.raises(ValueError):
+        validate_price_window({'state': '0', 'attributes': attrs}, 'sensor.test', 'FI',
+                              '2026-01-01T10:00:00Z')
 
 
 def test_capture_preserves_partial_failure_and_vintages(tmp_path):

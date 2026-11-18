@@ -8,6 +8,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -121,7 +122,7 @@ def _json(value: Any) -> str:
     return json.dumps(value, allow_nan=False, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
 
 
-_TARGET_KEYS = ('datetime', 'start', 'period_start', 'timestamp', 'target')
+_TARGET_KEYS = ('datetime', 'start', 'period_start', 'timestamp', 'target', 'time')
 _NUMERIC_FIELDS = ('temperature', 'wind_speed', 'wind_bearing', 'value')
 
 
@@ -343,6 +344,59 @@ def map_intervals(points: list[dict[str, Any]], targets: list[Any]) -> list[Any]
     return result
 
 
+def validate_price_window(state: Any, source: str, zone: str, origin: Any) -> dict[str, Any]:
+    """Validate supported raw price shapes without inferring price semantics."""
+    if not source or not zone or not isinstance(state, dict) or state.get('state') in (None, 'unknown', 'unavailable'):
+        raise ValueError('Price entity unavailable')
+    attrs = state.get('attributes')
+    if not isinstance(attrs, dict):
+        raise ValueError('Missing price attributes')
+    nordpool = any(k in attrs for k in ('raw_today', 'raw_tomorrow'))
+    entsoe = any(k in attrs for k in ('prices_today', 'prices_tomorrow', 'prices'))
+    if nordpool == entsoe:
+        raise ValueError('Missing or ambiguous price schema')
+    schema = 'nordpool' if nordpool else 'entsoe'
+    keys = ('raw_today', 'raw_tomorrow') if nordpool else ('prices_today', 'prices_tomorrow', 'prices')
+    if entsoe and 'prices' in attrs and ('prices_today' in attrs or 'prices_tomorrow' in attrs):
+        raise ValueError('Ambiguous ENTSO-E price arrays')
+    if nordpool and 'tomorrow_valid' in attrs and not isinstance(attrs['tomorrow_valid'], bool):
+        raise ValueError('Invalid tomorrow_valid')
+    points: list[tuple[datetime, datetime | None]] = []
+    for key in keys:
+        if key not in attrs or (key == 'raw_tomorrow' and attrs.get('tomorrow_valid') is False):
+            continue
+        items = attrs[key]
+        if not isinstance(items, list):
+            raise ValueError('Invalid price array')
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError('Invalid price point')
+            start_key, value_key = ('start', 'value') if nordpool else ('time', 'price')
+            value = item.get(value_key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError('Invalid price value')
+            if not isinstance(item.get(start_key), str):
+                raise ValueError('Invalid price timestamp')
+            start = timestamp(item[start_key])
+            end = None
+            if nordpool:
+                if not isinstance(item.get('end'), str):
+                    raise ValueError('Missing interval end')
+                end = timestamp(item['end'])
+                if end <= start:
+                    raise ValueError('Invalid price interval')
+            points.append((start, end))
+    points.sort(key=lambda point: point[0])
+    for previous, current in zip(points, points[1:]):
+        if current[0] == previous[0] or (previous[1] is not None and current[0] < previous[1]):
+            raise ValueError('Duplicate or overlapping prices')
+    cutoff = timestamp(origin)
+    if not any((end > cutoff if end is not None else start >= cutoff) for start, end in points):
+        raise ValueError('No current or future price window')
+    return {'source': source, 'zone': zone, 'classification': 'unverified',
+            'schema': schema, 'state': state}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', required=True, help='Dedicated forecast SQLite archive path')
@@ -379,10 +433,7 @@ def main() -> None:
 
     def price() -> Any:
         data = state(args.price_entity)
-        if not isinstance(data, dict) or data.get('state') in ('unavailable', 'unknown'):
-            raise ValueError('Price entity unavailable')
-        return {'source': args.price_entity, 'zone': args.price_zone,
-                'classification': 'unverified', 'state': data}
+        return validate_price_window(data, args.price_entity, args.price_zone, args.origin)
 
     result = capture(args.archive, args.origin, weather, price,
                      max_attempts=args.max_attempts, max_bytes=args.max_bytes)

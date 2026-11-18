@@ -19,12 +19,26 @@ python -m utils.forecast_snapshots --archive /path/to/forecast-archive.sqlite \
 
 The raw weather service response and weather state are saved unchanged,
 including any supplied units and issue times. The raw price entity state is
-likewise retained; its classification is **unverified**. No issue or
-publication time is invented. A successful HTTP/state read is not proof that
-the selected entity contains a forecast window, nor that it is raw spot
-instead of a tariff, fallback or prediction. Inspect and document its schema,
-units, zone and relationship to NIBE before building a price adapter or
-using it in a replay. HEPO's `utils/price_utils.py` distinguishes several
+likewise retained with the configured entity and zone; its classification is
+**unverified**. The CLI accepts Nordpool `raw_today`/`raw_tomorrow` objects
+with explicit `start`, `end`, `value`, or ENTSO-E
+`prices_today`/`prices_tomorrow` (or `prices`) objects with `time`, `price`.
+Timestamps must be timezone-aware, prices finite numbers, and intervals or
+point timestamps must not overlap or duplicate. At least one Nordpool
+interval must end after the scheduled origin, or one ENTSO-E point must be at
+or after it. Nordpool tomorrow data is ignored for validation when
+`tomorrow_valid` is false. Untimestamped numeric arrays, mixed schemas and
+other variants are not supported. A validation failure records a price error;
+the weather capture remains independent.
+
+This checks only the presence and basic integrity of a window, not its
+continuity, horizon, freshness at completion, actual publication time, units,
+or zone. ENTSO-E points have no inferred duration and cannot yet be mapped as
+intervals. The configured zone is provenance, not a verified provider zone.
+No issue or publication time is invented. A successful capture is not proof
+that prices are raw spot instead of a tariff, fallback or prediction, nor that
+they match NIBE Smart Price Adaption. Inspect and document the actual source
+before replay. HEPO's `utils/price_utils.py` distinguishes several
 sources and derives import prices; those tariffs must not be relabelled spot.
 
 Every invocation stores a separate attempt row with source start/completion
@@ -40,7 +54,7 @@ timestamp strings can be reconstructed; original JSON whitespace and object
 key ordering are not retained.
 
 Extraction recognizes nonempty arrays whose objects each have a string
-`datetime`, `start`, `period_start`, `timestamp` or `target` field. Other
+`datetime`, `start`, `period_start`, `timestamp`, `target` or `time` field. Other
 source shapes remain in the envelope, rather than being guessed or dropped.
 The target index holds raw provider strings, not normalized instants: adapters
 must validate their timezone and interval semantics before time-range queries
@@ -92,8 +106,8 @@ and must not be used as an as-of model feature. Expected origins and cutoff
 must be explicitly supplied; the report does not infer schedules. It reports
 attempt availability, not the validity or target coverage of payloads.
 
-Selection does not
-validate the semantics or coverage of raw payloads. `map_intervals()` maps
+Selection does not validate the semantics or coverage of raw payloads (and
+callers of `capture()` can supply arbitrary payloads). `map_intervals()` maps
 only fully covered quarter-hour intervals, rejecting overlaps and never
 extrapolating. Provider-specific adapters must establish explicit interval
 semantics; a timestamp alone does not prove an hourly validity interval.
