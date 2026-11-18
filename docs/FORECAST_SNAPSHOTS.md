@@ -29,12 +29,26 @@ sources and derives import prices; those tariffs must not be relabelled spot.
 
 Every invocation stores a separate attempt row with source start/completion
 times, status and error type; exception messages are not stored because they
-can include credentials. Compact JSON payloads are stored separately, keyed
-by SHA-256 and shared between attempts when identical. No native compression
-is applied. The complete raw payload is retained; overlapping but nonidentical
-forecasts are not deduplicated point by point. The database has an indexed UTC
+can include credentials. Timestamped arrays of point objects are split into
+`forecast_series`, ordered `forecast_members` and deduplicated
+`forecast_points`. The points have indexed original target strings and columns
+for temperature, wind speed, wind bearing and price `value`; extra fields
+remain JSON. The non-point response envelope remains JSON in `payloads`.
+Identical complete payloads and identical individual points are shared using
+SHA-256. All point fields, ordering, nested envelopes and source-provided
+timestamp strings can be reconstructed; original JSON whitespace and object
+key ordering are not retained.
+
+Extraction recognizes nonempty arrays whose objects each have a string
+`datetime`, `start`, `period_start`, `timestamp` or `target` field. Other
+source shapes remain in the envelope, rather than being guessed or dropped.
+The target index holds raw provider strings, not normalized instants: adapters
+must validate their timezone and interval semantics before time-range queries
+or replay. No native compression is applied. The database has an indexed UTC
 origin and is independent of `hepo.db` and the measurement archive. Existing
 databases without the forecast archive identifier are refused, not modified.
+Schema version 1 forecast databases are also refused; no automatic migration is
+provided.
 Writes use a single SQLite transaction, including quota checks and payload
 insertion. A partial source failure exits nonzero but preserves the successful
 source.

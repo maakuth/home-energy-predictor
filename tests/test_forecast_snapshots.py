@@ -119,3 +119,50 @@ def test_existing_archive_quota_failure_preserves_rows(tmp_path):
     assert select(db, '2026-01-01T10:00:00Z') == old
     with sqlite3.connect(db) as conn:
         assert conn.execute('SELECT count(*) FROM payloads').fetchone()[0] == 2
+
+
+def test_overlapping_forecast_points_are_normalized_and_reconstructed(tmp_path):
+    db = tmp_path / 'forecast.sqlite'
+    common = {'datetime': '2026-01-01T11:00:00Z', 'temperature': 2,
+              'wind_speed': 3.5, 'wind_bearing': 120, 'condition': 'rain'}
+    other = {'datetime': '2026-01-01T12:00:00Z', 'temperature': 4, 'wind_speed': None}
+    old_weather = {'response': {'weather.home': {'forecast': [common, other]}}, 'extra': ['x', None]}
+    new_weather = {'response': {'weather.home': {'forecast': [common, {**other, 'temperature': 5}]}}}
+    prices = {'raw_today': [{'start': '2026-01-01T11:00:00Z',
+                             'end': '2026-01-01T11:15:00Z', 'value': -1.25}]}
+    old = capture(db, '2026-01-01T09:00:00Z', lambda: old_weather,
+                  lambda: prices, clock=lambda: datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc))
+    new = capture(db, '2026-01-01T10:00:00Z', lambda: new_weather,
+                  lambda: prices, clock=clock)
+    assert select(db, '2026-01-01T10:00:00Z') == new
+    assert select(db, '2026-01-01T09:30:00Z') == old
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT count(*) FROM forecast_points').fetchone()[0] == 4
+        assert conn.execute("SELECT temperature, wind_speed, wind_bearing FROM forecast_points "
+                            "WHERE target = ? AND temperature = 2", (common['datetime'],)).fetchone() == (2, 3.5, 120)
+        assert conn.execute('SELECT count(*) FROM forecast_members').fetchone()[0] == 5
+    assert old['weather']['payload'] == old_weather
+
+
+def test_point_extra_fields_and_nonforecast_lists_round_trip(tmp_path):
+    db = tmp_path / 'forecast.sqlite'
+    payload = {'nested': [[{'start': 'time', 'temperature': None, 'wind_speed': True,
+                            'value': 'unknown', 'custom': {'x': [1, 2]}}]],
+               'untouched': [{'no_time': 3}], 'empty': []}
+    result = capture(db, '2026-01-01T10:00:00Z', lambda: payload, lambda: [], clock=clock)
+    assert select(db, '2026-01-01T10:00:00Z') == result
+
+
+def test_older_sqlite_schema_is_not_modified(tmp_path):
+    from utils.forecast_snapshots import APPLICATION_ID
+
+    db = tmp_path / 'old.sqlite'
+    with sqlite3.connect(db) as conn:
+        conn.execute(f'PRAGMA application_id={APPLICATION_ID}')
+        conn.execute('PRAGMA user_version=1')
+        conn.execute('CREATE TABLE payloads (json TEXT)')
+        conn.execute("INSERT INTO payloads VALUES ('original')")
+    with pytest.raises(ValueError, match='archive'):
+        capture(db, '2026-01-01T10:00:00Z', lambda: {}, lambda: {}, clock=clock)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT json FROM payloads').fetchone() == ('original',)
