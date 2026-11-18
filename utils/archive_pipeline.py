@@ -98,7 +98,15 @@ def build_plan(mode: str, history: ArchiveHistory, *, bootstrap_start: float,
     return plan
 
 
-def _verify_context(metadata: dict[str, Any], history: ArchiveHistory) -> None:
+def _verify_context(metadata: Any, history: ArchiveHistory) -> None:
+    if not isinstance(metadata, dict):
+        raise ValueError('Artifact metadata must be a JSON object')
+    if 'allow_legacy' in metadata and not isinstance(metadata['allow_legacy'], bool):
+        raise ValueError('Artifact metadata allow_legacy must be boolean')
+    if 'preferred_imports' in metadata and not isinstance(metadata['preferred_imports'], list):
+        raise ValueError('Artifact metadata preferred_imports must be an array')
+    if metadata.get('policy_sha256') is not None and not isinstance(metadata['policy_sha256'], str):
+        raise ValueError('Artifact metadata policy_sha256 must be a string or null')
     if (metadata.get('history_cutoff', metadata.get('end')) != history.cutoff
             or metadata.get('archive_path') != str(Path(history.path).resolve())
             or metadata.get('legacy_policy') != history.legacy_policy):
@@ -108,7 +116,10 @@ def _verify_context(metadata: dict[str, Any], history: ArchiveHistory) -> None:
             raise ValueError(f'Artifact metadata mismatch for {key}')
     for key, expected in (('sources_path', history.sources_path or _SOURCES),
                           ('policy_path', history.policy_path), ('measurement_policy_path', history.policy_path)):
-        if metadata.get(key) is not None and (expected is None or Path(metadata[key]).resolve() != Path(expected).resolve()):
+        value = metadata.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f'Artifact metadata {key} must be a path string or null')
+        if value is not None and (expected is None or Path(value).resolve() != Path(expected).resolve()):
             raise ValueError(f'Artifact metadata mismatch for {key}')
     if metadata.get('policy_sha256') is not None and history.policy_path is not None:
         if metadata['policy_sha256'] != hashlib.sha256(Path(history.policy_path).read_bytes()).hexdigest():

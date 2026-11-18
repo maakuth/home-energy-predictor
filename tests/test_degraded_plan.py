@@ -118,3 +118,50 @@ def test_ha_invalidation_failure_is_reported_but_local_plan_remains(tmp_path, mo
     assert json.loads(plan_file.read_text())[0]['plan_quality'] == 'degraded'
     metadata = json.loads((tmp_path / 'optimization_plan_metadata.json').read_text())
     assert metadata['ha_sensor_status'] == 'stale_until_invalidation_confirmed'
+
+
+@pytest.mark.parametrize('stage', ['predict', 'optimize'])
+@pytest.mark.parametrize('bad_metadata', [
+    [], 7, None, 'invalid', {'sources_path': []}, {'allow_legacy': 0},
+    {'preferred_imports': 'invalid'}, {'policy_sha256': 123},
+])
+def test_malformed_metadata_types_trigger_degraded_fallback(tmp_path, monkeypatch, stage, bad_metadata):
+    import os
+    from utils.archive_pipeline import _verify_context
+    monkeypatch.setenv('TEST_PLAN_FILE', str(tmp_path / 'optimization_plan.json'))
+    monkeypatch.setenv('TEST_PREDICTIONS_FILE', str(tmp_path / 'future_predictions.json'))
+    context = {'history_cutoff': CUTOFF, 'archive_path': str(Path(request().path).resolve()),
+               'legacy_policy': request().legacy_policy}
+    metadata = {**context, **bad_metadata} if isinstance(bad_metadata, dict) else bad_metadata
+    with pytest.raises(ValueError):
+        _verify_context(metadata, request())
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        for name, variable, current in [('predict_future.py', 'TEST_PREDICTIONS_FILE', 'predict'),
+                                        ('optimize_plan.py', 'TEST_PLAN_FILE', 'optimize')]:
+            if name in argv:
+                path = Path(os.environ[variable])
+                path.write_text('[{"timestamp":"2026-11-10T00:00:00+00:00"}]')
+                path.with_name(path.stem + '_metadata.json').write_text(
+                    json.dumps(metadata if stage == current else context))
+    with patch('utils.archive_pipeline.subprocess.run', side_effect=run):
+        execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                     writer_lock_path=tmp_path / 'writer.lock')
+    assert json.loads(Path(os.environ['TEST_PLAN_FILE']).read_text())[0]['plan_quality'] == 'degraded'
+    assert json.loads((tmp_path / 'optimization_plan_metadata.json').read_text())['failed_step'] == stage
+    assert calls[-1][-2:] == ['push_to_ha.py', '--plan-only']
+
+
+def test_programmer_error_is_not_converted_to_degraded_fallback(tmp_path):
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    with patch('utils.archive_pipeline.subprocess.run'), \
+         patch('utils.archive_pipeline._verify_output', side_effect=[None, AttributeError('bug')]), \
+         patch('utils.archive_pipeline.write_degraded_plan') as fallback:
+        with pytest.raises(AttributeError, match='bug'):
+            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=tmp_path / 'writer.lock')
+    fallback.assert_not_called()

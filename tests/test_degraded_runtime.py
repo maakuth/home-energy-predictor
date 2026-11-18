@@ -130,3 +130,43 @@ def test_expired_degraded_bulk_recovery_obeys_fuse(tmp_path, monkeypatch):
     bulk = [c.args[1] for c in service.call_args_list
             if c.args[2]['entity_id'] == 'switch.mlp_vastus_output_1']
     assert bulk and 'turn_on' not in bulk and bulk[-1] == 'turn_off'
+
+
+@pytest.mark.parametrize('net_metering', ['0', '1'])
+@pytest.mark.parametrize('action,battery_w,phase1,expected_w', [
+    ('auto', '0', '0', 0),
+    ('auto', '5000', '0', -4000),  # Existing charge ramps down by 1 kW per tick.
+    ('auto', '0', '-30', -3450),  # Export-side phase fuse protection requires charge.
+    ('charge_grid', '0', '0', -10000),  # Manual override remains authoritative, subject to guards.
+])
+def test_generated_degraded_idle_end_to_end_with_solar_export(
+        tmp_path, monkeypatch, net_metering, action, battery_w, phase1, expected_w):
+    from utils.archive_history import ArchiveHistory
+    from utils.degraded_plan import write_degraded_plan
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('TEST_PLAN_FILE', str(tmp_path / 'state/optimization_plan.json'))
+    monkeypatch.setenv('PLAN_INTERVAL_MINUTES', '15')
+    monkeypatch.setenv('BATTERY_NET_METERING', net_metering)
+    monkeypatch.setenv('BATTERY_RAMP_RATE_KW_PER_MIN', '3')
+    monkeypatch.setenv('BATTERY_MAX_CHARGE_KW', '10')
+    monkeypatch.setenv('MAIN_FUSE_SIZE_A', '25')
+    cutoff = int(datetime.now(timezone.utc).timestamp() // 60) * 60
+    write_degraded_plan(ArchiveHistory('/offline/archive.sqlite', cutoff), 'predict', 'no prices')
+    def state(entity):
+        values = {'input_select.hepo_battery_action': action, 'sensor.be_soc': '50',
+                  'sensor.be_stat_batt_power': battery_w, 'sensor.sahkokauppa_20s': '-5',
+                  'sensor.solarh_63038_real_power_kw': '7', 'sensor.current_phase_1': phase1,
+                  'sensor.mlp_varaajan_lampotila': '50', 'sensor.cumulative_active_import': '100',
+                  'sensor.cumulative_active_export': '100'}
+        return {'state': values.get(entity, '0')}
+    # Ramp is disabled for the explicit manual test so it tests the selected action,
+    # rather than its intentionally rate-limited first command.
+    if action != 'auto':
+        monkeypatch.setenv('BATTERY_RAMP_RATE_KW_PER_MIN', '0')
+    with patch('run_often.get_ha_state', side_effect=state), \
+         patch('run_often.push_battery_control') as battery, \
+         patch('run_often.push_ha_state'), patch('run_often.call_ha_service'), \
+         patch('run_often.emit_battery_diagnostic'):
+        main()
+    assert battery.call_args.kwargs['battery_power_w'] == expected_w
+    assert battery.call_args.kwargs['native_load_following'] is False
