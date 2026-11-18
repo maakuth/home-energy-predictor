@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from process_data import process_frame
+from utils.feature_processing import process_frame
 from utils.archive_quality import LEGACY_POLICIES, apply_training_policy
 from utils.baseload_quality import BASELOAD_FEATURES
 from utils.measurement_reader import MeasurementReader, interval_index

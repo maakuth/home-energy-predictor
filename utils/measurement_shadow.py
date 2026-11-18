@@ -11,7 +11,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from process_data import process_frame
+from utils.feature_processing import process_frame
 from utils.archive_features import BASELOAD_INPUTS, load_archive_features, load_archive_raw
 from utils.baseload_quality import baseload_targets
 from utils.measurement_reader import MeasurementReader, interval_index

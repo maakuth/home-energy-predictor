@@ -15,7 +15,7 @@ services, models, or stored data. `/workspace` is production.
   and explained legacy comparison results. Do not repair the CSV tail merely
   to force parity.
 
-## Phase 1: separate shared processing from CSV I/O — in progress
+## Phase 1: separate shared processing from CSV I/O — implemented on task branch
 
 - Move `process_frame` and coverage helpers into a format-independent module;
   switch archive feature and shadow imports to it.
@@ -26,6 +26,11 @@ services, models, or stored data. `/workspace` is production.
   and the compatibility wrapper using isolated fixtures.
 - No change to model behavior or `VERSION`, production state, service schedules,
   or the CSV rollback route.
+- `utils/feature_processing.py` now owns the shared implementation; the CSV
+  wrapper re-exports the old names. Archive features and shadow use the new
+  module directly. The moved processing functions have identical syntax trees
+  to the originals. Focused regression tests passed (100 tests); deployment and
+  merge are separate from this branch.
 
 ## Phase 2: weekly archive cutover — pending separate approval
 
