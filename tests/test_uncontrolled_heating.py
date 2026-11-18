@@ -55,7 +55,11 @@ def test_archive_missing_history_can_be_labelled_for_planning(uncontrolled):
     from unittest.mock import Mock
     history = Mock()
     history.cutoff = 100000
-    history.raw.side_effect = OSError('archive unavailable')
+    history.raw.return_value = pd.DataFrame({
+        'gshp_power': [float('nan')], 'gshp_power_source_valid': [False],
+        'gshp_power_coverage_fraction': [0.], 'gshp_power_provenance': ['missing'],
+        'gshp_power_conflict': [False]})
+    history.eligible.return_value = pd.Series([False])
     status = {}
     result = load_uncontrolled_heating_forecast([uncontrolled[1]], history=history,
                                                 allow_missing=True, status=status)
@@ -63,7 +67,29 @@ def test_archive_missing_history_can_be_labelled_for_planning(uncontrolled):
     assert status['source'] == 'unavailable'
 
 
-def test_missing_telemetry_and_history_publish_labelled_unmanaged_plan(uncontrolled, monkeypatch, tmp_path):
+@pytest.mark.parametrize('error', [ValueError('invalid policy'), KeyError('corrupt schema'),
+                                   OSError('missing configuration'), __import__('sqlite3').DatabaseError('corrupt database')])
+def test_archive_read_errors_are_not_missing_observations(uncontrolled, error):
+    from unittest.mock import Mock
+    history = Mock()
+    history.cutoff = 100000
+    history.raw.side_effect = error
+    with pytest.raises(type(error), match=str(error)):
+        load_uncontrolled_heating_forecast([uncontrolled[1]], history=history,
+                                            allow_missing=True, status={})
+
+
+def test_archive_missing_quality_columns_is_not_missing_observation(uncontrolled):
+    from unittest.mock import Mock
+    history = Mock()
+    history.cutoff = 100000
+    history.raw.return_value = pd.DataFrame({'gshp_power': [float('nan')]})
+    with pytest.raises(ValueError, match='quality columns'):
+        load_uncontrolled_heating_forecast([uncontrolled[1]], history=history,
+                                            allow_missing=True, status={})
+
+
+def test_missing_telemetry_and_history_publish_labelled_unmanaged_plan(uncontrolled, monkeypatch, tmp_path, capsys):
     import optimize_plan
     import os
     from pathlib import Path
@@ -85,6 +111,9 @@ def test_missing_telemetry_and_history_publish_labelled_unmanaged_plan(uncontrol
     plan = json.loads(Path(os.environ['TEST_PLAN_FILE']).read_text())
     assert all(p['heating_forecast_source'] == 'unavailable' for p in plan)
     assert all(p['gshp_compressor_state'] == 'unknown' for p in plan)
+    output = capsys.readouterr().out
+    assert 'UNKNOWN' in output
+    assert '45.0°C, STOPPED' not in output
     assert all(p['gshp_intent'] == 'STOP' and p['resistive_heater_intent'] == 'OFF'
                and p['bulk_heater_intent'] == 'OFF' for p in plan)
 
@@ -95,6 +124,47 @@ def test_unknown_compressor_remains_forbidden_with_any_managed_heater(uncontroll
     monkeypatch.setenv(control, 'true')
     with pytest.raises(RuntimeError, match='telemetry unavailable'):
         _resolve_gshp_compressor_state(None)
+
+
+@pytest.mark.parametrize('control', ['GSHP_OPTIMIZE_ENABLED', 'RESISTIVE_HEATER_OPTIMIZE_ENABLED', 'BULK_HEATER_OPTIMIZE_ENABLED'])
+def test_unknown_compressor_never_publishes_with_managed_heater(uncontrolled, monkeypatch, control):
+    import optimize_plan
+    from unittest.mock import Mock
+    from datetime import datetime, timezone
+    monkeypatch.setenv(control, 'true')
+    values = np.array([0.1])
+    monkeypatch.setattr(optimize_plan, 'load_predictions', lambda: (
+        [], values, [datetime.now(timezone.utc)], values, values, values, values, values))
+    monkeypatch.setattr(optimize_plan, 'fetch_market_prices', lambda *args: (values, [False], None, False, False, values))
+    monkeypatch.setattr(optimize_plan, 'build_tariff_prices', lambda *args, **kwargs: (values, values))
+    monkeypatch.setattr(optimize_plan, 'get_gshp_initial_temp', lambda: 45.)
+    monkeypatch.setattr(optimize_plan, 'get_ha_state', lambda entity: None)
+    publish = Mock()
+    monkeypatch.setattr(optimize_plan, 'publish_optimization', publish)
+    with pytest.raises(RuntimeError, match='telemetry unavailable'):
+        optimize_plan.optimize()
+    publish.assert_not_called()
+
+
+def test_unknown_compressor_does_not_latch_old_heater_on(uncontrolled, monkeypatch):
+    import optimize_plan
+    from datetime import datetime, timezone
+    from pathlib import Path
+    import os
+    from utils.plan_time import slot_start
+    now = slot_start(datetime.now(timezone.utc), 15).isoformat()
+    path = Path(os.environ['TEST_PLAN_FILE'])
+    path.write_text(json.dumps([{'timestamp': now, 'resistive_heater_intent': 'ON',
+                                 'planned_resistive_kw': 6., 'bulk_heater_intent': 'ON',
+                                 'planned_bulk_heater_kw': 6.}]))
+    candidate = [{'timestamp': now, 'gshp_compressor_state': 'unknown',
+                  'resistive_heater_intent': 'OFF', 'planned_resistive_kw': 0.,
+                  'bulk_heater_intent': 'OFF', 'planned_bulk_heater_kw': 0.}]
+    monkeypatch.setattr(optimize_plan, 'get_db_connection', lambda: (_ for _ in ()).throw(OSError('isolated')))
+    optimize_plan.publish_optimization(candidate, history=None)
+    row = json.loads(path.read_text())[0]
+    assert row['resistive_heater_intent'] == row['bulk_heater_intent'] == 'OFF'
+    assert row['planned_resistive_kw'] == row['planned_bulk_heater_kw'] == 0.
 
 
 @pytest.mark.parametrize('problem', ['all_invalid', 'missing_provenance', 'duplicate_timestamps'])

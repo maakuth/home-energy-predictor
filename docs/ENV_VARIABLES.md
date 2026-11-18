@@ -109,15 +109,17 @@ autonomous heating electricity. It uses the source-valid shared-meter mean from
 the preceding 24 hours of `state/raw_data.csv` as a constant persistence forecast
 in CSV compatibility mode. Explicit archive mode uses eligible original shared
 meter bins in the day preceding its fixed cutoff and logs observed coverage.
-When history is unavailable the optimizer never retries a CSV; it uses zero
-as a labelled planning assumption, not as an observation.
+When no observations are eligible the optimizer never retries a CSV; it uses
+zero as a labelled planning assumption, not as an observation. Archive read,
+integrity and configuration errors still abort planning.
 This is added to battery/grid load, not to heater dispatch: no heater is enabled
 by this forecast. `uncontrolled_heating_kw` in the plan distinguishes it from
 scheduled heating and ML baseload. Observed coverage is logged. Missing history
 produces an explicit warning and no added forecast; it is not proof of zero load.
 Each plan slot labels `heating_forecast_source` as `observed_mean`, `managed`,
 `unavailable`, or `frozen`. An unavailable forecast can underestimate demand
-and grid import. Current-slot discrete-load latching remains in effect.
+and grid import. Current-slot discrete-load latching remains in effect except
+that unknown compressor telemetry cannot restore an old heater ON allocation.
 This baseline is not weather-adjusted and is not used when any heating dispatch
 is enabled, to avoid double-counting managed heat sources.
 

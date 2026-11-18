@@ -836,14 +836,7 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
         print(f"⚠️ Error detecting fireplace status: {e}")
 
     if history is not None:
-        try:
-            is_fireplace_currently_on = archive_fireplace_detected(history)
-        except (OSError, ValueError, KeyError, sqlite3.Error) as error:
-            if any((get_env_bool('GSHP_OPTIMIZE_ENABLED', True),
-                    get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False),
-                    get_env_bool('BULK_HEATER_OPTIMIZE_ENABLED', False))):
-                raise
-            print(f'⚠️ Fireplace history unavailable: {error}; no fireplace evidence.')
+        is_fireplace_currently_on = archive_fireplace_detected(history)
 
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
@@ -856,6 +849,7 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
         market_prices, import_prices, export_prices, is_fallback_price, tomorrow_valid,
         solar_array, solar_array_p10, solar_array_p90, current_acc_temp,
         is_hp_currently_running, is_fireplace_currently_on, history=history,
+        compressor_state_known=compressor_state is not None,
     )
     for entry in final_plan:
         entry['gshp_compressor_state'] = (
@@ -901,6 +895,7 @@ def _calculate_optimization(
     current_acc_temp: float, is_hp_currently_running: bool,
     is_fireplace_currently_on: bool, *, history: ArchiveHistory | None,
     frozen_runtime: FrozenOptimizationRuntime | None = None,
+    compressor_state_known: bool = True,
 ) -> list[dict[str, Any]]:
     """Calculate a plan; configuration is not yet frozen."""
     outside_temps = [p.get('outside_temp', 5.0) for p in predictions_data]
@@ -1111,7 +1106,9 @@ def _calculate_optimization(
 
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
     print(f"Interval: {get_plan_interval_minutes()} minutes")
-    print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {'RUNNING' if is_hp_currently_running else 'STOPPED'}")
+    compressor_diagnostic = ('UNKNOWN' if not compressor_state_known else
+                             'RUNNING' if is_hp_currently_running else 'STOPPED')
+    print(f"GSHP Initial State: {current_acc_temp:.1f}°C, {compressor_diagnostic}")
     print(f"Fireplace: {'ON' if is_fireplace_currently_on else 'OFF'}")
     
     final_plan = []
@@ -1219,6 +1216,11 @@ def publish_optimization(final_plan: list[dict[str, Any]], *, history: ArchiveHi
         datetime.now().astimezone(),
         get_plan_interval_minutes(),
     )
+    for entry in final_plan:
+        if entry.get('gshp_compressor_state') == 'unknown':
+            for field in ('resistive_heater_intent', 'planned_resistive_kw',
+                          'bulk_heater_intent', 'planned_bulk_heater_kw'):
+                entry[field] = _DISCRETE_LOAD_FIELDS[field]
     write_plan_atomically(plan_file, final_plan)
     print(f'\n✅ Plan saved to {plan_file}')
 

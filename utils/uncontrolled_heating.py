@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -39,20 +38,21 @@ def load_uncontrolled_heating_forecast(
     if history is not None:
         if history_path is not None:
             raise ValueError('Choose archive history or compatibility history_path, not both')
-        try:
-            frame = history.raw(history.cutoff - 86400, history.cutoff, measurements=['gshp_power'])
-            power = pd.to_numeric(frame['gshp_power'], errors='coerce')
-            power = power.where(history.eligible(frame, 'gshp_power') & np.isfinite(power) & power.ge(0)).dropna()
-            print(f'Uncontrolled heating archive coverage: {len(power)}/1440 eligible minute samples '
-                  f'(policy={history.legacy_policy}).')
-            if power.empty:
-                raise ValueError('Archive uncontrolled heating history unavailable; refusing zero-load fallback')
-        except (OSError, ValueError, KeyError, sqlite3.Error) as error:
+        frame = history.raw(history.cutoff - 86400, history.cutoff, measurements=['gshp_power'])
+        required = ['gshp_power' + suffix for suffix in
+                    ('', '_source_valid', '_coverage_fraction', '_provenance', '_conflict')]
+        if any(column not in frame for column in required):
+            raise ValueError('Archive heating history missing required quality columns')
+        power = pd.to_numeric(frame['gshp_power'], errors='coerce')
+        power = power.where(history.eligible(frame, 'gshp_power') & np.isfinite(power) & power.ge(0)).dropna()
+        print(f'Uncontrolled heating archive coverage: {len(power)}/1440 eligible minute samples '
+              f'(policy={history.legacy_policy}).')
+        if power.empty:
             if not allow_missing:
-                raise
+                raise ValueError('Archive uncontrolled heating history unavailable; refusing zero-load fallback')
             if status is not None:
                 status['source'] = 'unavailable'
-            print(f'⚠️ Uncontrolled heating forecast unavailable: {error}; zero is a planning assumption, not a measurement.')
+            print('⚠️ No eligible uncontrolled heating observations; zero is a planning assumption, not a measurement.')
             return zeros
         mean_kw = float(power.mean()) / 1000.0
         if status is not None:

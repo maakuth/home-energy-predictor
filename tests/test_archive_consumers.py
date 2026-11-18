@@ -390,11 +390,11 @@ def test_optimizer_success_keeps_live_thermal_state_and_metadata(history, monkey
 
 
 def test_optimizer_missing_heating_archive_and_live_power_remains_price_aware(history, monkeypatch):
-    context, _, reader = history
+    context, frame, reader = history
     for name in ('GSHP', 'RESISTIVE_HEATER', 'BULK_HEATER'):
         monkeypatch.setenv(name + '_OPTIMIZE_ENABLED', 'false')
     monkeypatch.setenv('HEPO_DISABLE_BATTERY', 'true')
-    reader.side_effect = OSError('archive unavailable')
+    frame['gshp_power_conflict'] = True
     Path(os.environ['TEST_PREDICTIONS_FILE']).write_text(json.dumps([{
         'timestamp': (CUTOFF.floor('15min') + pd.Timedelta(minutes=15 * i)).isoformat(),
         'predicted_baseload': 1., 'solar_forecast': 0.} for i in range(2)]))
@@ -410,6 +410,22 @@ def test_optimizer_missing_heating_archive_and_live_power_remains_price_aware(hi
                row['gshp_compressor_state'] == 'unknown' for row in rows)
     assert all(row['gshp_intent'] == 'STOP' and row['resistive_heater_intent'] == 'OFF'
                and row['bulk_heater_intent'] == 'OFF' for row in rows)
+
+
+def test_optimizer_does_not_hide_fireplace_archive_failure(history, monkeypatch):
+    context, _, reader = history
+    for name in ('GSHP', 'RESISTIVE_HEATER', 'BULK_HEATER'):
+        monkeypatch.setenv(name + '_OPTIMIZE_ENABLED', 'false')
+    monkeypatch.setenv('GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.accumulator')
+    reader.side_effect = ValueError('invalid measurement policy')
+    Path(os.environ['TEST_PREDICTIONS_FILE']).write_text(json.dumps([{
+        'timestamp': CUTOFF.floor('15min').isoformat(), 'predicted_baseload': 1., 'solar_forecast': 0.}]))
+    monkeypatch.setattr(optimizer, 'get_gshp_initial_temp', lambda: 49.)
+    monkeypatch.setattr(optimizer, 'get_ha_state', lambda entity: None)
+    monkeypatch.setattr(optimizer, 'fetch_market_prices', Mock(return_value=([.1], [0], 'test', False, False, None)))
+    with pytest.raises(ValueError, match='invalid measurement policy'):
+        optimizer.optimize(history=context)
+    assert not Path(os.environ['TEST_PLAN_FILE']).exists()
 
 
 @pytest.mark.parametrize('script', ['predict_future.py', 'optimize_plan.py'])
