@@ -9,11 +9,11 @@
 
 Use parallel execution by default for routine and full regression runs. Install
 the dependencies in `requirements.txt` to enable pytest-xdist. To run the
-routine selection in two worker processes:
+routine selection in four worker processes:
 
 ```bash
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-  venv/bin/python3 -m pytest -n 2 --dist worksteal -k 'not slow' --durations=25
+  venv/bin/python3 -m pytest -n 4 --dist worksteal -k 'not slow' --durations=25
 ```
 
 The thread limits reduce CPU oversubscription from numerical libraries; they
