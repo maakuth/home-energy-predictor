@@ -50,6 +50,52 @@ def test_entsoe_combined_prices_accepts_future_point():
     assert validate_price_window(state, 'sensor.test', 'FI', clock())['state'] == state
 
 
+def test_entsoe_daily_and_combined_consistent_accepts_extras():
+    today = [{'time': '2026-01-01T10:00:00Z', 'price': 1},
+             {'time': '2026-01-01T11:00:00Z', 'price': 2}]
+    tomorrow = [{'time': '2026-01-02T00:00:00Z', 'price': 3}]
+    combined = ([{'time': p['time'], 'price': p['price']} for p in today] +
+                [{'time': p['time'], 'price': p['price']} for p in tomorrow] +
+                [{'time': '2026-01-02T01:00:00Z', 'price': 4},
+                 {'time': '2026-01-02T02:00:00Z', 'price': 5},
+                 {'time': '2026-01-02T03:00:00Z', 'price': 6},
+                 {'time': '2026-01-02T04:00:00Z', 'price': 7}])
+    state = {'state': '1', 'attributes': {'prices_today': today,
+                                          'prices_tomorrow': tomorrow,
+                                          'prices': combined}}
+    assert validate_price_window(state, 'sensor.test', 'FI', clock())['state'] == state
+
+
+def test_entsoe_combined_conflicting_overlap_rejected():
+    state = {'state': '1', 'attributes': {
+        'prices_today': [{'time': '2026-01-01T10:00:00Z', 'price': 1}],
+        'prices': [{'time': '2026-01-01T10:00:00Z', 'price': 2}]}}
+    with pytest.raises(ValueError):
+        validate_price_window(state, 'sensor.test', 'FI', clock())
+
+
+def test_entsoe_combined_duplicate_within_array_rejected():
+    state = {'state': '1', 'attributes': {
+        'prices': [{'time': '2026-01-01T10:00:00Z', 'price': 1},
+                   {'time': '2026-01-01T10:00:00Z', 'price': 1}]}}
+    with pytest.raises(ValueError):
+        validate_price_window(state, 'sensor.test', 'FI', clock())
+
+
+def test_entsoe_timezone_equivalent_overlaps_are_consistent():
+    state = {'state': '1', 'attributes': {
+        'prices_today': [{'time': '2026-01-01T11:00:00+01:00', 'price': 5}],
+        'prices': [{'time': '2026-01-01T10:00:00Z', 'price': 5}]}}
+    assert validate_price_window(state, 'sensor.test', 'FI', clock())['state'] == state
+
+
+def test_entsoe_timezone_equivalent_conflict_rejected():
+    state = {'state': '1', 'attributes': {
+        'prices_today': [{'time': '2026-01-01T11:00:00+01:00', 'price': 5}],
+        'prices': [{'time': '2026-01-01T10:00:00Z', 'price': 6}]}}
+    with pytest.raises(ValueError):
+        validate_price_window(state, 'sensor.test', 'FI', clock())
+
 @pytest.mark.parametrize('attrs', [
     {}, {'today': [1, 2]}, {'prices_today': []},
     {'prices_today': [{'time': '2026-01-01T09:59:00Z', 'price': 1}]},

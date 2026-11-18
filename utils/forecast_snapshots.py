@@ -361,39 +361,63 @@ def validate_price_window(state: Any, source: str, zone: str, origin: Any) -> di
         raise ValueError('Missing or ambiguous price schema')
     schema = 'nordpool' if nordpool else 'entsoe'
     keys = ('raw_today', 'raw_tomorrow') if nordpool else ('prices_today', 'prices_tomorrow', 'prices')
-    if entsoe and 'prices' in attrs and ('prices_today' in attrs or 'prices_tomorrow' in attrs):
-        raise ValueError('Ambiguous ENTSO-E price arrays')
     if nordpool and 'tomorrow_valid' in attrs and not isinstance(attrs['tomorrow_valid'], bool):
         raise ValueError('Invalid tomorrow_valid')
     points: list[tuple[datetime, datetime | None]] = []
-    for key in keys:
-        if key not in attrs or (key == 'raw_tomorrow' and attrs.get('tomorrow_valid') is False):
-            continue
-        items = attrs[key]
-        if not isinstance(items, list):
-            raise ValueError('Invalid price array')
-        for item in items:
-            if not isinstance(item, dict):
-                raise ValueError('Invalid price point')
-            start_key, value_key = ('start', 'value') if nordpool else ('time', 'price')
-            value = item.get(value_key)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-                raise ValueError('Invalid price value')
-            if not isinstance(item.get(start_key), str):
-                raise ValueError('Invalid price timestamp')
-            start = timestamp(item[start_key])
-            end = None
-            if nordpool:
+    if entsoe:
+        price_by_time: dict[datetime, Any] = {}
+        for key in keys:
+            if key not in attrs:
+                continue
+            items = attrs[key]
+            if not isinstance(items, list):
+                raise ValueError('Invalid price array')
+            seen_in_array: set[datetime] = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError('Invalid price point')
+                value = item.get('price')
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError('Invalid price value')
+                if not isinstance(item.get('time'), str):
+                    raise ValueError('Invalid price timestamp')
+                start = timestamp(item['time'])
+                if start in seen_in_array:
+                    raise ValueError('Duplicate or overlapping prices')
+                seen_in_array.add(start)
+                if start in price_by_time and price_by_time[start] != value:
+                    raise ValueError('Duplicate or overlapping prices')
+                price_by_time[start] = value
+                points.append((start, None))
+    else:
+        for key in keys:
+            if key not in attrs or (key == 'raw_tomorrow' and attrs.get('tomorrow_valid') is False):
+                continue
+            items = attrs[key]
+            if not isinstance(items, list):
+                raise ValueError('Invalid price array')
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError('Invalid price point')
+                value = item.get('value')
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError('Invalid price value')
+                if not isinstance(item.get('start'), str):
+                    raise ValueError('Invalid price timestamp')
+                start = timestamp(item['start'])
+                end = None
                 if not isinstance(item.get('end'), str):
                     raise ValueError('Missing interval end')
                 end = timestamp(item['end'])
                 if end <= start:
                     raise ValueError('Invalid price interval')
-            points.append((start, end))
-    points.sort(key=lambda point: point[0])
-    for previous, current in zip(points, points[1:]):
-        if current[0] == previous[0] or (previous[1] is not None and current[0] < previous[1]):
-            raise ValueError('Duplicate or overlapping prices')
+                points.append((start, end))
+        points.sort(key=lambda point: point[0])
+        for previous, current in zip(points, points[1:]):
+            if current[0] == previous[0] or (previous[1] is not None and current[0] < previous[1]):
+                raise ValueError('Duplicate or overlapping prices')
+    if entsoe:
+        points.sort(key=lambda point: point[0])
     cutoff = timestamp(origin)
     if not any((end > cutoff if end is not None else start >= cutoff) for start, end in points):
         raise ValueError('No current or future price window')
