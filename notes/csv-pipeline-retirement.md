@@ -15,7 +15,7 @@ services, models, or stored data. `/workspace` is production.
   and explained legacy comparison results. Do not repair the CSV tail merely
   to force parity.
 
-## Phase 1: separate shared processing from CSV I/O — implemented on task branch
+## Phase 1: separate shared processing from CSV I/O — merged
 
 - Move `process_frame` and coverage helpers into a format-independent module;
   switch archive feature and shadow imports to it.
@@ -32,7 +32,8 @@ services, models, or stored data. `/workspace` is production.
   to the originals. Focused regression tests passed (100 tests); the non-slow
   suite passed (1,204 passed, 54 deselected, 8 subtests passed), the full suite
   passed (1,257 passed, 1 skipped, 8 subtests passed), and Pyright reported no
-  errors on changed Python files. Deployment and merge are separate decisions.
+  errors on changed Python files. Fast-forwarded to `master` after full-suite
+  validation; no service configuration or model promotion was performed.
 
 ## Phase 2: weekly archive cutover — pending separate approval
 
