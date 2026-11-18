@@ -1,14 +1,15 @@
 # Test selections
 
-- Routine iteration: `venv/bin/python3 -m pytest -k 'not slow'`
-- Full regression suite: `venv/bin/python3 -m pytest`
+- Routine iteration: use the parallel command below with `-k 'not slow'`.
+- Full regression suite: use the parallel command below without `-k 'not slow'`.
 - Explicit production-sized SARIMA cold-fit diagnostic:
   `venv/bin/python3 -m pytest tests/test_sarimax.py -m cold_fit_benchmark --run-cold-fit-benchmark --durations=0`
 
 ## Parallel execution
 
-Install the dependencies in `requirements.txt` to enable pytest-xdist. To run
-the routine selection in two worker processes:
+Use parallel execution by default for routine and full regression runs. Install
+the dependencies in `requirements.txt` to enable pytest-xdist. To run the
+routine selection in two worker processes:
 
 ```bash
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
