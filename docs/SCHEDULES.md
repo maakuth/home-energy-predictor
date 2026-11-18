@@ -188,3 +188,15 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 ```
+
+## Optional forecast snapshot collector (not deployed)
+
+`deploy/systemd/hepo-forecast-snapshot.service.in` and its timer prepare an
+independent, non-actuating collector at a 15-minute cadence. It uses explicit
+JSON configuration, the shared `.venv`, and a dedicated forecast SQLite archive.
+It is not installed or enabled by this repository. `run_frequent.sh` may
+optionally trigger it with `systemctl --user start --no-block` when
+`FORECAST_SNAPSHOT_SYSTEMD_UNIT` is set; by default no trigger is attempted.
+Automatic execution requires installing/enabling that separate unit; without
+that systemd change, capture is manual or externally triggered. Capture never
+blocks or fails optimization, and archive dry-runs do not invoke it.

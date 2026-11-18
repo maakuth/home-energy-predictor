@@ -56,6 +56,14 @@ fi
   python3 optimize_plan.py
   HEPO_PUBLISH_LOCK_FD=200 HEPO_PIPELINE_LOCK_PATH=/tmp/hepo.lock python3 push_to_ha.py
 
+  # Optional, non-actuating forecast snapshot collection. This is disabled unless
+  # FORECAST_SNAPSHOT_SYSTEMD_UNIT names an independently installed service.
+  # --no-block keeps capture out of this optimization cgroup and never lets it
+  # delay or fail the frequent run; the separate service owns its own process.
+  if [ -n "${FORECAST_SNAPSHOT_SYSTEMD_UNIT:-}" ]; then
+    systemctl --user start --no-block "$FORECAST_SNAPSHOT_SYSTEMD_UNIT" >/dev/null 2>&1 || true
+  fi
+
   echo "=== Update Complete: $(date) ==="
 
 ) 200>/tmp/hepo.lock

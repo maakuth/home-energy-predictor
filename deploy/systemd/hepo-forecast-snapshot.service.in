@@ -1,0 +1,17 @@
+[Unit]
+Description=HEPO optional forecast snapshot collector (non-actuating)
+
+[Service]
+Type=oneshot
+WorkingDirectory=@CODE_DIR@
+ExecStart="@PYTHON@" -m utils.forecast_snapshots --config "@CONFIG@" --execute
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHON_DOTENV_DISABLED=1
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=5min
+SuccessExitStatus=75
+NoNewPrivileges=true
+RestrictSUIDSGID=true

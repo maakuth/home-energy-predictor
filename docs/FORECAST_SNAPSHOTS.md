@@ -127,3 +127,68 @@ semantics; a timestamp alone does not prove an hourly validity interval.
   origins, source latency, timeouts, overlap, capacity alerts, failure and gap
   monitoring, and rollback. Collection must not run in or block live
   optimization. No service or timer is included or enabled.
+
+## Optional nonblocking collection
+
+Forecast snapshots can be collected by an **independent** systemd user service.
+They are never run from the optimization path of `run_frequent.sh`, and the
+archive pipeline dry-run does not invoke them. `run_frequent.sh` may optionally
+trigger the configured service with `systemctl --user start --no-block` when
+`FORECAST_SNAPSHOT_SYSTEMD_UNIT` is set; this returns immediately and cannot
+delay or fail optimization. By default the variable is empty and no trigger is
+attempted.
+
+Configuration is explicit. Copy `config/forecast_snapshot.example.json`, replace
+every placeholder with an absolute local path, and point `env_file` at the
+repository `.env` containing `HA_HOST` and `HA_TOKEN`. The archive must be a
+dedicated SQLite file, never `hepo.db` or an active artifact database.
+
+Dry-run validation:
+
+```bash
+python -m utils.forecast_snapshots --config /path/to/forecast-snapshot.json
+```
+
+Execution:
+
+```bash
+python -m utils.forecast_snapshots --config /path/to/forecast-snapshot.json --execute
+```
+
+The origin is the current 15-minute UTC boundary. Collection holds a nonblocking
+lock; a busy lock skips the run with exit status 75. Source failures are recorded
+as attempt rows and do not stop the successful source.
+
+## Deployment
+
+Render and install the user service/timer like the measurement collector, but
+do not enable it without review. The service runs `utils.forecast_snapshots` with
+the configured JSON. It uses the shared project `.venv`; no separate environment
+is created.
+
+```bash
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+mkdir -p "$UNIT_DIR"
+systemd-analyze --user verify /path/to/hepo-forecast-snapshot.service /path/to/hepo-forecast-snapshot.timer
+install -m 0644 /path/to/hepo-forecast-snapshot.service "$UNIT_DIR/hepo-forecast-snapshot.service"
+install -m 0644 /path/to/hepo-forecast-snapshot.timer "$UNIT_DIR/hepo-forecast-snapshot.timer"
+systemctl --user daemon-reload
+systemctl --user start hepo-forecast-snapshot.service
+```
+
+Only after reviewing the report and journal:
+
+```bash
+systemctl --user enable --now hepo-forecast-snapshot.timer
+```
+
+## Blocker for automatic execution
+
+The existing frequent job is a systemd `oneshot` service. A background
+subprocess started from it can be terminated when that service's cgroup is
+cleaned up, so this implementation deliberately does **not** start capture in
+the background from `run_frequent.sh`. Automatic execution therefore requires
+the separate timer above (or an equivalent persistent unit). Without that
+systemd change, capture remains a manual or externally triggered operation;
+this is intentional and avoids unsafe fire-and-forget behavior. Optimization is
+never blocked or failed by capture.
