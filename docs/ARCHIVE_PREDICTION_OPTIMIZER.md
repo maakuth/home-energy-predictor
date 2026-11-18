@@ -47,10 +47,11 @@ the success marker attests to the JSON artifact, not feedback DB persistence.
 
 The runner must require **both a zero process exit status and a matching sidecar
 cutoff** before advancing. Old files can remain after failure: neither their
-existence nor an older success marker authorizes publishing them. Missing solar,
-model/features, historical anchors, empty horizons/predictions, nonfinite model
-outputs, missing optimizer prices, and missing autonomous heating observations
-raise in archive mode. CLI exceptions exit nonzero. Sidecar write failures also
+existence nor an older success marker authorizes publishing them. Missing
+model/features, empty horizons/predictions, nonfinite model outputs and missing
+optimizer prices raise in archive mode. Missing anchors and solar have labelled
+inference fallbacks described below. CLI exceptions exit nonzero; the frequent
+runner can install a separate degraded plan. Sidecar write failures also
 propagate; artifact/sidecar replacement is not a multi-file transaction.
 
 ## Historical semantics
@@ -61,12 +62,15 @@ energy uses the same labelled, causal estimate as archive training: at most
 120 seconds of missing coverage in at most three partially or fully incomplete
 minute bins. Each incomplete bin is estimated in full from an earlier eligible
 reading, not treated as verified energy. Conflicts and longer or unanchored gaps
-still fail. The sidecar records the input policy and estimate diagnostics.
+remain ineligible for this estimate. The sidecar records the input policy and estimate diagnostics.
 A synthetic cutoff
 query row is missing data, never a future raw read or fabricated measurement.
 Shared heating remains the raw shared meter: no relay subtraction or forecast
-solar substitution is used to make an anchor appear valid. Missing anchors fail
-closed, including when optional accumulator instrumentation is disabled.
+solar substitution is used to make an anchor appear valid. Missing or ineligible
+anchors use the model's missing-value paths, recorded in prediction metadata;
+their accuracy is not established for a model trained on complete values.
+Missing or stale solar data instead uses a labelled zero-generation assumption
+for a 48-hour horizon, not a verified forecast.
 
 Sauna historical reads use eligible archive actuals. Yesterday evening is
 selected by the full Europe/Helsinki date (including month/year and DST), and
@@ -84,8 +88,9 @@ With all heating dispatch disabled, the autonomous electrical-load persistence
 forecast uses eligible raw shared-meter observations in the day preceding the
 cutoff, not the rounded-down first plan slot. It logs eligible/1440 minute
 coverage. Partial observations yield an explicitly labelled observed mean, not a
-full-day energy claim; no eligible observations or archive read errors abort
-optimization instead of silently assuming zero. It does not command a heater.
+full-day energy claim. No eligible observations use a labelled zero-load
+assumption, which can underestimate demand; archive read errors still abort
+optimization. It does not command a heater.
 
 This route changes no schedules, rollout settings, raw archive schema, or model
 version. Live telemetry/forecast reads remain operational calls; offline tests
