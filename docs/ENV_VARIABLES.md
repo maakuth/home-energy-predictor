@@ -121,7 +121,11 @@ Each plan slot labels `heating_forecast_source` as `observed_mean`, `managed`,
 and grid import. Current-slot discrete-load latching remains in effect except
 that unknown compressor telemetry cannot restore an old heater ON allocation.
 This baseline is not weather-adjusted and is not used when any heating dispatch
-is enabled, to avoid double-counting managed heat sources.
+is enabled, to avoid double-counting managed heat sources. In this all-disabled
+mode `gshp_temp_simulated` is `null` in every plan entry because autonomous
+heating is not thermally modeled; the uncontrolled heating electrical forecast
+still feeds battery/grid load. A `null` value is not a measured accumulator
+temperature and is not a zero-temperature reading.
 
 Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Description | Example | Unit / Notes |
 |----------|-------------|---------|--------------|
