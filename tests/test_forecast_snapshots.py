@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import sqlite3
 
 import pytest
 
-from utils.forecast_snapshots import capture, select, map_intervals
+from utils.forecast_snapshots import capture, select, map_intervals, vintage_coverage
 
 
 def clock():
@@ -166,3 +166,41 @@ def test_older_sqlite_schema_is_not_modified(tmp_path):
         capture(db, '2026-01-01T10:00:00Z', lambda: {}, lambda: {}, clock=clock)
     with sqlite3.connect(db) as conn:
         assert conn.execute('SELECT json FROM payloads').fetchone() == ('original',)
+
+
+def test_exact_origin_and_max_age_never_fall_back(tmp_path):
+    db = tmp_path / 'forecast.sqlite'
+    old = capture(db, '2026-01-01T09:00:00Z', lambda: {}, lambda: {},
+                  clock=lambda: datetime(2026, 1, 1, 9, tzinfo=timezone.utc))
+    capture(db, '2026-01-01T09:45:00Z', lambda: {}, lambda: 1 / 0, clock=clock)
+    cutoff = '2026-01-01T10:00:00Z'
+    assert select(db, cutoff, exact_origin='2026-01-01T10:45:00+01:00') is None
+    assert select(db, cutoff, exact_origin='2026-01-01T09:00:00Z') == old
+    assert select(db, cutoff, max_age=timedelta(hours=1)) == old
+    assert select(db, cutoff, max_age=timedelta(minutes=59)) is None
+    assert select(db, cutoff, exact_origin='2026-01-01T09:00:00Z',
+                  max_age=timedelta(minutes=59)) is None
+    assert select(db, cutoff, exact_origin='2026-01-01T11:00:00Z') is None
+    with pytest.raises(ValueError):
+        select(db, cutoff, max_age=timedelta(seconds=-1))
+    with pytest.raises(ValueError):
+        select(db, cutoff, exact_origin='2026-01-01T09:00:00')
+
+
+def test_vintage_coverage_distinguishes_missing_failed_and_late(tmp_path):
+    db = tmp_path / 'forecast.sqlite'
+    capture(db, '2026-01-01T09:00:00Z', lambda: {}, lambda: {}, clock=clock)
+    capture(db, '2026-01-01T09:15:00Z', lambda: {}, lambda: 1 / 0, clock=clock)
+    capture(db, '2026-01-01T09:30:00Z', lambda: {}, lambda: {},
+            clock=lambda: datetime(2026, 1, 1, 10, 1, tzinfo=timezone.utc))
+    origins = [f'2026-01-01T09:{minute}:00Z' for minute in ('00', '15', '30', '45')]
+    report = vintage_coverage(db, origins, '2026-01-01T10:00:00Z')
+    assert [row['status'] for row in report] == ['complete', 'failed', 'not_available', 'missing']
+    assert [row['attempts'] for row in report] == [1, 1, 0, 0]
+    assert vintage_coverage(db, ['2026-01-01T10:00:00+01:00'],
+                            '2026-01-01T10:00:00Z')[0]['status'] == 'complete'
+    capture(db, '2026-01-01T09:15:00Z', lambda: {}, lambda: {}, clock=clock)
+    row = vintage_coverage(db, [origins[1]], '2026-01-01T10:00:00Z')[0]
+    assert row['status'] == 'complete'
+    assert row['attempts'] == 2
+    assert vintage_coverage(db, [origins[0]], '2026-01-01T08:59:00Z')[0]['status'] == 'not_available'

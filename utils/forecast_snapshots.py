@@ -5,7 +5,7 @@ No planner, device control or measurement database is touched.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -264,9 +264,15 @@ def capture(archive: str | Path, origin: Any, weather: Callable[[], Any],
         conn.close()
 
 
-def select(archive: str | Path, cutoff: Any) -> dict[str, Any] | None:
-    """Select latest complete same-attempt pair available by cutoff."""
-    cutoff = _utc(cutoff)
+def select(archive: str | Path, cutoff: Any, *, exact_origin: Any = None,
+           max_age: timedelta | None = None) -> dict[str, Any] | None:
+    """Select a complete pair, optionally requiring an origin and maximum origin age."""
+    cutoff_time = timestamp(cutoff)
+    cutoff = _utc(cutoff_time)
+    origin = _utc(exact_origin) if exact_origin is not None else None
+    if max_age is not None and (not isinstance(max_age, timedelta) or max_age < timedelta(0)):
+        raise ValueError('max_age must be a nonnegative timedelta')
+    earliest = _utc(cutoff_time - max_age) if max_age is not None else None
     conn = _connect(archive, create=False)
     try:
         row = conn.execute('''
@@ -276,8 +282,10 @@ def select(archive: str | Path, cutoff: Any) -> dict[str, Any] | None:
             JOIN payloads p ON p.id=a.price_payload
             WHERE a.origin<=? AND a.weather_status='ok' AND a.price_status='ok'
               AND a.weather_end<=? AND a.price_end<=?
-            ORDER BY a.origin DESC, max(a.weather_end,a.price_end) DESC, a.id DESC LIMIT 1
-        ''', (cutoff, cutoff, cutoff)).fetchone()
+              AND (? IS NULL OR a.origin=?)
+              AND (? IS NULL OR a.origin>=?)
+             ORDER BY a.origin DESC, max(a.weather_end,a.price_end) DESC, a.id DESC LIMIT 1
+        ''', (cutoff, cutoff, cutoff, origin, origin, earliest, earliest)).fetchone()
         if row is None:
             return None
         id_, origin, ws, we, wp, ps, pe, pp = row
@@ -286,6 +294,33 @@ def select(archive: str | Path, cutoff: Any) -> dict[str, Any] | None:
                             'completed_at': timestamp(we).isoformat(), 'payload': _load_payload(conn, wp)},
                 'price': {'status': 'ok', 'started_at': timestamp(ps).isoformat(),
                           'completed_at': timestamp(pe).isoformat(), 'payload': _load_payload(conn, pp)}}
+    finally:
+        conn.close()
+
+
+def vintage_coverage(archive: str | Path, origins: list[Any], cutoff: Any) -> list[dict[str, Any]]:
+    """Report retrospective attempt coverage for each explicitly expected origin."""
+    cutoff_text = _utc(cutoff)
+    expected = [_utc(origin) for origin in origins]
+    conn = _connect(archive, create=False)
+    try:
+        result = []
+        for origin in expected:
+            rows = conn.execute('''SELECT weather_end, price_end, weather_status, price_status
+                                   FROM attempts WHERE origin=?''', (origin,)).fetchall()
+            visible = [row for row in rows if origin <= cutoff_text
+                       and row[0] <= cutoff_text and row[1] <= cutoff_text]
+            if any(row[2] == 'ok' and row[3] == 'ok' for row in visible):
+                status = 'complete'
+            elif visible:
+                status = 'failed'
+            elif rows:
+                status = 'not_available'
+            else:
+                status = 'missing'
+            result.append({'origin': timestamp(origin).isoformat(), 'status': status,
+                           'attempts': len(visible)})
+        return result
     finally:
         conn.close()
 

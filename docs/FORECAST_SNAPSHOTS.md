@@ -53,8 +53,8 @@ Writes use a single SQLite transaction, including quota checks and payload
 insertion. A partial source failure exits nonzero but preserves the successful
 source.
 
-Missing invocations must be detected by comparing scheduled origins to
-attempt rows; they cannot create their own failure record. Quotas
+Missing invocations cannot create their own failure record. Compare expected
+scheduled origins to attempt rows using `vintage_coverage()` below. Quotas
 (`--max-attempts`, `--max-bytes`) fail closed without deleting old data;
 monitor disk and arrange reviewed archival/retention before the limit is
 reached. The byte quota limits SQLite's database pages at commit, not
@@ -66,7 +66,33 @@ automatically; preserve any such files separately until a reviewed importer
 exists.
 
 `select()` returns the latest same-attempt successful pair whose scheduled
-origin and both completion times are no later than the cutoff. It does not
+origin and both completion times are no later than the cutoff. Optional
+`exact_origin` requires that scheduled origin, without falling back to an older
+attempt; `max_age` is a nonnegative `datetime.timedelta` measured from the
+scheduled origin to the cutoff, inclusive. The two restrictions can be combined.
+They do not change the completion-time cutoff. Timestamps must be timezone-aware.
+The default remains unrestricted latest-as-of selection. For example:
+
+```python
+from datetime import timedelta
+from utils.forecast_snapshots import select, vintage_coverage
+
+pair = select(archive, cutoff, exact_origin=origin, max_age=timedelta(minutes=30))
+coverage = vintage_coverage(archive, expected_origins, cutoff)
+```
+
+`vintage_coverage` returns one row per supplied origin in input order, with UTC
+`origin`, `status` and `attempts` (the number of attempts whose origin and
+both source completions are no later than cutoff). Status is `complete` if any
+such attempt has both sources successful, `failed` if there are visible attempts
+but none complete, `not_available` if attempts exist but none were visible by
+cutoff, and `missing` if no attempt exists. This is a **retrospective diagnostic**:
+the distinction between `missing` and `not_available` uses rows after cutoff,
+and must not be used as an as-of model feature. Expected origins and cutoff
+must be explicitly supplied; the report does not infer schedules. It reports
+attempt availability, not the validity or target coverage of payloads.
+
+Selection does not
 validate the semantics or coverage of raw payloads. `map_intervals()` maps
 only fully covered quarter-hour intervals, rejecting overlaps and never
 extrapolating. Provider-specific adapters must establish explicit interval
