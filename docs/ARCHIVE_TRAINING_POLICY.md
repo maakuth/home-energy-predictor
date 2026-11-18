@@ -28,20 +28,24 @@ cannot become eligible through this policy.
 `baseload_training_eligible` column expresses eligibility under the declared
 policy. Target values use original aligned meter means before median filters,
 solar substitution or zero fills. Exact 1h/24h lags inherit eligibility from
-their historical timestamps; previous-day Leaf energy requires a complete
-window. Archive XGBoost selection also requires eligible temperature and wind
+their historical timestamps; previous-day Leaf energy uses the bounded
+short-gap rule below. Archive XGBoost selection also requires eligible temperature and wind
 rather than admitting imputed weather values. No solar-forecast source,
 eligibility column or pipeline ingestion is required for baseload training.
 
 For minute-resolution archive features, the preceding-day Leaf-energy feature
-may estimate up to two missing minutes total from the most recent preceding
-eligible Leaf observation. The estimate is causal, restricted to recorder
-provenance without conflicts, and never changes a raw measurement or baseload
-target. An unanchored gap, a conflict, more than two missing minutes, or
-incomplete 24-hour context remains ineligible. Other resolutions retain the
-complete-window rule. `leaf_energy_24h_estimated_minutes` labels estimated
-feature rows, and archive training metadata records the policy and count.
-The two-minute limit is a conservative initial policy, not an optimized value.
+may estimate up to 120 seconds of missing coverage across at most three
+incomplete minute bins, using the most recent preceding eligible Leaf
+observation. This fixes the earlier policy's counting of each partial bin as a
+full missing minute. Because the resampler withholds partial-bin means, the
+entire incomplete bin is estimated, including its observed portion; it is not
+verified energy. The estimate is causal, restricted to recorder provenance
+without conflicts, and never changes raw measurements or baseload targets.
+Unanchored gaps, conflicts, more missing duration or estimated bins, or
+incomplete 24-hour context remain ineligible. Other resolutions retain the
+complete-window rule. `leaf_energy_24h_estimated_minutes` and
+`leaf_energy_24h_missing_seconds` label estimated features; training metadata
+records the policy and estimated-row count.
 
 Each measurement retains source validity, coverage fraction, provenance,
 conflict status, contributing import IDs and mapped entities. DataFrame
@@ -59,8 +63,10 @@ feature contract is version 2, with 18 ordered inputs. Training writes it to
 `state/model_training_metadata.json` and embeds it in the booster as
 `baseload_feature_contract`; `state/model_features.json` stores the ordered list.
 Archive prediction and hindsight evaluation require matching metadata, embedded
-contract, ordered feature list, actual booster feature names and matching
-archive Leaf-estimation policy in training metadata. Old or mixed
+contract, ordered feature list, actual booster feature names and a supported
+archive Leaf-estimation policy in training metadata. The previous two-bin
+training policy remains explicitly compatible with a warning; models trained
+under it did not see the newly admitted three-partial-bin case. Old or mixed
 artifacts fail closed, with no implicit CSV fallback or fabricated features.
 Pipeline training checks also require the current metadata and feature list.
 

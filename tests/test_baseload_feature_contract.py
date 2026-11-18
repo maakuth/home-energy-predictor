@@ -85,6 +85,15 @@ def test_archive_rejects_model_without_matching_leaf_estimate_policy():
                                 json.dumps(contract), list(BASELOAD_FEATURES))
 
 
+def test_previously_deployed_leaf_policy_is_explicitly_compatible(capsys):
+    from utils.archive_quality import LEAF_ENERGY_PREVIOUS_ESTIMATE_POLICY
+    contract = baseload_feature_contract()
+    validate_baseload_model(list(BASELOAD_FEATURES), {'feature_contract': contract,
+        'archive_training': {'leaf_energy_estimate_policy': LEAF_ENERGY_PREVIOUS_ESTIMATE_POLICY}},
+        json.dumps(contract), list(BASELOAD_FEATURES))
+    assert 'earlier' in capsys.readouterr().out.lower()
+
+
 def test_training_omits_forecast_and_persists_explicit_contract(tmp_path, monkeypatch):
     from process_data import process_frame
     from train_model import train

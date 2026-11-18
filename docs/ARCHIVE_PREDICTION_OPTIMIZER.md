@@ -51,8 +51,11 @@ propagate; artifact/sidecar replacement is not a multi-file transaction.
 
 Prediction anchors use unfilled, aligned minute bins of all five shared meter
 definitions and `apply_training_policy`, at cutoff minus one and 24 hours. Leaf
-energy uses the same labelled, causal estimate of at most two missing minutes
-per day as archive training; conflicts and longer or unanchored gaps still fail.
+energy uses the same labelled, causal estimate as archive training: at most
+120 seconds of missing coverage in at most three partially or fully incomplete
+minute bins. Each incomplete bin is estimated in full from an earlier eligible
+reading, not treated as verified energy. Conflicts and longer or unanchored gaps
+still fail. The sidecar records the input policy and estimate diagnostics.
 A synthetic cutoff
 query row is missing data, never a future raw read or fabricated measurement.
 Shared heating remains the raw shared meter: no relay subtraction or forecast

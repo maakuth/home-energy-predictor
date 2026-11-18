@@ -18,7 +18,7 @@ from utils.db_utils import fetch_states_history
 from utils.git_utils import get_model_version
 from utils.sqlite_utils import get_db_connection, get_db_path
 from utils.archive_history import ArchiveHistory, add_history_arguments, history_from_arguments
-from utils.archive_quality import METERS, apply_training_policy
+from utils.archive_quality import LEAF_ENERGY_ESTIMATE_POLICY, METERS, apply_training_policy
 from utils.baseload_model import validate_baseload_model
 
 load_dotenv(override=True)
@@ -279,7 +279,8 @@ def generate_inference_data(
         
     return inference_data, timestamps
 
-def archive_inference_anchors(history: ArchiveHistory) -> tuple[float, float, float, float]:
+def archive_inference_anchors(history: ArchiveHistory, *,
+                              diagnostics: dict[str, Any] | None = None) -> tuple[float, float, float, float]:
     """Exact cutoff-relative meter bins; no smoothing, relay subtraction or fill.
 
     The synthetic cutoff row is only a lag-query position, never a measurement.
@@ -299,8 +300,13 @@ def archive_inference_anchors(history: ArchiveHistory) -> tuple[float, float, fl
     if not all(pd.notna(row[name]) and np.isfinite(row[name]) for name in names):
         raise ValueError('Archive inference anchors/Leaf prior-day coverage unavailable; refusing prediction')
     estimated_minutes = int(targets['leaf_energy_24h_estimated_minutes'].iloc[-1])
+    missing_seconds = float(targets['leaf_energy_24h_missing_seconds'].iloc[-1])
+    if diagnostics is not None:
+        diagnostics.update(estimated_bins=estimated_minutes, missing_seconds=missing_seconds,
+                           policy=LEAF_ENERGY_ESTIMATE_POLICY)
     if estimated_minutes > 0:
-        print(f"Leaf 24h energy feature estimated {estimated_minutes} missing minute(s) from preceding observations.")
+        print(f"Leaf 24h energy feature estimated {estimated_minutes} missing minute(s) from preceding observations "
+              f"({missing_seconds:.1f} seconds missing coverage).")
     return (float(targets['baseload_lag_1h'].iloc[-1]),
             float(targets['baseload_lag_24h'].iloc[-1]),
             float(targets['leaf_power_lag_1h'].iloc[-1]),
@@ -440,12 +446,14 @@ def predict(*, history: ArchiveHistory | None = None, model_dir: str | Path | No
             print(f"⚠️ Error calculating Leaf features: {e}")
             return 0.0, 0.0
 
+    leaf_energy_diagnostics: dict[str, Any] = {}
     if history is None:
         lag1h_val = get_baseload_at_lag(1)
         lag24h_val = get_baseload_at_lag(24)
         leaf_lag1h, leaf_energy_24h = get_leaf_features()
     else:
-        lag1h_val, lag24h_val, leaf_lag1h, leaf_energy_24h = archive_inference_anchors(history)
+        lag1h_val, lag24h_val, leaf_lag1h, leaf_energy_24h = archive_inference_anchors(
+            history, diagnostics=leaf_energy_diagnostics)
 
     print(f"⚓ Anchors - 1h: {lag1h_val:.2f}kW, 24h: {lag24h_val:.2f}kW, Leaf 24h: {leaf_energy_24h:.1f}kWh")
 
@@ -790,6 +798,7 @@ def predict(*, history: ArchiveHistory | None = None, model_dir: str | Path | No
             'model_version': git_version,
             'generated_at': generated_at,
             'current_telemetry_and_forecasts': 'live',
+            'leaf_energy_diagnostics': leaf_energy_diagnostics,
         }
         if training_metadata_content is not None:
             metadata['model_training'] = training_metadata_content

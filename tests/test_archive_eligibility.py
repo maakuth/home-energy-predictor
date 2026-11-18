@@ -118,3 +118,51 @@ def test_leaf_energy_never_estimates_conflicts():
     raw.loc[raw.index[100], 'leaf_power_conflict'] = True
     out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
     assert not out.iloc[1440].leaf_energy_24h_training_eligible
+
+
+def test_three_partial_bins_with_under_two_minutes_missing_are_estimated():
+    raw = minute_raw()
+    for offset, coverage in enumerate((0.743066, 0.170751, 0.257376)):
+        t = raw.index[100 + offset]
+        raw.loc[t, 'leaf_power'] = float('nan')
+        raw.loc[t, 'leaf_power_source_valid'] = False
+        raw.loc[t, 'leaf_power_coverage_fraction'] = coverage
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    row = out.iloc[1440]
+    assert row.leaf_energy_24h_training_eligible
+    assert row.leaf_energy_24h_estimated_minutes == 3
+    assert row.leaf_energy_24h_missing_seconds == pytest.approx(109.72842)
+    assert row.leaf_energy_24h == pytest.approx(12.)
+    assert not out.iloc[100:103].baseload_training_eligible.any()
+    assert out.iloc[100:103].baseload_power.isna().all()
+
+
+def test_three_partial_bins_over_two_minutes_missing_remain_ineligible():
+    raw = minute_raw()
+    for offset, coverage in enumerate((0.5, 0.1, 0.2)):
+        t = raw.index[100 + offset]
+        raw.loc[t, 'leaf_power'] = float('nan')
+        raw.loc[t, 'leaf_power_source_valid'] = False
+        raw.loc[t, 'leaf_power_coverage_fraction'] = coverage
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    assert not out.iloc[1440].leaf_energy_24h_training_eligible
+
+
+def test_bad_or_inconsistent_coverage_cannot_bypass_gap_limit():
+    raw = minute_raw()
+    for offset in range(3):
+        t = raw.index[100 + offset]
+        raw.loc[t, 'leaf_power'] = float('nan')
+        raw.loc[t, 'leaf_power_coverage_fraction'] = 1.0
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    assert not out.iloc[1440].leaf_energy_24h_training_eligible
+
+
+def test_four_partial_bins_remain_ineligible_even_when_missing_duration_is_short():
+    raw = minute_raw()
+    for offset in range(4):
+        t = raw.index[100 + offset]
+        raw.loc[t, 'leaf_power'] = float('nan')
+        raw.loc[t, 'leaf_power_coverage_fraction'] = 0.9
+    out = apply_training_policy(raw, pd.DataFrame(index=raw.index), 'complete-legacy')
+    assert not out.iloc[1440].leaf_energy_24h_training_eligible

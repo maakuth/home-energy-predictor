@@ -13,9 +13,13 @@ from utils.baseload_quality import baseload_targets, baseload_feature_contract
 LEGACY_POLICIES = ('verified-only', 'complete-legacy')
 METERS = ('total_power', 'solar_actual', 'battery_power', 'gshp_power', 'leaf_power')
 PREDICTOR_INPUTS = ('outside_temp', 'wind_speed')
-LEAF_ENERGY_ESTIMATE_POLICY = {
+LEAF_ENERGY_PREVIOUS_ESTIMATE_POLICY = {
     'version': 1, 'resolution_seconds': 60, 'max_missing_minutes': 2,
     'method': 'previous_eligible_recorder_value',
+}
+LEAF_ENERGY_ESTIMATE_POLICY = {
+    'version': 2, 'resolution_seconds': 60, 'max_missing_seconds': 120,
+    'max_estimated_bins': 3, 'method': 'previous_eligible_recorder_value',
 }
 
 
@@ -75,18 +79,26 @@ def apply_training_policy(raw: pd.DataFrame, features: pd.DataFrame,
         values = pd.to_numeric(raw['leaf_power'], errors='coerce').where(valid)
         recorder = raw['leaf_power_provenance'].eq('recorder')
         conflict_free = raw['leaf_power_conflict'].astype(str).str.lower().eq('false')
-        estimate = values.ffill(limit=2).where(~valid & recorder & conflict_free)
+        estimate = values.ffill(limit=3).where(~valid & recorder & conflict_free)
         combined = values.combine_first(estimate)
         missing = (~valid).astype(int).rolling('24h', closed='left', min_periods=1440).sum()
         estimated = estimate.notna().astype(int).rolling('24h', closed='left', min_periods=1440).sum()
+        coverage = pd.to_numeric(raw['leaf_power_coverage_fraction'], errors='coerce')
+        # If coverage is absent, out of range, or inconsistent with an invalid
+        # bin, conservatively count the entire minute as unknown.
+        partial = coverage.ge(0) & coverage.lt(1)
+        missing_seconds = ((1 - coverage).where(partial, 1.0) * 60).where(~valid, 0.0)
+        missing_seconds = missing_seconds.rolling('24h', closed='left', min_periods=1440).sum()
         energy = combined.rolling('24h', closed='left', min_periods=1440).sum() / 60000
-        acceptable = missing.le(2) & estimated.eq(missing)
+        acceptable = missing.le(3) & estimated.eq(missing) & missing_seconds.le(120 + 1e-7)
         out['leaf_energy_24h'] = energy.where(acceptable)
         out['leaf_energy_24h_training_eligible'] = out['leaf_energy_24h'].notna()
         out['leaf_energy_24h_estimated_minutes'] = estimated.where(acceptable)
+        out['leaf_energy_24h_missing_seconds'] = missing_seconds.where(acceptable)
     else:
         out['leaf_energy_24h_estimated_minutes'] = targets['leaf_energy_24h'].notna().map(
             {True: 0., False: np.nan})
+        out['leaf_energy_24h_missing_seconds'] = out['leaf_energy_24h_estimated_minutes']
     out['baseload_training_exclusion_reason'] = targets.baseload_exclusion_reason
     if 'baseload_target_valid' not in out:
         out['baseload_target_valid'] = baseload_targets(raw).baseload_target_valid

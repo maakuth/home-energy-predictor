@@ -56,6 +56,19 @@ def test_archive_forecast_uses_labelled_short_leaf_estimate(history, capsys):
     assert 'estimated 2 missing minute' in capsys.readouterr().out
 
 
+def test_archive_forecast_accepts_three_partial_bins_within_two_minutes(history):
+    context, frame, _ = history
+    for offset, coverage in enumerate((0.743066, 0.170751, 0.257376)):
+        t = frame.index[200 + offset]
+        frame.loc[t, 'leaf_power'] = np.nan
+        frame.loc[t, 'leaf_power_source_valid'] = False
+        frame.loc[t, 'leaf_power_coverage_fraction'] = coverage
+    diagnostics = {}
+    assert prediction.archive_inference_anchors(context, diagnostics=diagnostics) == pytest.approx((6., 6., 1000., 24.))
+    assert diagnostics['estimated_bins'] == 3
+    assert diagnostics['missing_seconds'] == pytest.approx(109.72842)
+
+
 def test_archive_forecast_still_rejects_long_leaf_gaps(history):
     context, frame, _ = history
     frame.loc[frame.index[200:203], 'leaf_power'] = np.nan
