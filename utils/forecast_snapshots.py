@@ -501,7 +501,7 @@ def collect(config: str | Path, *, execute: bool = False, now: float | None = No
     report_path = settings['reports_dir'] / f'forecast-snapshot-{stamp}-{uuid4().hex}.json'
     report['report_path'] = str(report_path)
     with report_path.open('x') as output:
-        output.write(json.dumps(report, indent=2) + '\\n')
+        output.write(json.dumps(report, indent=2) + '\n')
 
     lock = None
     try:
@@ -588,7 +588,7 @@ def _replace_forecast_report(path: Path, report: dict[str, Any]) -> None:
     try:
         with temporary.open('x') as output:
             owned = True
-            output.write(json.dumps(report, indent=2, allow_nan=False) + '\\n')
+            output.write(json.dumps(report, indent=2, allow_nan=False) + '\n')
         temporary.replace(path)
     finally:
         if owned:
