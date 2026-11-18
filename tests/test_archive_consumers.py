@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import numpy as np
 import pandas as pd
 import pytest
+from xgboost import XGBRegressor
 
 import predict_future as prediction
 import optimize_plan as optimizer
@@ -297,6 +298,54 @@ def test_missing_solar_has_labelled_horizon_and_fetches_prices(prediction_runtim
     assert prices.call_count == 1
     metadata = json.loads(output.with_name('future_predictions_metadata.json').read_text())
     assert metadata['solar_forecast_fallback']['method'] == 'zero_generation_assumption'
+
+
+def test_full_prediction_with_real_complete_case_xgboost_and_combined_fallbacks(
+        prediction_runtime, history, monkeypatch):
+    """A tree trained without NaNs still has a default branch for missing inputs."""
+    from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
+
+    context, _ = prediction_runtime
+    _, frame, reader = history
+    # Conflicting source data is ineligible, even if the numeric value is present.
+    frame.loc[CUTOFF - pd.Timedelta(hours=1), 'battery_power_conflict'] = True
+    frame.loc[frame.index[200:203], 'leaf_power'] = np.nan
+    frame.loc[frame.index[0], 'total_power_conflict'] = True
+    monkeypatch.setattr(prediction, 'get_ha_state', lambda entity: None)
+    prices = Mock(side_effect=lambda timestamps, interval: (
+        [.1] * len(timestamps), [0] * len(timestamps), None, False, False, None))
+    monkeypatch.setattr(prediction, 'fetch_market_prices', prices)
+
+    # Every training cell is finite. Force splits on the affected lag so the
+    # prediction exercises a learned tree's default missing direction.
+    train = pd.DataFrame(0., index=range(64), columns=list(BASELOAD_FEATURES))
+    train['baseload_lag_1h'] = np.arange(64, dtype=float)
+    assert np.isfinite(train.to_numpy()).all()
+    fitted = XGBRegressor(n_estimators=3, max_depth=2, n_jobs=1)
+    fitted.fit(train, train['baseload_lag_1h'])
+    assert 'baseload_lag_1h' in fitted.get_booster().get_dump()[0]
+    fitted.get_booster().set_attr(baseload_feature_contract=json.dumps(baseload_feature_contract()))
+    fitted.save_model('state/energy_model.json')
+    monkeypatch.setattr(prediction.xgb, 'XGBRegressor', XGBRegressor)
+
+    prediction.predict(history=context)
+
+    output = Path(os.environ['TEST_PREDICTIONS_FILE'])
+    rows = json.loads(output.read_text())
+    timestamps = pd.to_datetime([row['timestamp'] for row in rows], utc=True)
+    assert len(rows) == 193
+    assert timestamps[0] == CUTOFF.floor('15min')
+    assert timestamps[-1] - timestamps[0] == pd.Timedelta(hours=48)
+    assert all(np.isfinite(row['predicted_baseload']) for row in rows)
+    for row in rows:
+        assert [row[key] for key in ('solar_forecast', 'solar_forecast_p10', 'solar_forecast_p90')] == [0., 0., 0.]
+    assert len(prices.call_args.args[0]) == len(rows)
+    metadata = json.loads(output.with_name('future_predictions_metadata.json').read_text())
+    assert set(metadata['anchor_fallbacks']) == {
+        'baseload_lag_1h', 'baseload_lag_24h', 'leaf_energy_24h'}
+    assert metadata['solar_forecast_fallback'] == {
+        'method': 'zero_generation_assumption', 'horizon_hours': 48}
+    assert reader.call_args_list[0].args[1] == context.cutoff
 
 
 @pytest.mark.parametrize('failure', ['predictions', 'prices', 'empty'])
