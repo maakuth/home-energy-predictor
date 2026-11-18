@@ -33,7 +33,7 @@ def test_failed_planning_installs_local_labelled_idle_plan(tmp_path, monkeypatch
     assert entry['effective_cost'] is None
     assert 'predicted_usage_kwh' not in entry and 'export_unit_price' not in entry
     assert derive_sg_ready_bits(entry, [entry]) == (0, 0)
-    assert not any('push_to_ha.py' in argv for argv in calls)
+    assert calls[-1][-2:] == ['push_to_ha.py', '--plan-only']
     metadata = json.loads((tmp_path / 'optimization_plan_metadata.json').read_text())
     assert metadata['history_cutoff'] == CUTOFF
     assert metadata['failed_step'] == failure
@@ -99,3 +99,22 @@ def test_entry_is_current_and_preserves_manual_leaf_and_idle_guard(tmp_path, mon
     power, action = adjust_idle_for_cheap_export(
         0.0, 'idle', current.get('export_unit_price'), -5000, 0, 50, 90)
     assert (power, action) == (0.0, 'idle')
+
+
+def test_ha_invalidation_failure_is_reported_but_local_plan_remains(tmp_path, monkeypatch):
+    plan_file = tmp_path / 'optimization_plan.json'
+    monkeypatch.setenv('TEST_PLAN_FILE', str(plan_file))
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    def run(argv, **kwargs):
+        if 'predict_future.py' in argv or 'push_to_ha.py' in argv:
+            raise subprocess.CalledProcessError(1, argv)
+    with patch('utils.archive_pipeline.subprocess.run', side_effect=run), \
+         patch('utils.archive_pipeline._verify_output'):
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=tmp_path / 'writer.lock')
+    assert 'push_to_ha.py' in error.value.cmd
+    assert json.loads(plan_file.read_text())[0]['plan_quality'] == 'degraded'
+    metadata = json.loads((tmp_path / 'optimization_plan_metadata.json').read_text())
+    assert metadata['ha_sensor_status'] == 'stale_until_invalidation_confirmed'

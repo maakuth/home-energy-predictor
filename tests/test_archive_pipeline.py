@@ -186,11 +186,12 @@ def test_failed_ingest_and_prediction_produce_degraded_plan(tmp_path, monkeypatc
     with patch('utils.archive_pipeline.subprocess.run', side_effect=[
         subprocess.CalledProcessError(1, 'ingest'),
         subprocess.CalledProcessError(2, 'predict'),
+        None,
     ]) as run:
         execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
                      writer_lock_path=tmp_path / 'writer.lock')
     assert json.loads((tmp_path / 'optimization_plan_metadata.json').read_text())['failed_step'] == 'predict'
-    assert run.call_count == 2
+    assert run.call_count == 3
 
 
 def test_weekly_failed_ingest_does_not_train(tmp_path):
@@ -212,7 +213,7 @@ def test_missing_prediction_metadata_prevents_optimizer_and_publishing(tmp_path,
     with patch('utils.archive_pipeline.subprocess.run') as run:
         execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
                      writer_lock_path=tmp_path / 'writer.lock')
-    assert run.call_count == 2
+    assert run.call_count == 3
 
 
 def test_publish_requires_separate_explicit_approval():
@@ -295,4 +296,4 @@ def test_wrong_cutoff_sidecar_is_not_publishable(tmp_path, monkeypatch):
     with patch('utils.archive_pipeline.subprocess.run') as run:
         execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
                      writer_lock_path=tmp_path / 'writer.lock')
-    assert run.call_count == 2
+    assert run.call_count == 3

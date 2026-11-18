@@ -54,7 +54,7 @@ fi
   # 4. Optimize & Push (Uses XGBoost output from predict_future.py)
   echo "[4/4] Optimizing & Pushing Plan..."
   python3 optimize_plan.py
-  python3 push_to_ha.py
+  HEPO_PUBLISH_LOCK_FD=200 HEPO_PIPELINE_LOCK_PATH=/tmp/hepo.lock python3 push_to_ha.py
 
   echo "=== Update Complete: $(date) ==="
 

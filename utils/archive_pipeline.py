@@ -185,10 +185,18 @@ def execute_plan(plan: list[dict[str, Any]], history: ArchiveHistory, *, mode: s
         flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if mode == 'frequent' else 0)
         fcntl.flock(lock, flags)
 
+        def publish(argv: list[str]) -> None:
+            env = dict(os.environ, HEPO_PUBLISH_LOCK_FD=str(lock.fileno()),
+                       HEPO_PIPELINE_LOCK_PATH=str(Path(lock_path).resolve()))
+            subprocess.run(argv, check=True, env=env, pass_fds=(lock.fileno(),))
+
         def run_step(step: dict[str, Any]) -> None:
             if _configuration_hashes(history) != configuration:
                 raise ValueError('Source/policy configuration changed during pipeline run')
-            subprocess.run(step['argv'], check=True)
+            if step['name'] == 'publish':
+                publish(step['argv'])
+            else:
+                subprocess.run(step['argv'], check=True)
             if _configuration_hashes(history) != configuration:
                 raise ValueError('Source/policy configuration changed during pipeline run')
             _verify_output(step['name'], history)
@@ -224,8 +232,10 @@ def execute_plan(plan: list[dict[str, Any]], history: ArchiveHistory, *, mode: s
                 if _configuration_hashes(history) != configuration:
                     raise ValueError('Source/policy configuration changed during pipeline run') from error
                 reason = f'{step["name"]} failed: {type(error).__name__}: {error}'
-                print(f'⚠️ {reason}; installing local degraded idle plan, not publishing.', flush=True)
+                print(f'⚠️ {reason}; installing local degraded idle plan.', flush=True)
                 write_degraded_plan(history, step['name'], reason)
+                # Publish only unavailability markers, not degraded numeric data.
+                publish([sys.executable, 'push_to_ha.py', '--plan-only'])
                 return
 
 

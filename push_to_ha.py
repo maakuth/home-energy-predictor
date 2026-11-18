@@ -1,11 +1,30 @@
 from __future__ import annotations
 import json
 import os
+import fcntl
+from contextlib import contextmanager
 from typing import Any, Optional
 from utils.ha_utils import push_ha_state
 from utils.sg_ready import derive_sg_ready_bits, derive_sg_ready_mode
 from utils.battery_utils import get_current_plan_entry
 from utils.sqlite_utils import get_db_connection, db_exists
+
+
+@contextmanager
+def publication_lock(path: str):
+    """Serialize standalone publication with cooperating archive pipelines."""
+    inherited = os.getenv('HEPO_PUBLISH_LOCK_FD')
+    if inherited is not None:
+        fd = int(inherited)
+        held = os.fstat(fd)
+        target = os.stat(path)
+        if (held.st_dev, held.st_ino) != (target.st_dev, target.st_ino):
+            raise ValueError('Inherited publication lock does not match pipeline lock')
+        yield
+    else:
+        with open(path, 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
 
 def push_accuracy() -> None:
     """Reads the latest performance metrics from hepo.db and pushes to HA."""
@@ -41,7 +60,7 @@ def push_accuracy() -> None:
     except Exception as e:
         print(f"⚠️ Error pushing accuracy metrics: {e}")
 
-def push_plan() -> None:
+def push_plan() -> bool | None:
     print('Loading optimization plan...')
     # Support environment variable override for testing
     plan_file = os.getenv('TEST_PLAN_FILE', 'state/optimization_plan.json')
@@ -51,6 +70,30 @@ def push_plan() -> None:
     except FileNotFoundError:
         print(f'Error: {plan_file} not found.')
         return
+
+    # Never feed degraded plans to the numeric publisher: their price and
+    # forecasts are intentionally unknown. Replace old HA values explicitly.
+    if isinstance(plan, list) and any(
+        isinstance(entry, dict) and entry.get('plan_quality') == 'degraded'
+        for entry in plan
+    ):
+        entry = next(entry for entry in plan
+                     if isinstance(entry, dict) and entry.get('plan_quality') == 'degraded')
+        attributes = {
+            'plan_quality': 'degraded',
+            'data_status': 'unavailable',
+            'reason': entry.get('degraded_reason', 'degraded local plan'),
+            'source_plan_timestamp': entry.get('timestamp'),
+            'notice': 'Previous plan-derived HA values are stale; no forecast or price is available.',
+        }
+        entities = ('optimization_plan', 'predicted_24h_usage', 'effective_cost',
+                    'low_cost_signal', 'gshp_intent', 'resistive_heater_intent',
+                    'bulk_heater_intent', 'leaf_charging_intent')
+        results = [push_ha_state(f'sensor.hepo_{name}', 'unavailable', dict(attributes))
+                   for name in entities]
+        if not all(results):
+            print('⚠️ Could not invalidate all stale HA plan sensors; some may retain old values.')
+        return all(results)
 
     # State: Total predicted energy from current hour to end of tomorrow (sum of hourly predictions)
     total_energy = sum(p['predicted_usage_kwh'] for p in plan)
@@ -168,5 +211,11 @@ def push_plan() -> None:
     push_ha_state('sensor.hepo_predicted_24h_usage', f"{usage_24h:.2f}", attributes_24h)
 
 if __name__ == '__main__':
-    push_plan()
-    push_accuracy()
+    import sys
+    plan_only = sys.argv[1:] == ['--plan-only']
+    with publication_lock(os.getenv('HEPO_PIPELINE_LOCK_PATH', '/tmp/hepo.lock')):
+        result = push_plan()
+        if not plan_only:
+            push_accuracy()
+    if result is False:
+        sys.exit(1)

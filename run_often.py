@@ -500,6 +500,25 @@ def main():
 
     interval_minutes = _get_interval_minutes()
     current = get_current_plan_entry(plan, interval_minutes=interval_minutes, now=now)
+    # An expired degraded plan has no valid schedule, but manual battery
+    # control must still pass through the ordinary guards. Reconstruct only
+    # the safe intents, never reuse expired dispatch or telemetry.
+    if current is None and len(plan) == 1 and isinstance(plan[0], dict) and plan[0].get('plan_quality') == 'degraded':
+        try:
+            expired = datetime.fromisoformat(str(plan[0]['timestamp']))
+            if expired.tzinfo is not None and expired < slot_start(now, interval_minutes):
+                current = {
+                    'timestamp': slot_start(now, interval_minutes).isoformat(),
+                    'plan_quality': 'degraded', 'battery_power_kw': 0.0,
+                    'battery_action': 'idle', 'effective_cost': None,
+                    'gshp_intent': 'STOP', 'resistive_heater_intent': 'OFF',
+                    'bulk_heater_intent': 'OFF', 'leaf_intent': 'OFF',
+                }
+                plan = [current]
+                diagnostic['degraded_expired_slot'] = True
+                print('Expired degraded plan: applying safe intents with manual battery control.')
+        except (KeyError, TypeError, ValueError):
+            pass
     if current is None:
         print('No exact current plan entry found; applying safe outputs')
         bulk_recovery = _bulk_recovery_required(accumulator_temp)

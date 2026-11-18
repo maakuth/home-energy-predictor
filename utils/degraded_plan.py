@@ -46,7 +46,9 @@ def write_degraded_plan(history: ArchiveHistory, failed_step: str, reason: str) 
     metadata = {'plan_quality': 'degraded', 'failed_step': failed_step, 'reason': reason,
                 'history_cutoff': history.cutoff, 'archive_path': str(Path(history.path).resolve()),
                 'legacy_policy': history.legacy_policy, 'price_source': None,
-                'published_to_ha': False}
+                 'published_to_ha': False,
+                 'ha_sensor_status': 'stale_until_invalidation_confirmed',
+                 'ha_invalidation': 'attempted_by_pipeline_publisher_not_verified_by_sidecar'}
     path = Path(os.getenv('TEST_PLAN_FILE', 'state/optimization_plan.json'))
     # Metadata first: the plan itself carries its label, so unlocked readers
     # never need to join two independently replaced files to recognize it.

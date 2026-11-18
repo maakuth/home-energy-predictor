@@ -92,15 +92,28 @@ it as a cheap price. No safe price-aware planning is attempted: the fallback has
 no independently validated current prices, load or battery state. Live control
 still applies manual overrides, thermal recovery, phase limits, ramping and other
 guards; therefore idle is an intent, not a guarantee of instantaneous zero power.
-Manual Leaf charging remains protected. The current-slot plan expires at the
-next interval; on a missing current slot the existing controller takes its safe
-outputs *before* checking the battery manual override. Long runs and missed
-schedules can thus leave no current degraded entry.
+Manual Leaf charging remains protected. Once its single slot expires, the live
+controller reconstructs safe idle/STOP/OFF intents for the current slot without
+reusing old forecasts or dispatch. Manual battery control then runs through the
+normal SoC, fuse and thermal guards. This does not refresh the plan file or
+produce price-aware scheduling; the diagnostic records `degraded_expired_slot`.
+Future-dated or malformed degraded entries do not receive this treatment.
 
-The degraded plan is not sent through `push_to_ha.py`: that publisher requires
-numeric usage and defaults missing prices to zero, which would fabricate
-telemetry and cheap-price signals. HA plan sensors may consequently remain stale;
-other independent invocations of the publisher are not guarded. Plan replacement
+The runner invokes `push_to_ha.py --plan-only` after installing a degraded plan;
+independent publisher invocations use the same check. Rather than publishing
+invented numeric data, the publisher marks the plan, usage, price, low-cost and
+managed-load intent sensors `unavailable`, with degraded status, source slot and
+a stale-data notice in their attributes. SG Ready is not invalidated here: its
+live runtime controller continues to own those safety-relevant outputs. Failed
+or partially failed HA writes return a failure, and some sensors may retain stale
+values; the local sidecar explicitly says HA invalidation is unverified. HA
+outages cannot be corrected by local metadata alone.
+
+Standalone publisher processes take `/tmp/hepo.lock`; pipeline and CSV frequent
+jobs pass their already-held lock to their publisher subprocess. Standalone
+publishers must set `HEPO_PIPELINE_LOCK_PATH` to match any custom archive
+pipeline lock. Non-cooperating writers or publishers remain outside this
+serialization. Plan replacement
 is atomic, with unique temporary files; metadata is replaced first and is not a
 transaction with the plan. Readers should trust the label in the plan itself.
 A failed plan replacement can leave old plan plus new metadata, and other
