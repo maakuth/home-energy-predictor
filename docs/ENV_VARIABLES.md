@@ -108,12 +108,16 @@ When `GSHP_OPTIMIZE_ENABLED`, `RESISTIVE_HEATER_OPTIMIZE_ENABLED`, and
 autonomous heating electricity. It uses the source-valid shared-meter mean from
 the preceding 24 hours of `state/raw_data.csv` as a constant persistence forecast
 in CSV compatibility mode. Explicit archive mode uses eligible original shared
-meter bins in the day preceding its fixed cutoff, logs observed coverage and
-fails if none are available; it never retries a CSV or silently assumes zero.
+meter bins in the day preceding its fixed cutoff and logs observed coverage.
+When history is unavailable the optimizer never retries a CSV; it uses zero
+as a labelled planning assumption, not as an observation.
 This is added to battery/grid load, not to heater dispatch: no heater is enabled
 by this forecast. `uncontrolled_heating_kw` in the plan distinguishes it from
 scheduled heating and ML baseload. Observed coverage is logged. Missing history
 produces an explicit warning and no added forecast; it is not proof of zero load.
+Each plan slot labels `heating_forecast_source` as `observed_mean`, `managed`,
+`unavailable`, or `frozen`. An unavailable forecast can underestimate demand
+and grid import. Current-slot discrete-load latching remains in effect.
 This baseline is not weather-adjusted and is not used when any heating dispatch
 is enabled, to avoid double-counting managed heat sources.
 
@@ -127,7 +131,7 @@ Consumed by `plan_gshp_dispatch()` in `optimize_plan.py`.| Variable | Descriptio
 | `GSHP_MIN_TEMP` | Hard minimum accumulator temperature. | `42.0` | °C. If the temperature drops to or below this, the heat pump **must** start regardless of price. |
 | `THERMAL_MIN_TEMP_MARGIN_C` | Thermal safety margin above the hard minimum. | `0.5` | °C. The joint planner penalizes any physical shortfall below `GSHP_MIN_TEMP + margin`. When bulk heating is enabled, real-time control runs the bulk element continuously below this floor. |
 | `GSHP_MAX_TEMP` | Hard maximum accumulator temperature. | `55.0` | °C. If the temperature reaches this, the heat pump **must** stop. |
-| `GSHP_IS_RUNNING` | Initial on/off state of the heat pump. | `false` | bool. Used for explicitly configured/offline planning; live optimization refuses to publish a new plan when shared-power telemetry is unavailable. Existing plans are not removed. |
+| `GSHP_IS_RUNNING` | Initial on/off state of the heat pump. | `false` | bool. Used for explicitly configured/offline planning. Live optimization refuses unknown shared-power telemetry if any heater dispatch is enabled. With all heating dispatch disabled it may plan, labelling `gshp_compressor_state` as `unknown`. |
 | `GSHP_ELECTRIC_POWER_KW` | Fallback nominal electrical power. | `4.0` | kW. **Only used when both `GSHP_POWER_MIN_KW` and `GSHP_POWER_MAX_KW` are absent.** In that case both min and max are set to this value. |
 | `GSHP_COP` | Coefficient of Performance. | `3.5` | —. `thermal_kw = electric_kw * COP`. |
 | `GSHP_HEAT_LOSS_K` | House heat-loss coefficient. | `0.1` | kW/°C. Used in the demand formula: `max(0, (20.0 - outside_temp) * heat_loss_k)`. Code default is `0.135`. |

@@ -179,6 +179,17 @@ def _require_gshp_compressor_state(state: bool | None) -> bool:
     return state
 
 
+def _resolve_gshp_compressor_state(state: bool | None) -> bool:
+    if state is None and not any((
+        get_env_bool('GSHP_OPTIMIZE_ENABLED', True),
+        get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False),
+        get_env_bool('BULK_HEATER_OPTIMIZE_ENABLED', False),
+    )):
+        print('⚠️ GSHP compressor state unknown; heating dispatch disabled.')
+        return False  # Internal placeholder only; published state remains unknown.
+    return _require_gshp_compressor_state(state)
+
+
 def get_env_bool(name: str, default: bool = False) -> bool:
     raw = planning_getenv(name)
     if raw is None:
@@ -784,9 +795,10 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
     gshp_power_state = get_ha_state(os.getenv('GSHP_POWER_ENTITY', 'sensor.mlp_teho'))
     resistive_state = get_ha_state(os.getenv('RESISTIVE_HEATER_ENTITY', 'switch.mlp_vastus_output_0'))
     bulk_state = get_ha_state(os.getenv('BULK_HEATER_ENTITY', 'switch.mlp_vastus_output_1'))
-    is_hp_currently_running = _require_gshp_compressor_state(_is_gshp_compressor_running(
+    compressor_state = _is_gshp_compressor_running(
         gshp_power_state, resistive_state, bulk_state,
-    ))
+    )
+    is_hp_currently_running = _resolve_gshp_compressor_state(compressor_state)
 
     accumulator_entity = os.getenv(
         'GSHP_ACCUMULATOR_TEMP_ENTITY', 'sensor.mlp_varaajan_lampotila',
@@ -824,7 +836,14 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
         print(f"⚠️ Error detecting fireplace status: {e}")
 
     if history is not None:
-        is_fireplace_currently_on = archive_fireplace_detected(history)
+        try:
+            is_fireplace_currently_on = archive_fireplace_detected(history)
+        except (OSError, ValueError, KeyError, sqlite3.Error) as error:
+            if any((get_env_bool('GSHP_OPTIMIZE_ENABLED', True),
+                    get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False),
+                    get_env_bool('BULK_HEATER_OPTIMIZE_ENABLED', False))):
+                raise
+            print(f'⚠️ Fireplace history unavailable: {error}; no fireplace evidence.')
 
     os.environ['GSHP_INITIAL_TEMP'] = str(current_acc_temp)
     os.environ['GSHP_IS_RUNNING'] = '1' if is_hp_currently_running else '0'
@@ -838,6 +857,10 @@ def optimize(*, history: ArchiveHistory | None = None) -> None:
         solar_array, solar_array_p10, solar_array_p90, current_acc_temp,
         is_hp_currently_running, is_fireplace_currently_on, history=history,
     )
+    for entry in final_plan:
+        entry['gshp_compressor_state'] = (
+            'unknown' if compressor_state is None else 'running' if compressor_state else 'stopped'
+        )
     publish_optimization(final_plan, history=history)
 
 
@@ -961,13 +984,15 @@ def _calculate_optimization(
     
     # We only use Baseload + GSHP for battery optimization.
     # Charging an EV from a stationary battery is double-conversion loss.
+    heating_status: dict[str, str] = {'source': 'frozen'}
     if frozen_runtime is not None:
         uncontrolled_heating_kw = np.asarray(frozen_runtime.uncontrolled_heating_kw, dtype=float)
         if uncontrolled_heating_kw.shape != predictions.shape or not np.isfinite(uncontrolled_heating_kw).all():
             raise ValueError('Frozen uncontrolled heating must be finite and aligned')
     else:
-        uncontrolled_heating_kw = (load_uncontrolled_heating_forecast(prediction_timestamps, history=history)
-                                   if history is not None else load_uncontrolled_heating_forecast(prediction_timestamps))
+        uncontrolled_heating_kw = load_uncontrolled_heating_forecast(
+            prediction_timestamps, history=history, allow_missing=True, status=heating_status,
+        )
     battery_optimization_load_kw = predictions + uncontrolled_heating_kw + planned_gshp_kw + planned_resistive_kw + planned_bulk_heater_kw
 
     # NOTE: planned_ev_kw is NOT included in total_planned_load_kw.
@@ -1128,6 +1153,7 @@ def _calculate_optimization(
             'timestamp': ts.isoformat(),
             'predicted_baseload_kw': p_baseload_kw,
             'uncontrolled_heating_kw': float(uncontrolled_heating_kw[i]),
+            'heating_forecast_source': heating_status['source'],
             'sarima_lower_95': float(sarima_lower.iloc[i]) if not np.isnan(sarima_lower.iloc[i]) else None,
             'sarima_upper_95': float(sarima_upper.iloc[i]) if not np.isnan(sarima_upper.iloc[i]) else None,
             'planned_gshp_kw': p_gshp_kw,

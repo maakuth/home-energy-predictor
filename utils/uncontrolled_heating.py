@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,8 @@ from utils.archive_history import ArchiveHistory
 
 def load_uncontrolled_heating_forecast(
     timestamps: list[Any] | np.ndarray, history_path: str | Path | None = None,
-    *, history: ArchiveHistory | None = None,
+    *, history: ArchiveHistory | None = None, allow_missing: bool = False,
+    status: dict[str, str] | None = None,
 ) -> np.ndarray:
     """Use a 24-hour observed-mean persistence baseline when all dispatch is off.
 
@@ -20,10 +22,13 @@ def load_uncontrolled_heating_forecast(
     Only source-valid raw observations before the first plan slot are used.
     Coverage is logged; unavailable history leaves legacy zero-load behavior
     with an explicit warning rather than inventing measurements.
-    Explicit archive mode instead uses the fixed cutoff's preceding day and
-    raises on unavailable history; partial coverage remains labelled observed.
+    Explicit archive mode uses the fixed cutoff's preceding day and normally
+    raises on unavailable history. Opt-in fallback reports an assumption, not
+    an observation, through status.
     """
     zeros = np.zeros(len(timestamps))
+    if status is not None:
+        status['source'] = 'managed'
     if len(timestamps) == 0:
         return zeros
     for key, default in [('GSHP_OPTIMIZE_ENABLED', 'true'),
@@ -34,14 +39,24 @@ def load_uncontrolled_heating_forecast(
     if history is not None:
         if history_path is not None:
             raise ValueError('Choose archive history or compatibility history_path, not both')
-        frame = history.raw(history.cutoff - 86400, history.cutoff, measurements=['gshp_power'])
-        power = pd.to_numeric(frame['gshp_power'], errors='coerce')
-        power = power.where(history.eligible(frame, 'gshp_power') & np.isfinite(power) & power.ge(0)).dropna()
-        print(f'Uncontrolled heating archive coverage: {len(power)}/1440 eligible minute samples '
-              f'(policy={history.legacy_policy}).')
-        if power.empty:
-            raise ValueError('Archive uncontrolled heating history unavailable; refusing zero-load fallback')
+        try:
+            frame = history.raw(history.cutoff - 86400, history.cutoff, measurements=['gshp_power'])
+            power = pd.to_numeric(frame['gshp_power'], errors='coerce')
+            power = power.where(history.eligible(frame, 'gshp_power') & np.isfinite(power) & power.ge(0)).dropna()
+            print(f'Uncontrolled heating archive coverage: {len(power)}/1440 eligible minute samples '
+                  f'(policy={history.legacy_policy}).')
+            if power.empty:
+                raise ValueError('Archive uncontrolled heating history unavailable; refusing zero-load fallback')
+        except (OSError, ValueError, KeyError, sqlite3.Error) as error:
+            if not allow_missing:
+                raise
+            if status is not None:
+                status['source'] = 'unavailable'
+            print(f'⚠️ Uncontrolled heating forecast unavailable: {error}; zero is a planning assumption, not a measurement.')
+            return zeros
         mean_kw = float(power.mean()) / 1000.0
+        if status is not None:
+            status['source'] = 'observed_mean'
         print(f'Uncontrolled heating forecast: {mean_kw:.3f} kW (24h observed mean; '
               'not weather-adjusted). Heating dispatch remains disabled.')
         return np.full(len(timestamps), mean_kw)
@@ -63,9 +78,13 @@ def load_uncontrolled_heating_forecast(
         if power.empty:
             raise ValueError('no source-valid heating observations in the preceding 24 hours')
         mean_kw = float(power.mean()) / 1000.0
+        if status is not None:
+            status['source'] = 'observed_mean'
         print(f'Uncontrolled heating forecast: {mean_kw:.3f} kW (24h observed mean; '
               f'{len(power)}/{int(86400 / step)} valid samples). Heating dispatch remains disabled.')
         return np.full(len(timestamps), mean_kw)
     except (OSError, ValueError, KeyError) as error:
+        if status is not None:
+            status['source'] = 'unavailable'
         print(f'⚠️ Uncontrolled heating forecast unavailable: {error}; autonomous heating load is not accounted for.')
         return zeros

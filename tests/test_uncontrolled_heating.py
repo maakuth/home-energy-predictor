@@ -51,6 +51,52 @@ def test_missing_history_is_explicit_not_a_control_command(uncontrolled, capsys)
     assert 'unavailable' in capsys.readouterr().out.lower()
 
 
+def test_archive_missing_history_can_be_labelled_for_planning(uncontrolled):
+    from unittest.mock import Mock
+    history = Mock()
+    history.cutoff = 100000
+    history.raw.side_effect = OSError('archive unavailable')
+    status = {}
+    result = load_uncontrolled_heating_forecast([uncontrolled[1]], history=history,
+                                                allow_missing=True, status=status)
+    assert result.tolist() == [0.0]
+    assert status['source'] == 'unavailable'
+
+
+def test_missing_telemetry_and_history_publish_labelled_unmanaged_plan(uncontrolled, monkeypatch, tmp_path):
+    import optimize_plan
+    import os
+    from pathlib import Path
+    import sqlite3
+    _, start = uncontrolled
+    monkeypatch.setenv('TEST_TMP_DIR', str(tmp_path))
+    monkeypatch.setenv('BATTERY_PLANNER_TYPE', 'none')
+    monkeypatch.setenv('HEPO_DISABLE_BATTERY', 'true')
+    monkeypatch.setenv('LEAF_OPTIMIZE_ENABLED', 'false')
+    predictions = [{'timestamp': (start + pd.Timedelta(minutes=15 * i)).isoformat(),
+                    'predicted_baseload': 2.0, 'solar_forecast': 0.0,
+                    'outside_temp': 5.0, 'is_fallback_price': 0, 'ev_position': 0} for i in range(4)]
+    monkeypatch.setattr(optimize_plan, 'fetch_market_prices', lambda *args: ([0.1] * 4, [0] * 4, 'test', False, False, None))
+    monkeypatch.setattr(optimize_plan, 'get_ha_state', lambda entity: None)
+    monkeypatch.setattr(optimize_plan, 'fetch_states_history', lambda *args, **kwargs: {})
+    monkeypatch.setattr(optimize_plan, 'get_db_connection', lambda: sqlite3.connect(os.environ['TEST_DB_PATH']))
+    Path(os.environ['TEST_PREDICTIONS_FILE']).write_text(json.dumps(predictions))
+    optimize_plan.optimize()
+    plan = json.loads(Path(os.environ['TEST_PLAN_FILE']).read_text())
+    assert all(p['heating_forecast_source'] == 'unavailable' for p in plan)
+    assert all(p['gshp_compressor_state'] == 'unknown' for p in plan)
+    assert all(p['gshp_intent'] == 'STOP' and p['resistive_heater_intent'] == 'OFF'
+               and p['bulk_heater_intent'] == 'OFF' for p in plan)
+
+
+@pytest.mark.parametrize('control', ['GSHP_OPTIMIZE_ENABLED', 'RESISTIVE_HEATER_OPTIMIZE_ENABLED', 'BULK_HEATER_OPTIMIZE_ENABLED'])
+def test_unknown_compressor_remains_forbidden_with_any_managed_heater(uncontrolled, monkeypatch, control):
+    from optimize_plan import _resolve_gshp_compressor_state
+    monkeypatch.setenv(control, 'true')
+    with pytest.raises(RuntimeError, match='telemetry unavailable'):
+        _resolve_gshp_compressor_state(None)
+
+
 @pytest.mark.parametrize('problem', ['all_invalid', 'missing_provenance', 'duplicate_timestamps'])
 def test_unusable_history_is_not_treated_as_observed_heating(uncontrolled, capsys, problem):
     path, start = uncontrolled
