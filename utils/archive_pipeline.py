@@ -192,13 +192,28 @@ def execute_plan(plan: list[dict[str, Any]], history: ArchiveHistory, *, mode: s
                 raise ValueError('Source/policy configuration changed during pipeline run')
             _verify_output(step['name'], history)
 
+        if mode == 'frequent':
+            _reset_net_metering(history.cutoff)
         with writer_path.open('a') as writer:
             # Match the collector's nonblocking shared staging lock. Do not hold
             # it during training, prediction or optimization.
-            fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if mode == 'frequent':
-                _reset_net_metering(history.cutoff)
-            run_step(plan[0])
+            try:
+                fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if mode != 'frequent':
+                    raise
+                print('⚠️ Archive writer busy; skipping ingestion and attempting prediction '
+                      'from the existing archive. Input eligibility remains enforced.', flush=True)
+            else:
+                try:
+                    run_step(plan[0])
+                except subprocess.CalledProcessError:
+                    if mode != 'frequent':
+                        raise
+                    if _configuration_hashes(history) != configuration:
+                        raise ValueError('Source/policy configuration changed during pipeline run')
+                    print('⚠️ Ingestion failed; skipping ingestion and attempting prediction '
+                          'from the existing archive. Input eligibility remains enforced.', flush=True)
         for step in plan[1:]:
             run_step(step)
 

@@ -12,6 +12,12 @@ Optional `--sources`, `--measurement-policy`, `--allow-legacy`,
 immutable `ArchiveHistory` context. Omitting archive options preserves the
 compatibility route. Archive errors never retry PostgreSQL or CSV.
 
+During frequent execution only, a busy archive writer or a failed ingestion
+subprocess is logged and prediction is attempted from the existing archive.
+The fixed cutoff, source configuration and input-eligibility checks still
+apply; the existing archive may not have sufficient data. Weekly training
+continues to stop when ingestion fails or the writer is busy.
+
 Archive prediction may also take `--model-dir /absolute/candidate/state` to
 select a separate model bundle rather than `state/`. It reads the model, feature
 list and training metadata from that directory, checks their compatibility and

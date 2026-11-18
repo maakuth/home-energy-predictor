@@ -129,7 +129,7 @@ def test_ingest_uses_shared_writer_lock_only_for_ingestion(tmp_path):
     assert held == [True, False, False, False]
 
 
-def test_busy_writer_lock_stops_before_reset_or_ingestion(tmp_path):
+def test_busy_writer_lock_uses_existing_archive_for_prediction(tmp_path):
     import fcntl
     plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
                       recorder_namespace='ha', approve_publish=True)
@@ -137,12 +137,13 @@ def test_busy_writer_lock_stops_before_reset_or_ingestion(tmp_path):
     with writer.open('a') as other:
         fcntl.flock(other, fcntl.LOCK_EX)
         with patch('utils.archive_pipeline.subprocess.run') as run, \
+             patch('utils.archive_pipeline._verify_output'), \
              patch('utils.archive_pipeline._reset_net_metering') as reset:
-            with pytest.raises(BlockingIOError):
-                execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
-                             writer_lock_path=writer)
-        run.assert_not_called()
-        reset.assert_not_called()
+            execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=writer)
+        assert run.call_count == 3
+        assert 'predict_future.py' in run.call_args_list[0].args[0]
+        reset.assert_called_once_with(CUTOFF)
 
 
 @pytest.mark.parametrize('writer', [None, 'relative.lock'])
@@ -164,14 +165,43 @@ def test_writer_lock_cannot_alias_archive(tmp_path):
                      writer_lock_path='/offline/history.sqlite')
 
 
-def test_failed_ingest_stops_before_predict_optimize_or_publish(tmp_path):
+def test_failed_ingest_attempts_prediction_from_existing_archive(tmp_path, capsys):
     plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
                       recorder_namespace='ha', approve_publish=True)
     import subprocess
-    with patch('utils.archive_pipeline.subprocess.run', side_effect=subprocess.CalledProcessError(1, 'ingest')) as run:
-        with pytest.raises(subprocess.CalledProcessError):
+    with patch('utils.archive_pipeline.subprocess.run',
+               side_effect=[subprocess.CalledProcessError(1, 'ingest'), None, None, None]) as run, \
+         patch('utils.archive_pipeline._verify_output'):
+        execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
+                     writer_lock_path=tmp_path / 'writer.lock')
+    assert run.call_count == 4
+    assert 'skipping ingestion' in capsys.readouterr().out
+
+
+def test_failed_ingest_does_not_mask_prediction_failure(tmp_path):
+    import subprocess
+    plan = build_plan('frequent', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha', approve_publish=True)
+    with patch('utils.archive_pipeline.subprocess.run', side_effect=[
+        subprocess.CalledProcessError(1, 'ingest'),
+        subprocess.CalledProcessError(2, 'predict'),
+    ]) as run:
+        with pytest.raises(subprocess.CalledProcessError) as error:
             execute_plan(plan, request(), mode='frequent', lock_path=tmp_path / 'pipeline.lock',
                          writer_lock_path=tmp_path / 'writer.lock')
+    assert error.value.cmd == 'predict'
+    assert run.call_count == 2
+
+
+def test_weekly_failed_ingest_does_not_train(tmp_path):
+    import subprocess
+    plan = build_plan('weekly', request(), bootstrap_start=CUTOFF - 86400,
+                      recorder_namespace='ha')
+    with patch('utils.archive_pipeline.subprocess.run',
+               side_effect=subprocess.CalledProcessError(1, 'ingest')) as run:
+        with pytest.raises(subprocess.CalledProcessError):
+            execute_plan(plan, request(), mode='weekly', lock_path=tmp_path / 'pipeline.lock',
+                         writer_lock_path=tmp_path / 'writer.lock', approve_model_write=True)
     assert run.call_count == 1
 
 
