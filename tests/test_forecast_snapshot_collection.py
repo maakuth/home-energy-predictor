@@ -192,6 +192,32 @@ def test_shell_csv_mode_without_unit_does_not_invoke_systemctl(tmp_path):
     assert not system_log.exists()
 
 
+def test_shell_csv_mode_trigger_timeout_is_bounded(tmp_path):
+    script = (ROOT / "run_frequent.sh").read_text().replace("/tmp/hepo.lock", str(tmp_path / "hepo.lock"))
+    (tmp_path / "run_frequent.sh").write_text(script)
+    activation = tmp_path / ".venv" / "bin" / "activate"
+    activation.parent.mkdir(parents=True)
+    activation.write_text(":\n")
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    python = commands / "python3"
+    python.write_text("#!/bin/bash\nexit 0\n")
+    python.chmod(0o755)
+    (commands / "python").symlink_to(python)
+    systemctl = commands / "systemctl"
+    systemctl.write_text("#!/bin/bash\nsleep 5\nexit 0\n")
+    systemctl.chmod(0o755)
+    system_log = tmp_path / "systemctl.log"
+    env = {
+        **os.environ,
+        "PATH": str(commands) + ":" + os.environ["PATH"],
+        "FORECAST_SNAPSHOT_SYSTEMD_UNIT": "hepo-forecast-snapshot.service",
+    }
+    result = subprocess.run(["bash", str(tmp_path / "run_frequent.sh")], cwd=tmp_path, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "Forecast snapshot trigger failed" in result.stderr
+
+
 def test_run_frequent_shell_has_no_background_snapshot_subprocess():
     text = (ROOT / "run_frequent.sh").read_text()
     assert "--no-block" in text

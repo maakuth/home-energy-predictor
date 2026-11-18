@@ -26,7 +26,7 @@ fi
 # it out of this optimization cgroup and it cannot delay or fail this run.
 # Trigger failures are reported and ignored.
 if [ -n "${FORECAST_SNAPSHOT_SYSTEMD_UNIT:-}" ]; then
-  if ! systemctl --user start --no-block "$FORECAST_SNAPSHOT_SYSTEMD_UNIT"; then
+  if ! timeout 2s systemctl --user start --no-block "$FORECAST_SNAPSHOT_SYSTEMD_UNIT"; then
     echo "⚠️ Forecast snapshot trigger failed for $FORECAST_SNAPSHOT_SYSTEMD_UNIT" >&2
   fi
 fi

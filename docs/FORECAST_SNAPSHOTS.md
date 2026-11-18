@@ -134,10 +134,10 @@ semantics; a timestamp alone does not prove an hourly validity interval.
 Forecast snapshots can be collected by an **independent** systemd user service.
 They are never run from the archive pipeline, and the archive pipeline dry-run
 does not invoke them. `run_frequent.sh` may optionally trigger a configured
-installed unit with `systemctl --user start --no-block` when
+installed unit with `timeout 2s systemctl --user start --no-block` when
 `FORECAST_SNAPSHOT_SYSTEMD_UNIT` is set in the frequent service environment;
-this returns immediately, is attempted before optimization, and cannot delay or
-fail optimization. By default the variable is empty and no trigger is attempted.
+this has a bounded delay of about two seconds, is attempted before optimization,
+and cannot fail optimization. By default the variable is empty and no trigger is attempted.
 Set it through the systemd unit's `Environment=`, not by sourcing `.env` in the
 shell.
 
@@ -187,8 +187,9 @@ systemctl --user enable --now hepo-forecast-snapshot.timer
 
 ## Trigger or timer, not both
 
-`systemctl --user start --no-block` is safe here because systemd starts the
-configured unit in its own cgroup and returns immediately. Choose either this
+`timeout 2s systemctl --user start --no-block` is safe here because systemd
+starts the configured unit in its own cgroup and the trigger is bounded to about
+two seconds. Choose either this
 trigger in the frequent service or the separate 15-minute timer, but not both:
 running both would create duplicate captures for the same origin. Trigger
 failures are reported to the frequent job log and ignored. Optimization is never
