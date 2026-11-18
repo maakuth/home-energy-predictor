@@ -29,8 +29,10 @@ services, models, or stored data. `/workspace` is production.
 - `utils/feature_processing.py` now owns the shared implementation; the CSV
   wrapper re-exports the old names. Archive features and shadow use the new
   module directly. The moved processing functions have identical syntax trees
-  to the originals. Focused regression tests passed (100 tests); deployment and
-  merge are separate from this branch.
+  to the originals. Focused regression tests passed (100 tests); the non-slow
+  suite passed (1,204 passed, 54 deselected, 8 subtests passed), and Pyright
+  reported no errors on changed Python files. Deployment and merge are separate
+  from this branch.
 
 ## Phase 2: weekly archive cutover — pending separate approval
 
