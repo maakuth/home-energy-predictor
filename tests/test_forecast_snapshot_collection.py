@@ -138,6 +138,34 @@ def test_shell_csv_mode_triggers_configured_unit_nonblocking(tmp_path):
     assert system_log.read_text().splitlines() == ["--user", "start", "--no-block", "hepo-forecast-snapshot.service"]
 
 
+def test_shell_csv_mode_triggers_even_if_optimization_fails(tmp_path):
+    script = (ROOT / "run_frequent.sh").read_text().replace("/tmp/hepo.lock", str(tmp_path / "hepo.lock"))
+    (tmp_path / "run_frequent.sh").write_text(script)
+    activation = tmp_path / ".venv" / "bin" / "activate"
+    activation.parent.mkdir(parents=True)
+    activation.write_text(":\n")
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    python = commands / "python3"
+    python.write_text("#!/bin/bash\nif echo \"$@\" | grep -q 'optimize_plan.py'; then exit 2; fi\nexit 0\n")
+    python.chmod(0o755)
+    (commands / "python").symlink_to(python)
+    systemctl = commands / "systemctl"
+    systemctl.write_text("#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$SYSTEMCTL_LOG\"\nexit 0\n")
+    systemctl.chmod(0o755)
+    system_log = tmp_path / "systemctl.log"
+    env = {
+        **os.environ,
+        "PATH": str(commands) + ":" + os.environ["PATH"],
+        "SYSTEMCTL_LOG": str(system_log),
+        "FORECAST_SNAPSHOT_SYSTEMD_UNIT": "hepo-forecast-snapshot.service",
+    }
+    result = subprocess.run(["bash", str(tmp_path / "run_frequent.sh")], cwd=tmp_path, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert system_log.exists()
+    assert system_log.read_text().splitlines() == ["--user", "start", "--no-block", "hepo-forecast-snapshot.service"]
+
+
 def test_shell_csv_mode_without_unit_does_not_invoke_systemctl(tmp_path):
     script = (ROOT / "run_frequent.sh").read_text().replace("/tmp/hepo.lock", str(tmp_path / "hepo.lock"))
     (tmp_path / "run_frequent.sh").write_text(script)

@@ -126,17 +126,20 @@ semantics; a timestamp alone does not prove an hourly validity interval.
 * Review data retention and timer proposal separately: cadence and expected
   origins, source latency, timeouts, overlap, capacity alerts, failure and gap
   monitoring, and rollback. Collection must not run in or block live
-  optimization. No service or timer is included or enabled.
+  optimization. Service and timer templates are provided, but neither is
+  installed or enabled by this repository.
 
 ## Optional nonblocking collection
 
 Forecast snapshots can be collected by an **independent** systemd user service.
-They are never run from the optimization path of `run_frequent.sh`, and the
-archive pipeline dry-run does not invoke them. `run_frequent.sh` may optionally
-trigger the configured service with `systemctl --user start --no-block` when
-`FORECAST_SNAPSHOT_SYSTEMD_UNIT` is set; this returns immediately and cannot
-delay or fail optimization. By default the variable is empty and no trigger is
-attempted.
+They are never run from the archive pipeline, and the archive pipeline dry-run
+does not invoke them. `run_frequent.sh` may optionally trigger a configured
+installed unit with `systemctl --user start --no-block` when
+`FORECAST_SNAPSHOT_SYSTEMD_UNIT` is set in the frequent service environment;
+this returns immediately, is attempted before optimization, and cannot delay or
+fail optimization. By default the variable is empty and no trigger is attempted.
+Set it through the systemd unit's `Environment=`, not by sourcing `.env` in the
+shell.
 
 Configuration is explicit. Copy `config/forecast_snapshot.example.json`, replace
 every placeholder with an absolute local path, and point `env_file` at the
@@ -182,13 +185,11 @@ Only after reviewing the report and journal:
 systemctl --user enable --now hepo-forecast-snapshot.timer
 ```
 
-## Blocker for automatic execution
+## Trigger or timer, not both
 
-The existing frequent job is a systemd `oneshot` service. A background
-subprocess started from it can be terminated when that service's cgroup is
-cleaned up, so this implementation deliberately does **not** start capture in
-the background from `run_frequent.sh`. Automatic execution therefore requires
-the separate timer above (or an equivalent persistent unit). Without that
-systemd change, capture remains a manual or externally triggered operation;
-this is intentional and avoids unsafe fire-and-forget behavior. Optimization is
-never blocked or failed by capture.
+`systemctl --user start --no-block` is safe here because systemd starts the
+configured unit in its own cgroup and returns immediately. Choose either this
+trigger in the frequent service or the separate 15-minute timer, but not both:
+running both would create duplicate captures for the same origin. Trigger
+failures are reported to the frequent job log and ignored. Optimization is never
+blocked or failed by capture.
