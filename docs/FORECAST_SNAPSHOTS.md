@@ -23,8 +23,12 @@ likewise retained with the configured entity and zone; its classification is
 **unverified**. The CLI accepts Nordpool `raw_today`/`raw_tomorrow` objects
 with explicit `start`, `end`, `value`, or ENTSO-E
 `prices_today`/`prices_tomorrow` (or `prices`) objects with `time`, `price`.
-Timestamps must be timezone-aware, prices finite numbers, and intervals or
-point timestamps must not overlap or duplicate. At least one Nordpool
+ENTSO-E `prices_today`, `prices_tomorrow` and `prices` may be present
+together: consistent duplicate timestamps across those arrays are accepted,
+including timezone-equivalent instants, while conflicting prices or duplicates
+within one array are rejected. Extra points present only in `prices` are
+preserved. Timestamps must be timezone-aware, prices finite numbers, and
+intervals or point timestamps must not overlap or duplicate. At least one Nordpool
 interval must end after the scheduled origin, or one ENTSO-E point must be at
 or after it. Nordpool tomorrow data is ignored for validation when
 `tomorrow_valid` is false. Untimestamped numeric arrays, mixed schemas and
