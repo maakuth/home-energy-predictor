@@ -179,12 +179,16 @@ def _require_gshp_compressor_state(state: bool | None) -> bool:
     return state
 
 
-def _resolve_gshp_compressor_state(state: bool | None) -> bool:
-    if state is None and not any((
+def _heating_dispatch_enabled() -> bool:
+    return any((
         get_env_bool('GSHP_OPTIMIZE_ENABLED', True),
         get_env_bool('RESISTIVE_HEATER_OPTIMIZE_ENABLED', False),
         get_env_bool('BULK_HEATER_OPTIMIZE_ENABLED', False),
-    )):
+    ))
+
+
+def _resolve_gshp_compressor_state(state: bool | None) -> bool:
+    if state is None and not _heating_dispatch_enabled():
         print('⚠️ GSHP compressor state unknown; heating dispatch disabled.')
         return False  # Internal placeholder only; published state remains unknown.
     return _require_gshp_compressor_state(state)
@@ -1104,6 +1108,13 @@ def _calculate_optimization(
     else:
         battery_plan = plan_no_battery_dispatch(predictions_kwh, solar_kwh, import_prices, export_prices, committed_load_kwh)
 
+    # With autonomous heating, the electrical persistence forecast does not
+    # describe heat delivered to the tank. A no-heating trajectory is not a
+    # temperature forecast, even when its starting temperature is measured.
+    thermal_forecast_available = _heating_dispatch_enabled()
+    if not thermal_forecast_available:
+        print('Accumulator temperature forecast unavailable: autonomous heating is not thermally modeled.')
+
     print(f"\nOptimization Plan from {prediction_timestamps[0]} to {prediction_timestamps[-1]}:")
     print(f"Interval: {get_plan_interval_minutes()} minutes")
     compressor_diagnostic = ('UNKNOWN' if not compressor_state_known else
@@ -1132,6 +1143,10 @@ def _calculate_optimization(
         p_solar_kw = solar_array[i]
         b = battery_plan[i]
         g = gshp_plan[i]
+        if not thermal_forecast_available:
+            b.pop('gshp_temp_sim', None)
+        simulated_temp = g['gshp_temp_sim'] if thermal_forecast_available else None
+        simulated_temp_str = f'{simulated_temp:5.1f}' if simulated_temp is not None else '  n/a'
         
         # Calculate price percentile within the current plan window
         # (Where does current price rank among all prices in the plan)
@@ -1143,7 +1158,7 @@ def _calculate_optimization(
         budget_str = f"{b['discharge_budget_kwh']:.2f}" if b.get('discharge_budget_kwh') is not None else "  -"
         print(
             f"{ts.strftime('%m-%d %H:%M')} | {p_baseload_kw:8.1f} | {p_gshp_kw:7.1f} | {p_grid_kw:7.1f} | "
-            f"{p_import:7.3f} | {p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {budget_str:6} | {b['battery_action']:16} | {g['gshp_intent']:11} | {g['resistive_heater_intent']:16} | {g['gshp_temp_sim']:5.1f}"
+            f"{p_import:7.3f} | {p_solar_kw:5.2f} | {b['soc_pct']:4.1f} | {budget_str:6} | {b['battery_action']:16} | {g['gshp_intent']:11} | {g['resistive_heater_intent']:16} | {simulated_temp_str}"
         )
         
         entry = {
@@ -1175,7 +1190,7 @@ def _calculate_optimization(
             'gshp_intent': g['gshp_intent'],
             'resistive_heater_intent': g['resistive_heater_intent'],
             'bulk_heater_intent': b.get('bulk_heater_intent', 'OFF'),
-            'gshp_temp_simulated': g['gshp_temp_sim'],
+            'gshp_temp_simulated': simulated_temp,
             **b,
         }
         if frozen_runtime is not None:
@@ -1187,7 +1202,7 @@ def _calculate_optimization(
         entry['planned_resistive_kw'] = p_resistive_kw
         entry['resistive_heater_intent'] = g['resistive_heater_intent']
         entry['planned_bulk_heater_kw'] = p_bulk_heater_kw
-        entry['gshp_temp_simulated'] = g['gshp_temp_sim']
+        entry['gshp_temp_simulated'] = simulated_temp
         entry['planned_leaf_kw'] = p_leaf_kw
         entry['leaf_intent'] = leaf_intents[i]
         entry['effective_cost'] = compute_effective_cost(entry)

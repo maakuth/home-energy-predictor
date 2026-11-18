@@ -110,6 +110,7 @@ def test_missing_telemetry_and_history_publish_labelled_unmanaged_plan(uncontrol
     optimize_plan.optimize()
     plan = json.loads(Path(os.environ['TEST_PLAN_FILE']).read_text())
     assert all(p['heating_forecast_source'] == 'unavailable' for p in plan)
+    assert all(p['gshp_temp_simulated'] is None for p in plan)
     assert all(p['gshp_compressor_state'] == 'unknown' for p in plan)
     output = capsys.readouterr().out
     assert 'UNKNOWN' in output
@@ -182,8 +183,9 @@ def test_unusable_history_is_not_treated_as_observed_heating(uncontrolled, capsy
     assert 'unavailable' in capsys.readouterr().out.lower()
 
 
-@pytest.mark.parametrize('planner', ['none', 'nemotron-linprog', 'joint-linprog'])
-def test_optimizer_includes_autonomous_heat_without_enabling_dispatch(uncontrolled, monkeypatch, tmp_path, planner):
+@pytest.mark.parametrize('planner,leaf_enabled', [('none', False), ('nemotron-linprog', False),
+                                                  ('joint-linprog', False), ('joint-linprog', True)])
+def test_optimizer_includes_autonomous_heat_without_enabling_dispatch(uncontrolled, monkeypatch, tmp_path, planner, leaf_enabled):
     import optimize_plan
 
     path, start = uncontrolled
@@ -191,7 +193,7 @@ def test_optimizer_includes_autonomous_heat_without_enabling_dispatch(uncontroll
     path.rename(tmp_path / 'raw_data.csv')
     monkeypatch.setenv('BATTERY_PLANNER_TYPE', planner)
     monkeypatch.setenv('HEPO_DISABLE_BATTERY', 'true' if planner == 'none' else 'false')
-    monkeypatch.setenv('LEAF_OPTIMIZE_ENABLED', 'false')
+    monkeypatch.setenv('LEAF_OPTIMIZE_ENABLED', str(leaf_enabled))
     monkeypatch.setenv('LEAF_MAX_POWER_KW', '0')
     monkeypatch.setenv('PLAN_INTERVAL_MINUTES', '15')
     predictions = [{'timestamp': (start + pd.Timedelta(minutes=15 * i)).isoformat(),
@@ -210,6 +212,8 @@ def test_optimizer_includes_autonomous_heat_without_enabling_dispatch(uncontroll
 
     plan = json.loads(Path(os.environ['TEST_PLAN_FILE']).read_text())
     for entry in plan:
+        assert entry['gshp_temp_simulated'] is None
+        assert entry.get('gshp_temp_sim') is None
         assert entry['uncontrolled_heating_kw'] == 3.0
         assert entry['predicted_usage_kw'] == 5.0
         assert entry['planned_gshp_kw'] == 0.0
