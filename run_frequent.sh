@@ -20,6 +20,17 @@ if [ "$#" -ne 0 ]; then
   exit 2
 fi
 
+# Optional, non-actuating forecast snapshot collection. This is disabled unless
+# FORECAST_SNAPSHOT_SYSTEMD_UNIT names an independently installed service or
+# timer target. It is triggered before optimization work, but --no-block keeps
+# it out of this optimization cgroup and it cannot delay or fail this run.
+# Trigger failures are reported and ignored.
+if [ -n "${FORECAST_SNAPSHOT_SYSTEMD_UNIT:-}" ]; then
+  if ! timeout 2s systemctl --user start --no-block "$FORECAST_SNAPSHOT_SYSTEMD_UNIT"; then
+    echo "⚠️ Forecast snapshot trigger failed for $FORECAST_SNAPSHOT_SYSTEMD_UNIT" >&2
+  fi
+fi
+
 # Use a lockfile to prevent race conditions with run_daily.sh
 (
   flock -n 200 || { echo "⚠️ Another HEPO process is running. Skipping frequent update."; exit 1; }

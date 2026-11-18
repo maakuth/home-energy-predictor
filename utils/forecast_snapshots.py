@@ -16,6 +16,10 @@ from typing import Any, Callable
 from uuid import uuid4
 
 import requests
+from dotenv import dotenv_values
+import fcntl
+import signal
+import time
 
 
 def timestamp(value: Any) -> datetime:
@@ -397,20 +401,231 @@ def validate_price_window(state: Any, source: str, zone: str, origin: Any) -> di
             'schema': schema, 'state': state}
 
 
-def main() -> None:
+_CONFIG_FIELDS = {
+    'format_version', 'archive', 'weather_entity', 'price_entity', 'price_zone',
+    'host', 'env_file', 'lock_file', 'reports_dir', 'max_attempts', 'max_bytes',
+}
+
+
+def _forecast_settings(path: str | Path) -> dict[str, Any]:
+    contents = Path(path).read_bytes()
+    data = json.loads(contents)
+    if not isinstance(data, dict):
+        raise ValueError('Forecast snapshot config must be a JSON object')
+    if type(data.get('format_version')) is not int or data.get('format_version') != 1:
+        raise ValueError('Forecast snapshot config format_version must be 1')
+    for name in ('archive', 'lock_file'):
+        value = data.get(name)
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise ValueError(f'Forecast snapshot {name} must be an absolute path')
+        data[name] = Path(value).resolve()
+    if Path(data['archive']).name == 'hepo.db':
+        raise ValueError('Forecast snapshot archive must not be hepo.db')
+    for name in ('weather_entity', 'price_entity', 'price_zone'):
+        value = data.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'Forecast snapshot {name} is required')
+    env_file = data.get('env_file')
+    if not isinstance(env_file, str) or not Path(env_file).is_absolute():
+        raise ValueError('Forecast snapshot env_file must be an absolute path')
+    data['env_file'] = Path(env_file).resolve()
+    reports_dir = data.get('reports_dir')
+    if reports_dir is None:
+        reports_dir = data['archive'].parent / 'forecast-snapshot-reports'
+    if not isinstance(reports_dir, str) or not Path(reports_dir).is_absolute():
+        # allow Path objects too
+        if isinstance(reports_dir, Path):
+            reports_dir = str(reports_dir)
+        else:
+            raise ValueError('Forecast snapshot reports_dir must be an absolute path')
+    data['reports_dir'] = Path(reports_dir).resolve()
+    if data['lock_file'] == data['reports_dir'] or data['lock_file'] in {data['archive'], data['env_file']}:
+        raise ValueError('Forecast snapshot lock must not replace an input or archive')
+    if data['reports_dir'] in {data['archive'], data['env_file'], data['lock_file']}:
+        raise ValueError('Forecast snapshot reports must not replace an input or archive')
+    for name in ('max_attempts', 'max_bytes'):
+        value = data.get(name, 100000 if name == 'max_attempts' else 2_000_000_000)
+        if type(value) is not int or value <= 0:
+            raise ValueError(f'Forecast snapshot {name} must be a positive integer')
+        data[name] = value
+    host = data.get('host')
+    if host is None:
+        host = dotenv_values(data['env_file']).get('HA_HOST')
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError('Forecast snapshot host or HA_HOST is required')
+    host = host.strip()
+    if not host.startswith(('http://', 'https://')):
+        host = 'http://' + host
+    if not host.startswith(('http://', 'https://')):
+        raise ValueError('Forecast snapshot host must be an http(s) URL')
+    data['host'] = host.rstrip('/')
+    data['config_sha256'] = hashlib.sha256(contents).hexdigest()
+    return data
+
+
+def _ha_headers(token: str) -> dict[str, str]:
+    return {'Authorization': 'Bearer ' + token}
+
+
+def collect(config: str | Path, *, execute: bool = False, now: float | None = None) -> dict[str, Any]:
+    """Optional, non-actuating forecast snapshot collection.
+
+    Dry-run by default. Independent of optimization; failures are reported but
+    never alter planner state.
+    """
+    settings = _forecast_settings(Path(config))
+    clock_now = time.time() if now is None else now
+    if not math.isfinite(clock_now):
+        raise ValueError('Finite collector clock required')
+    origin_dt = datetime.fromtimestamp((clock_now // 900) * 900, timezone.utc)
+    report: dict[str, Any] = {
+        'format_version': 1,
+        'status': 'dry_run' if not execute else 'running',
+        'exit_code': 0,
+        'phase': 'preflight',
+        'origin': origin_dt.isoformat(),
+        'archive': str(settings['archive']),
+        'host': settings['host'],
+        'weather_entity': settings['weather_entity'],
+        'price_entity': settings['price_entity'],
+        'price_zone': settings['price_zone'],
+        'config_sha256': settings['config_sha256'],
+        'data_only': True,
+        'upstream_read_only': True,
+    }
+    if not execute:
+        return report
+
+    settings['reports_dir'].mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    report_path = settings['reports_dir'] / f'forecast-snapshot-{stamp}-{uuid4().hex}.json'
+    report['report_path'] = str(report_path)
+    with report_path.open('x') as output:
+        output.write(json.dumps(report, indent=2) + '\n')
+
+    lock = None
+    try:
+        report['phase'] = 'lock'
+        lock = settings['lock_file'].open('a')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            report.update(status='skipped_locked', exit_code=75, phase='lock')
+            return report
+
+        report['phase'] = 'credentials'
+        values = dotenv_values(settings['env_file'])
+        token = values.get('HA_TOKEN')
+        if not token:
+            raise ValueError('HA_TOKEN is required in the configured env file')
+        host = settings['host']
+
+        def state(entity: str) -> Any:
+            response = requests.get(host + '/api/states/' + entity,
+                                   headers=_ha_headers(token), timeout=15)
+            response.raise_for_status()
+            return response.json()
+
+        def weather() -> Any:
+            metadata = state(settings['weather_entity'])
+            response = requests.post(host + '/api/services/weather/get_forecasts?return_response',
+                                     headers=_ha_headers(token),
+                                     json={'entity_id': settings['weather_entity'], 'type': 'hourly'},
+                                     timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            service = data.get('service_response', data) if isinstance(data, dict) else {}
+            if (not isinstance(service, dict)
+                    or not isinstance(service.get(settings['weather_entity']), dict)
+                    or not isinstance(service[settings['weather_entity']].get('forecast'), list)
+                    or not service[settings['weather_entity']]['forecast']):
+                raise ValueError('Missing hourly weather forecast')
+            return {'source': settings['weather_entity'], 'state': metadata, 'response': data}
+
+        def price() -> Any:
+            data = state(settings['price_entity'])
+            return validate_price_window(data, settings['price_entity'],
+                                        settings['price_zone'], origin_dt)
+
+        report['phase'] = 'capture'
+        result = capture(settings['archive'], origin_dt, weather, price,
+                         clock=lambda: datetime.now(timezone.utc),
+                         max_attempts=settings['max_attempts'],
+                         max_bytes=settings['max_bytes'])
+        weather_status = result['weather']['status']
+        price_status = result['price']['status']
+        report.update(
+            status='success' if weather_status == 'ok' and price_status == 'ok' else 'failed',
+            exit_code=0 if weather_status == 'ok' and price_status == 'ok' else 1,
+            phase='complete',
+            attempt_id=result['id'],
+            weather_status=weather_status,
+            price_status=price_status,
+            weather_error=result['weather'].get('error_type'),
+            price_error=result['price'].get('error_type'),
+        )
+        return report
+    except KeyboardInterrupt:
+        report.update(status='interrupted', exit_code=130, error_type='KeyboardInterrupt')
+        return report
+    except Exception as error:  # noqa: BLE001 - nonblocking collection must report, not crash caller
+        report.update(status='failed', exit_code=1, phase='failed',
+                      error_type=type(error).__name__)
+        return report
+    finally:
+        if lock is not None:
+            lock.close()
+        report['finished_at'] = datetime.now(timezone.utc).isoformat()
+        try:
+            _replace_forecast_report(report_path, report)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _replace_forecast_report(path: Path, report: dict[str, Any]) -> None:
+    temporary = path.with_suffix('.json.tmp')
+    owned = False
+    try:
+        with temporary.open('x') as output:
+            owned = True
+            output.write(json.dumps(report, indent=2, allow_nan=False) + '\n')
+        temporary.replace(path)
+    finally:
+        if owned:
+            temporary.unlink(missing_ok=True)
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--archive', required=True, help='Dedicated forecast SQLite archive path')
-    parser.add_argument('--origin', required=True, help='Scheduled origin, timezone-aware')
-    parser.add_argument('--host', required=True, help='Home Assistant URL')
-    parser.add_argument('--weather-entity', required=True)
-    parser.add_argument('--price-entity', required=True)
-    parser.add_argument('--price-zone', required=True)
+    parser.add_argument('--config', type=Path, help='Optional explicit forecast snapshot collector config')
+    parser.add_argument('--execute', action='store_true', help='Actually capture forecast snapshots')
+    parser.add_argument('--archive', help='Dedicated forecast SQLite archive path')
+    parser.add_argument('--origin', help='Scheduled origin, timezone-aware')
+    parser.add_argument('--host', help='Home Assistant URL')
+    parser.add_argument('--weather-entity')
+    parser.add_argument('--price-entity')
+    parser.add_argument('--price-zone')
     parser.add_argument('--max-attempts', type=int, default=100000)
     parser.add_argument('--max-bytes', type=int, default=2_000_000_000)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.config is not None:
+        try:
+            result = collect(args.config, execute=args.execute)
+        except (OSError, ValueError) as error:
+            parser.error(f'Forecast snapshot configuration error ({type(error).__name__}); check explicit paths')
+            return 2
+        print(json.dumps({key: value for key, value in result.items()
+                          if key not in {'chunks', 'requests'}}, indent=2))
+        return int(result['exit_code'])
+
+    if not all((args.archive, args.origin, args.host, args.weather_entity,
+                args.price_entity, args.price_zone)):
+        parser.error('--archive, --origin, --host, --weather-entity, --price-entity and --price-zone are required unless --config is used')
+        return 2
     token = os.environ.get('HA_TOKEN')
     if not token or not args.host.startswith(('http://', 'https://')):
         parser.error('HA_TOKEN and an http(s) host are required')
+        return 2
     host = args.host.rstrip('/')
     headers = {'Authorization': 'Bearer ' + token}
 
@@ -439,9 +654,8 @@ def main() -> None:
                      max_attempts=args.max_attempts, max_bytes=args.max_bytes)
     print(json.dumps({'id': result['id'], 'weather': result['weather']['status'],
                       'price': result['price']['status']}))
-    if result['weather']['status'] != 'ok' or result['price']['status'] != 'ok':
-        raise SystemExit(1)
+    return 0 if result['weather']['status'] == 'ok' and result['price']['status'] == 'ok' else 1
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

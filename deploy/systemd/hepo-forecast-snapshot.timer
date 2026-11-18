@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh HEPO forecast snapshots every 15 minutes (data only)
+
+[Timer]
+OnCalendar=*:02/15:00
+Persistent=true
+Unit=hepo-forecast-snapshot.service
+
+[Install]
+WantedBy=timers.target

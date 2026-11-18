@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "archive": "/ABSOLUTE/PATH/forecast-archive.sqlite",
+  "weather_entity": "weather.home",
+  "price_entity": "sensor.nordpool",
+  "price_zone": "FI",
+  "host": "http://homeassistant.local:8123",
+  "env_file": "/ABSOLUTE/REPOSITORY/.env",
+  "lock_file": "/ABSOLUTE/PATH/forecast-snapshot.lock",
+  "reports_dir": "/ABSOLUTE/PATH/forecast-snapshot-reports",
+  "max_attempts": 100000,
+  "max_bytes": 2000000000
+}
