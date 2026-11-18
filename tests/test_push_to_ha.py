@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 import os
 import sqlite3
 import json
+import tempfile
 from push_to_ha import push_accuracy, push_plan
 from utils.battery_utils import (
     is_battery_available, compute_load_following_setpoint,
@@ -13,6 +14,26 @@ from utils.battery_utils import (
     smooth_planned_setpoint,
     apply_ramp_rate,
 )
+
+
+def test_control_state_files_are_isolated_between_test_instances():
+    """Parallel instances must not share or delete each other's state."""
+    for test_class in (TestNetMeteringBatteryControl, TestSetpointSmoothing):
+        with patch.dict(os.environ):
+            first = test_class()
+            second = test_class()
+            first.setUp()
+            try:
+                second.setUp()
+                try:
+                    assert first.test_state_file != second.test_state_file
+                finally:
+                    second.tearDown()
+                    second.doCleanups()
+            finally:
+                first.tearDown()
+                first.doCleanups()
+
 
 class TestPushToHA(unittest.TestCase):
     
@@ -604,7 +625,9 @@ class TestNetMeteringBatteryControl(unittest.TestCase):
 
     def setUp(self):
         """Set up test environment with mock state file."""
-        self.test_state_file = '/tmp/hepo_net_metering_test.json'
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.test_state_file = os.path.join(temp_dir.name, 'net_metering.json')
         os.environ['HEPO_NET_METERING_STATE_FILE'] = self.test_state_file
         # Clean up any existing test state
         if os.path.exists(self.test_state_file):
@@ -1253,7 +1276,9 @@ class TestSetpointSmoothing(unittest.TestCase):
     """Tests for smooth_planned_setpoint interval-boundary smoothing."""
 
     def setUp(self):
-        self.test_state_file = '/tmp/hepo_setpoint_smooth_test.json'
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.test_state_file = os.path.join(temp_dir.name, 'setpoint_smooth.json')
         self.env_var = 'HEPO_SETPOINT_SMOOTH_STATE_FILE'
         os.environ[self.env_var] = self.test_state_file
         self._clean_state()
