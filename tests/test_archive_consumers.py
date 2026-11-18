@@ -241,7 +241,7 @@ def test_archive_prediction_rejects_incompatible_models_before_writing_outputs(p
     assert not Path(os.environ['TEST_PREDICTIONS_FILE']).exists()
 
 
-@pytest.mark.parametrize('failure', ['solar', 'model', 'features', 'anchors', 'empty_horizon', 'empty_model'])
+@pytest.mark.parametrize('failure', ['model', 'features', 'anchors', 'empty_model'])
 def test_prediction_archive_failure_does_not_publish(prediction_runtime, monkeypatch, failure):
     context, model = prediction_runtime
     if failure == 'solar':
@@ -263,6 +263,40 @@ def test_prediction_archive_failure_does_not_publish(prediction_runtime, monkeyp
     output = Path(os.environ['TEST_PREDICTIONS_FILE'])
     assert not output.exists()
     assert not output.with_name('future_predictions_metadata.json').exists()
+
+
+def test_missing_anchors_use_labelled_model_missing_values(prediction_runtime, history):
+    context, model = prediction_runtime
+    _, frame, _ = history
+    frame.loc[CUTOFF - pd.Timedelta(hours=1), 'battery_power_conflict'] = True
+    frame.loc[frame.index[200:203], 'leaf_power'] = np.nan
+    prediction.predict(history=context)
+    inputs = model.predict.call_args.args[0].iloc[0]
+    assert np.isnan(inputs['baseload_lag_1h'])
+    assert inputs['baseload_lag_24h'] == 6.
+    assert inputs['leaf_power_lag_1h'] == 1000.
+    assert np.isnan(inputs['leaf_energy_24h'])
+    output = Path(os.environ['TEST_PREDICTIONS_FILE'])
+    metadata = json.loads(output.with_name('future_predictions_metadata.json').read_text())
+    assert set(metadata['anchor_fallbacks']) == {'baseload_lag_1h', 'leaf_energy_24h'}
+
+
+@pytest.mark.parametrize('kind', ['missing', 'stale', 'invalid'])
+def test_missing_solar_has_labelled_horizon_and_fetches_prices(prediction_runtime, monkeypatch, kind):
+    context, _ = prediction_runtime
+    old = {'attributes': {'detailedHourly': [{'period_start': (CUTOFF - pd.Timedelta(days=1)).isoformat(), 'pv_estimate': 2.}]}}
+    invalid = {'attributes': {'detailedHourly': [{'period_start': 'invalid', 'pv_estimate': 'unknown'}]}}
+    monkeypatch.setattr(prediction, 'get_ha_state', lambda entity: {'missing': None, 'stale': old, 'invalid': invalid}[kind])
+    prices = Mock(side_effect=lambda timestamps, interval: ([.1] * len(timestamps), [0] * len(timestamps), None, False, False, None))
+    monkeypatch.setattr(prediction, 'fetch_market_prices', prices)
+    prediction.predict(history=context)
+    output = Path(os.environ['TEST_PREDICTIONS_FILE'])
+    rows = json.loads(output.read_text())
+    assert len(rows) >= 192
+    assert all(row['solar_forecast'] == 0 for row in rows)
+    assert prices.call_count == 1
+    metadata = json.loads(output.with_name('future_predictions_metadata.json').read_text())
+    assert metadata['solar_forecast_fallback']['method'] == 'zero_generation_assumption'
 
 
 @pytest.mark.parametrize('failure', ['predictions', 'prices', 'empty'])
@@ -314,7 +348,7 @@ def test_archive_cli_valid_flags_propagate_failure(script, monkeypatch):
     monkeypatch.setattr(utils.ha_utils, 'call_ha_service', Mock(return_value=None))
     monkeypatch.setattr(utils.db_utils, 'fetch_states_history', Mock(side_effect=AssertionError('PG forbidden')))
     monkeypatch.setattr(sys, 'argv', [script, '--archive', 'unused.sqlite', '--cutoff', CUTOFF.isoformat()])
-    with pytest.raises((ValueError, FileNotFoundError)):
+    with pytest.raises((ValueError, FileNotFoundError, sqlite3.OperationalError)):
         runpy.run_path(str(Path(__file__).resolve().parents[1] / script), run_name='__main__')
 
 

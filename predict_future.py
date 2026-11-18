@@ -280,7 +280,8 @@ def generate_inference_data(
     return inference_data, timestamps
 
 def archive_inference_anchors(history: ArchiveHistory, *,
-                              diagnostics: dict[str, Any] | None = None) -> tuple[float, float, float, float]:
+                              diagnostics: dict[str, Any] | None = None,
+                              allow_missing: bool = False) -> tuple[float, float, float, float]:
     """Exact cutoff-relative meter bins; no smoothing, relay subtraction or fill.
 
     The synthetic cutoff row is only a lag-query position, never a measurement.
@@ -295,22 +296,23 @@ def archive_inference_anchors(history: ArchiveHistory, *,
         raise ValueError('Duplicate archive anchor timestamps')
     raw = raw.reindex(expected.append(pd.DatetimeIndex([cutoff])))
     targets = apply_training_policy(raw, pd.DataFrame(index=raw.index), history.legacy_policy)
-    row = targets.loc[cutoff]
     names = ['baseload_lag_1h', 'baseload_lag_24h', 'leaf_power_lag_1h', 'leaf_energy_24h']
-    if not all(pd.notna(row[name]) and np.isfinite(row[name]) for name in names):
+    anchor_values = {name: float(targets[name].iloc[-1]) for name in names}
+    missing = [name for name in names if not np.isfinite(anchor_values[name])]
+    if missing and not allow_missing:
         raise ValueError('Archive inference anchors/Leaf prior-day coverage unavailable; refusing prediction')
-    estimated_minutes = int(targets['leaf_energy_24h_estimated_minutes'].iloc[-1])
-    missing_seconds = float(targets['leaf_energy_24h_missing_seconds'].iloc[-1])
+    estimated_raw = targets['leaf_energy_24h_estimated_minutes'].iloc[-1]
+    seconds_raw = targets['leaf_energy_24h_missing_seconds'].iloc[-1]
+    estimated_minutes = int(estimated_raw) if pd.notna(estimated_raw) else None
+    missing_seconds = float(seconds_raw) if pd.notna(seconds_raw) else None
     if diagnostics is not None:
         diagnostics.update(estimated_bins=estimated_minutes, missing_seconds=missing_seconds,
-                           policy=LEAF_ENERGY_ESTIMATE_POLICY)
-    if estimated_minutes > 0:
+                           policy=LEAF_ENERGY_ESTIMATE_POLICY, missing_features=missing)
+    if estimated_minutes is not None and estimated_minutes > 0 and missing_seconds is not None:
         print(f"Leaf 24h energy feature estimated {estimated_minutes} missing minute(s) from preceding observations "
               f"({missing_seconds:.1f} seconds missing coverage).")
-    return (float(targets['baseload_lag_1h'].iloc[-1]),
-            float(targets['baseload_lag_24h'].iloc[-1]),
-            float(targets['leaf_power_lag_1h'].iloc[-1]),
-            float(targets['leaf_energy_24h'].iloc[-1]))
+    values = [anchor_values[name] if name not in missing else float('nan') for name in names]
+    return values[0], values[1], values[2], values[3]
 
 
 def archive_sauna_history(history: ArchiveHistory, current_temp: float) -> tuple[bool, bool]:
@@ -376,15 +378,25 @@ def predict(*, history: ArchiveHistory | None = None, model_dir: str | Path | No
         solar_data.extend(raw)
         
     # Convert to DataFrame
-    if not solar_data:
-        if history is not None:
-            raise ValueError('No solar forecast data; refusing archive prediction')
+    if not solar_data and history is None:
         print('Error: No solar forecast data found.')
         return
-        
-    df_solar = pd.DataFrame(solar_data)
-    df_solar['period_start'] = pd.to_datetime(df_solar['period_start'], utc=True)
-    df_solar = df_solar.sort_values('period_start').set_index('period_start')
+
+    solar_fallback = False
+    if history is not None:
+        df_solar = pd.DataFrame(solar_data, columns=['period_start', 'pv_estimate', 'pv_estimate10', 'pv_estimate90'])
+        df_solar['period_start'] = pd.to_datetime(df_solar['period_start'], utc=True, errors='coerce')
+        df_solar['pv_estimate'] = pd.to_numeric(df_solar['pv_estimate'], errors='coerce')
+        df_solar = df_solar[df_solar['period_start'].notna() & np.isfinite(df_solar['pv_estimate']) & df_solar['pv_estimate'].ge(0)]
+        df_solar = df_solar.sort_values('period_start').drop_duplicates('period_start', keep='last').set_index('period_start')
+        solar_fallback = df_solar.empty or df_solar.index.max() < pd.Timestamp(history.cutoff, unit='s', tz='UTC').floor(f'{max(PREDICTION_INTERVAL_MINUTES, 1)}min')
+        if solar_fallback:
+            df_solar = pd.DataFrame({'pv_estimate': [0.0]}, index=pd.DatetimeIndex([pd.Timestamp(history.cutoff, unit='s', tz='UTC')]))
+            print('⚠️ Solar forecast unavailable: assuming zero generation for planning.')
+    else:
+        df_solar = pd.DataFrame(solar_data)
+        df_solar['period_start'] = pd.to_datetime(df_solar['period_start'], utc=True)
+        df_solar = df_solar.sort_values('period_start').set_index('period_start')
     
     # Current states
     current_temp = get_ha_state('sensor.ulkona_temperature_2')
@@ -453,7 +465,9 @@ def predict(*, history: ArchiveHistory | None = None, model_dir: str | Path | No
         leaf_lag1h, leaf_energy_24h = get_leaf_features()
     else:
         lag1h_val, lag24h_val, leaf_lag1h, leaf_energy_24h = archive_inference_anchors(
-            history, diagnostics=leaf_energy_diagnostics)
+            history, diagnostics=leaf_energy_diagnostics, allow_missing=True)
+        if leaf_energy_diagnostics['missing_features']:
+            print(f"⚠️ Missing archive inference features: {leaf_energy_diagnostics['missing_features']}; using model missing-value paths.")
 
     print(f"⚓ Anchors - 1h: {lag1h_val:.2f}kW, 24h: {lag24h_val:.2f}kW, Leaf 24h: {leaf_energy_24h:.1f}kWh")
 
@@ -614,7 +628,8 @@ def predict(*, history: ArchiveHistory | None = None, model_dir: str | Path | No
     
     # Find the latest timestamp in solar data (usually end of tomorrow)
     # If solar data is short, limit to what we have
-    end_time = df_solar.index.max()
+    end_time = (pd.Timestamp(start_time).tz_convert('UTC') + pd.Timedelta(hours=48)
+                if solar_fallback else df_solar.index.max())
     
     # Ensure end_time matches the same timezone as start_time
     if end_time.tzinfo is None:
@@ -799,6 +814,9 @@ def predict(*, history: ArchiveHistory | None = None, model_dir: str | Path | No
             'generated_at': generated_at,
             'current_telemetry_and_forecasts': 'live',
             'leaf_energy_diagnostics': leaf_energy_diagnostics,
+            'anchor_fallbacks': {name: 'model_missing_value' for name in leaf_energy_diagnostics['missing_features']},
+            'solar_forecast_fallback': ({'method': 'zero_generation_assumption', 'horizon_hours': 48}
+                                        if solar_fallback else None),
         }
         if training_metadata_content is not None:
             metadata['model_training'] = training_metadata_content
