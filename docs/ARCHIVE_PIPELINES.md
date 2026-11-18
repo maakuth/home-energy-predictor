@@ -55,12 +55,11 @@ refused, rather than misleadingly described as a shadow run. Use the read-only
 Execution takes the existing `/tmp/hepo.lock` (nonblocking frequent, waiting
 weekly), and requires `--writer-lock` with the absolute path to the same shared
 archive writer lock used by the collector. This second lock is nonblocking and
-held only for ingestion, not model fitting or inference. A busy lock stops the
-run before net-metering reset or ingestion; configure the existing shared lock,
-not a new independent file. Frequent execution preserves quarter-boundary net-metering reset
-under that lock. Ingestion is incremental with fixed bounds and explicit
-recorder namespace. Namespace mismatch fails closed before mixing rebuilt
-recorder IDs. All subprocess failures terminate the job; there is no CSV retry.
+held only for ingestion, not model fitting or inference. A busy writer lock or
+failed ingestion in frequent mode skips ingestion and attempts prediction from
+eligible existing archive data; weekly mode stops. Configure the existing shared
+lock, not a new independent file. Frequent execution preserves quarter-boundary
+net-metering reset under the pipeline lock. There is no CSV retry.
 
 Weekly execution trains XGBoost from projected day-sized feature chunks; SARIMA
 training is disabled. It never re-extracts 730 days to CSV. The default XGBoost
@@ -80,9 +79,34 @@ Before advancing, the runner validates model training metadata and the
 success-only prediction/plan sidecars against archive path, fixed cutoff and
 legacy policy. Available source/policy/precedence fields are checked as well.
 Configuration byte hashes must remain unchanged between subprocesses. Missing,
-stale, empty or mismatched artifacts stop before subsequent optimization or
-publication. Feedback-database persistence is a separate boundary: sidecars
+stale, empty or mismatched artifacts stop normal optimization and publication.
+Feedback-database persistence is a separate boundary: sidecars
 attest to the complete JSON artifacts, not optional SQLite feedback writes.
+
+If frequent prediction or optimization fails, including artifact verification,
+the approved runner writes a **local degraded** single-slot plan under the
+pipeline lock. Its entry and sidecar identify the degradation and failed step;
+it requests idle battery, STOP/OFF for managed loads, and contains no invented
+usage, solar, SoC or price. Unknown effective cost is null to avoid interpreting
+it as a cheap price. No safe price-aware planning is attempted: the fallback has
+no independently validated current prices, load or battery state. Live control
+still applies manual overrides, thermal recovery, phase limits, ramping and other
+guards; therefore idle is an intent, not a guarantee of instantaneous zero power.
+Manual Leaf charging remains protected. The current-slot plan expires at the
+next interval; on a missing current slot the existing controller takes its safe
+outputs *before* checking the battery manual override. Long runs and missed
+schedules can thus leave no current degraded entry.
+
+The degraded plan is not sent through `push_to_ha.py`: that publisher requires
+numeric usage and defaults missing prices to zero, which would fabricate
+telemetry and cheap-price signals. HA plan sensors may consequently remain stale;
+other independent invocations of the publisher are not guarded. Plan replacement
+is atomic, with unique temporary files; metadata is replaced first and is not a
+transaction with the plan. Readers should trust the label in the plan itself.
+A failed plan replacement can leave old plan plus new metadata, and other
+writers must cooperate with the same pipeline lock. A locked pipeline, invalid
+configuration, write failure or process crash can still prevent a fresh plan;
+those failures are not disguised as successful fallback.
 
 ## Rollback
 

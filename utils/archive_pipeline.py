@@ -19,6 +19,7 @@ from utils.archive_history import ArchiveHistory, add_history_arguments, aware_e
 from utils.measurement_policy import load_policies, require_policy_entries
 from utils.measurement_sources import load_sources
 from utils.baseload_quality import BASELOAD_FEATURES, baseload_feature_contract
+from utils.degraded_plan import write_degraded_plan
 
 _SOURCES = Path(__file__).resolve().parents[1] / 'config' / 'measurement_sources.yaml'
 
@@ -215,7 +216,17 @@ def execute_plan(plan: list[dict[str, Any]], history: ArchiveHistory, *, mode: s
                     print('⚠️ Ingestion failed; skipping ingestion and attempting prediction '
                           'from the existing archive. Input eligibility remains enforced.', flush=True)
         for step in plan[1:]:
-            run_step(step)
+            try:
+                run_step(step)
+            except (subprocess.CalledProcessError, OSError, ValueError) as error:
+                if mode != 'frequent' or step['name'] not in {'predict', 'optimize'}:
+                    raise
+                if _configuration_hashes(history) != configuration:
+                    raise ValueError('Source/policy configuration changed during pipeline run') from error
+                reason = f'{step["name"]} failed: {type(error).__name__}: {error}'
+                print(f'⚠️ {reason}; installing local degraded idle plan, not publishing.', flush=True)
+                write_degraded_plan(history, step['name'], reason)
+                return
 
 
 def main(argv: list[str] | None = None) -> None:
