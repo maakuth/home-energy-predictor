@@ -2,12 +2,12 @@
 
 ## Development and Safety
 - Use test-driven development for behavior changes: add a failing test, implement the change, then confirm it passes.
+  - When a feature is ready and tests are passing, review that there's enough tests to cover regressions, but not too much redundancy
 - Run tests with `venv/bin/python3 -m pytest`. Do not use `.venv`; it belongs to the host system.
 - Fix Pyright errors rather than suppressing them.
 - Before changing model behavior, check `.env.template` and `docs/ENV_VARIABLES.md` for a suitable configuration option.
 - Pytest isolates runtime files automatically. Do not bypass that isolation or run operational scripts against live state.
 - Do not change Home Assistant, PostgreSQL, or `hepo.db` without explicit permission. Do not make live Home Assistant or PostgreSQL calls without permission.
-- `pull-from-murrikka.sh` copies runtime artifacts into `state/`; run it only with authorization.
 
 ## Runtime
 - `docs/SCHEDULES.md` is the source of truth for systemd schedules and pipeline details.
@@ -20,7 +20,7 @@
 - Compare historical metrics by model version before tuning. `bias_kw` is predicted minus actual usage, so a positive value means over-prediction; do not infer an optimizer fault from it alone.
 
 ## Testing and Evaluation
-- Normally run `venv/bin/python3 -m pytest -k 'not slow'`; run the full suite before committing. Slow tests are marked `@pytest.mark.slow`.
+- Normally run `venv/bin/python3 -m pytest -k 'not slow'`; run the full suite before merging to master branch. Slow tests are marked `@pytest.mark.slow`.
 - Do not tune planner horizons, discounts, or thresholds with short replay windows. Use full-length fixture replays for tuning; short replays only detect crashes and constraint violations.
 
 ## Inspection
@@ -28,8 +28,9 @@
 - Compare plans with observed behavior using `venv/bin/python3 utils/compare_plan_logs.py --summary`. Use `--help` for focused views.
 
 ## Temporary Workspace
-- Run all test-driven development cycles in `/tmp/tmp-workspace`; never edit application code in `/workspace` directly.
-- Before using it, run `git worktree list` from `/workspace` and `git -C /tmp/tmp-workspace status --short`. If the temporary worktree is dirty or belongs to an active task, stop and ask rather than deleting or overwriting it.
-- From a clean temporary worktree, create the task branch from the intended base with `git switch -c <branch-name> <base-branch>`. This preserves any prior temporary branch while making the new work explicit.
-- Ensure `/tmp/tmp-workspace/venv` is a symlink to `/workspace/venv`. This is a local workspace aid: do not stage it.
-- Run tests from `/tmp/tmp-workspace` using its `venv` symlink. Return work through the named Git branch; never copy changed files between workspaces manually.
+- Run all test-driven development cycles in a dedicated temporary Git worktree; never edit application code in `/workspace` directly. Multiple temporary worktrees may be used concurrently for separate tasks.
+- Before using a temporary worktree, run `git worktree list` from `/workspace` and check the selected worktree with `git -C <worktree> status --short`. If it is dirty or belongs to an active task, stop and ask rather than deleting or overwriting it. A new, uniquely named worktree may instead be created for the task.
+- Create a named task branch from the intended base when creating a new worktree, or use `git switch -c <branch-name> <base-branch>` in a clean, inactive temporary worktree. Preserve existing branches and other tasks' work.
+- Ensure the selected worktree's `venv` is a symlink to `/workspace/venv`. This is a local workspace aid: do not stage it.
+- Run tests from the selected temporary worktree using its `venv` symlink. Return work through the named Git branch; never copy changed files between workspaces manually.
+- The temporary workspace can vanish between prompts due to container restart, so commit and push your work to a branch in main workspace often
