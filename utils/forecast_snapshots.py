@@ -1,16 +1,16 @@
 """Isolated as-received forecast capture and conservative as-of selection.
 
-No planner, device control, database or measurement state is touched.
+No planner, device control or measurement database is touched.
 """
 from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
-import tempfile
+import sqlite3
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -30,66 +30,152 @@ def timestamp(value: Any) -> datetime:
     return result.astimezone(timezone.utc)
 
 
-def capture(directory: str | Path, origin: Any, weather: Callable[[], Any],
+APPLICATION_ID = 0x48465053  # HFPS
+SCHEMA_VERSION = 1
+
+
+def _utc(value: Any) -> str:
+    return timestamp(value).isoformat(timespec='microseconds')
+
+
+def _connect(path: str | Path, *, create: bool) -> sqlite3.Connection:
+    """Only initialize newly created files; never adopt an existing database."""
+    path = Path(path)
+    created = False
+    if create:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
+            created = True
+    if not path.exists():
+        raise FileNotFoundError(path)
+    # mode=ro/rw prevents sqlite from implicitly creating a different database.
+    uri = path.resolve().as_uri() + ('?mode=rw' if create else '?mode=ro')
+    conn = sqlite3.connect(uri, uri=True, timeout=10)
+    try:
+        if created:
+            conn.executescript(f'''
+                BEGIN IMMEDIATE;
+                PRAGMA application_id={APPLICATION_ID};
+                PRAGMA user_version={SCHEMA_VERSION};
+                CREATE TABLE payloads (
+                    id INTEGER PRIMARY KEY,
+                    digest BLOB NOT NULL UNIQUE,
+                    json TEXT NOT NULL
+                );
+                CREATE TABLE attempts (
+                    id TEXT PRIMARY KEY,
+                    origin TEXT NOT NULL,
+                    weather_start TEXT NOT NULL,
+                    weather_end TEXT NOT NULL,
+                    weather_status TEXT NOT NULL,
+                    weather_error TEXT,
+                    weather_payload INTEGER REFERENCES payloads(id),
+                    price_start TEXT NOT NULL,
+                    price_end TEXT NOT NULL,
+                    price_status TEXT NOT NULL,
+                    price_error TEXT,
+                    price_payload INTEGER REFERENCES payloads(id)
+                ) WITHOUT ROWID;
+                CREATE INDEX attempts_origin ON attempts(origin DESC);
+                COMMIT;
+            ''')
+        elif (conn.execute('PRAGMA application_id').fetchone()[0] != APPLICATION_ID
+              or conn.execute('PRAGMA user_version').fetchone()[0] != SCHEMA_VERSION):
+            raise ValueError('Not a supported forecast archive')
+        conn.execute('PRAGMA foreign_keys=ON')
+        return conn
+    except BaseException:
+        conn.close()
+        raise
+
+
+def capture(archive: str | Path, origin: Any, weather: Callable[[], Any],
             price: Callable[[], Any], *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-            max_files: int = 100000, max_bytes: int = 2_000_000_000) -> dict[str, Any]:
+            max_attempts: int = 100000, max_bytes: int = 2_000_000_000) -> dict[str, Any]:
     """Capture independently; quota exhaustion fails closed, never deletes vintages."""
-    directory = Path(directory)
-    if not directory.is_dir():
-        raise ValueError('Archive directory must already exist')
+    if max_attempts <= 0 or max_bytes <= 0:
+        raise ValueError('Archive quota must be positive')
     scheduled = timestamp(origin)
+    # Validate or initialize before making any source calls.
+    conn = _connect(archive, create=True)
     attempt: dict[str, Any] = {'format_version': 1, 'id': uuid4().hex,
                                'scheduled_origin': scheduled.isoformat()}
-    for name, fetch in (('weather', weather), ('price', price)):
-        start = timestamp(clock())
-        try:
-            payload = fetch()
-            # Check serializability before recording success.
-            json.dumps(payload, allow_nan=False)
-            result = {'status': 'ok', 'payload': payload}
-        except Exception as exc:
-            # Do not persist exception text: it may contain credentials or URLs.
-            result = {'status': 'error', 'error_type': type(exc).__name__}
-        end = timestamp(clock())
-        if end < start:
-            raise ValueError('Capture clock moved backwards')
-        result.update(started_at=start.isoformat(), completed_at=end.isoformat())
-        attempt[name] = result
-    encoded = (json.dumps(attempt, allow_nan=False, sort_keys=True) + '\n').encode()
-    with (directory / '.forecast-lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        files = list(directory.glob('*.json'))
-        if (max_files <= 0 or max_bytes <= 0 or len(files) >= max_files
-                or sum(p.stat().st_size for p in files) + len(encoded) > max_bytes):
+    try:
+        for name, fetch in (('weather', weather), ('price', price)):
+            start = timestamp(clock())
+            try:
+                payload = fetch()
+                json.dumps(payload, allow_nan=False)
+                result = {'status': 'ok', 'payload': payload}
+            except Exception as exc:
+                result = {'status': 'error', 'error_type': type(exc).__name__}
+            end = timestamp(clock())
+            if end < start:
+                raise ValueError('Capture clock moved backwards')
+            result.update(started_at=start.isoformat(), completed_at=end.isoformat())
+            attempt[name] = result
+
+        conn.execute('BEGIN IMMEDIATE')
+        if conn.execute('SELECT count(*) FROM attempts').fetchone()[0] >= max_attempts:
             raise ValueError('Archive quota exceeded; no snapshots removed')
-        fd, temp_name = tempfile.mkstemp(prefix='.forecast-', dir=directory)
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(encoded)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.link(temp_name, directory / (attempt['id'] + '.json'))
-        finally:
-            os.unlink(temp_name)
-    return attempt
+
+        def source_columns(source: dict[str, Any]) -> tuple[Any, ...]:
+            payload_id = None
+            if source['status'] == 'ok':
+                text = json.dumps(source['payload'], allow_nan=False, sort_keys=True,
+                                  separators=(',', ':'), ensure_ascii=False)
+                digest = hashlib.sha256(text.encode('utf-8')).digest()
+                conn.execute('INSERT OR IGNORE INTO payloads(digest, json) VALUES (?, ?)', (digest, text))
+                payload_id, stored = conn.execute(
+                    'SELECT id, json FROM payloads WHERE digest=?', (digest,)).fetchone()
+                if stored != text:
+                    raise ValueError('Payload hash collision')
+            return (_utc(source['started_at']), _utc(source['completed_at']),
+                    source['status'], source.get('error_type'), payload_id)
+
+        conn.execute('INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                     (attempt['id'], _utc(scheduled), *source_columns(attempt['weather']),
+                      *source_columns(attempt['price'])))
+        size = conn.execute('PRAGMA page_count').fetchone()[0] * conn.execute('PRAGMA page_size').fetchone()[0]
+        if size > max_bytes:
+            raise ValueError('Archive quota exceeded; no snapshots removed')
+        conn.commit()
+        return attempt
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
-def select(directory: str | Path, cutoff: Any) -> dict[str, Any] | None:
+def select(archive: str | Path, cutoff: Any) -> dict[str, Any] | None:
     """Select latest complete same-attempt pair available by cutoff."""
-    cutoff = timestamp(cutoff)
-    candidates = []
-    for path in Path(directory).glob('*.json'):
-        with path.open(encoding='utf-8') as stream:
-            item = json.load(stream)
-        if item.get('format_version') != 1:
-            raise ValueError(f'Unknown snapshot format: {path}')
-        origin = timestamp(item['scheduled_origin'])
-        w, p = item['weather'], item['price']
-        if origin <= cutoff and w['status'] == p['status'] == 'ok':
-            completed = max(timestamp(w['completed_at']), timestamp(p['completed_at']))
-            if completed <= cutoff:
-                candidates.append((origin, completed, item['id'], item))
-    return max(candidates, key=lambda x: x[:3])[3] if candidates else None
+    cutoff = _utc(cutoff)
+    conn = _connect(archive, create=False)
+    try:
+        row = conn.execute('''
+            SELECT a.id, a.origin, a.weather_start, a.weather_end, w.json,
+                   a.price_start, a.price_end, p.json
+            FROM attempts a JOIN payloads w ON w.id=a.weather_payload
+            JOIN payloads p ON p.id=a.price_payload
+            WHERE a.origin<=? AND a.weather_status='ok' AND a.price_status='ok'
+              AND a.weather_end<=? AND a.price_end<=?
+            ORDER BY a.origin DESC, max(a.weather_end,a.price_end) DESC, a.id DESC LIMIT 1
+        ''', (cutoff, cutoff, cutoff)).fetchone()
+        if row is None:
+            return None
+        id_, origin, ws, we, wp, ps, pe, pp = row
+        return {'format_version': 1, 'id': id_, 'scheduled_origin': timestamp(origin).isoformat(),
+                'weather': {'status': 'ok', 'started_at': timestamp(ws).isoformat(),
+                            'completed_at': timestamp(we).isoformat(), 'payload': json.loads(wp)},
+                'price': {'status': 'ok', 'started_at': timestamp(ps).isoformat(),
+                          'completed_at': timestamp(pe).isoformat(), 'payload': json.loads(pp)}}
+    finally:
+        conn.close()
 
 
 def map_intervals(points: list[dict[str, Any]], targets: list[Any]) -> list[Any]:
@@ -112,13 +198,13 @@ def map_intervals(points: list[dict[str, Any]], targets: list[Any]) -> list[Any]
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--directory', required=True, help='Existing dedicated snapshot directory')
+    parser.add_argument('--archive', required=True, help='Dedicated forecast SQLite archive path')
     parser.add_argument('--origin', required=True, help='Scheduled origin, timezone-aware')
     parser.add_argument('--host', required=True, help='Home Assistant URL')
     parser.add_argument('--weather-entity', required=True)
     parser.add_argument('--price-entity', required=True)
     parser.add_argument('--price-zone', required=True)
-    parser.add_argument('--max-files', type=int, default=100000)
+    parser.add_argument('--max-attempts', type=int, default=100000)
     parser.add_argument('--max-bytes', type=int, default=2_000_000_000)
     args = parser.parse_args()
     token = os.environ.get('HA_TOKEN')
@@ -151,8 +237,8 @@ def main() -> None:
         return {'source': args.price_entity, 'zone': args.price_zone,
                 'classification': 'unverified', 'state': data}
 
-    result = capture(args.directory, args.origin, weather, price,
-                     max_files=args.max_files, max_bytes=args.max_bytes)
+    result = capture(args.archive, args.origin, weather, price,
+                     max_attempts=args.max_attempts, max_bytes=args.max_bytes)
     print(json.dumps({'id': result['id'], 'weather': result['weather']['status'],
                       'price': result['price']['status']}))
     if result['weather']['status'] != 'ok' or result['price']['status'] != 'ok':

@@ -6,12 +6,12 @@ state reads and the read-only `weather.get_forecasts` service. No live call,
 timer installation or source change is authorized by the existence of this
 code. Get explicit permission before attempting a live capture.
 
-The CLI needs an existing, dedicated archive directory, a scheduled
+The CLI needs a dedicated SQLite archive path in an existing directory, a scheduled
 timezone-aware origin, HA URL, weather entity, price entity, zone and an
 `HA_TOKEN` environment variable. For example, after approval:
 
 ```
-python -m utils.forecast_snapshots --directory /path/to/dedicated-archive \
+python -m utils.forecast_snapshots --archive /path/to/forecast-archive.sqlite \
   --origin 2026-11-18T12:00:00Z --host https://example.invalid \
   --weather-entity weather.home --price-entity sensor.example \
   --price-zone FI
@@ -27,15 +27,29 @@ units, zone and relationship to NIBE before building a price adapter or
 using it in a replay. HEPO's `utils/price_utils.py` distinguishes several
 sources and derives import prices; those tariffs must not be relabelled spot.
 
-Every invocation stores an immutable uniquely named JSON attempt, with
-separate source start/completion times and error type; exception messages are
-not stored because they can include credentials. A partial failure exits
-nonzero but preserves the successful source. Missing invocations must be
-detected by comparing scheduled origins to files; they cannot create their own
-failure record. Quotas (`--max-files`, `--max-bytes`) fail closed without
-deleting old files; monitor disk and arrange reviewed archival/retention before
-the limit is reached. The quota applies to cooperating processes in this
-directory, not other writers. Never point it at an active artifact directory.
+Every invocation stores a separate attempt row with source start/completion
+times, status and error type; exception messages are not stored because they
+can include credentials. Compact JSON payloads are stored separately, keyed
+by SHA-256 and shared between attempts when identical. No native compression
+is applied. The complete raw payload is retained; overlapping but nonidentical
+forecasts are not deduplicated point by point. The database has an indexed UTC
+origin and is independent of `hepo.db` and the measurement archive. Existing
+databases without the forecast archive identifier are refused, not modified.
+Writes use a single SQLite transaction, including quota checks and payload
+insertion. A partial source failure exits nonzero but preserves the successful
+source.
+
+Missing invocations must be detected by comparing scheduled origins to
+attempt rows; they cannot create their own failure record. Quotas
+(`--max-attempts`, `--max-bytes`) fail closed without deleting old data;
+monitor disk and arrange reviewed archival/retention before the limit is
+reached. The byte quota limits SQLite's database pages at commit, not
+temporary rollback journals, filesystem usage or external writes. The default
+100,000 attempts covers under three years at a 15-minute cadence; choose limits
+for the intended retention and actual payload sizes. Never point it at an active
+artifact database. The earlier experimental JSON-file format is not migrated
+automatically; preserve any such files separately until a reviewed importer
+exists.
 
 `select()` returns the latest same-attempt successful pair whose scheduled
 origin and both completion times are no later than the cutoff. It does not
