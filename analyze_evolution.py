@@ -18,8 +18,8 @@ def fetch_all_predictions(days: int = 7, *, history: ArchiveHistory | None = Non
 
     end = pd.to_datetime(history.cutoff, unit='s', utc=True) if history is not None else datetime.now(timezone.utc)
     cutoff = (end - timedelta(days=days)).isoformat()
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         query = f"""
             SELECT target_timestamp, generated_at, predicted_usage_kw, 
                    battery_action, version, grid_import_kwh, import_price, 
@@ -28,24 +28,25 @@ def fetch_all_predictions(days: int = 7, *, history: ArchiveHistory | None = Non
             WHERE julianday(target_timestamp) >= julianday('{cutoff}')
         """
         df = pd.read_sql_query(query, conn)
+    finally:
         conn.close()
-        
-        if df.empty:
-            return df
-            
-        df['target_timestamp'] = pd.to_datetime(df['target_timestamp'], utc=True)
-        df['generated_at'] = pd.to_datetime(df['generated_at'], utc=True)
-        if history is not None:
-            df = df.loc[(df.target_timestamp >= end - timedelta(days=days)) &
-                        (df.target_timestamp < end) & (df.generated_at <= end)].copy()
-        
-        # Calculate lead time in hours
-        df['lead_time_hours'] = (df['target_timestamp'] - df['generated_at']).dt.total_seconds() / 3600.0
-        
+
+    if df.empty:
         return df
-    except Exception as e:
-        print(f"Error reading archived predictions: {e}")
-        return pd.DataFrame()
+
+    # Archived timestamps may use mixed ISO representations (different
+    # timezone offsets, separators, or naive UTC strings), so parse each
+    # value independently instead of assuming one shared format.
+    df['target_timestamp'] = pd.to_datetime(df['target_timestamp'], format='mixed', utc=True)
+    df['generated_at'] = pd.to_datetime(df['generated_at'], format='mixed', utc=True)
+    if history is not None:
+        df = df.loc[(df.target_timestamp >= end - timedelta(days=days)) &
+                    (df.target_timestamp < end) & (df.generated_at <= end)].copy()
+
+    # Calculate lead time in hours
+    df['lead_time_hours'] = (df['target_timestamp'] - df['generated_at']).dt.total_seconds() / 3600.0
+
+    return df
 
 def analyze_evolution(days: int = 7, *, history: ArchiveHistory | None = None) -> None:
     print(f"=== Plan Evolution Analysis (Last {days} days) ===")

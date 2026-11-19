@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -80,3 +81,48 @@ def test_evolution_reports_missing_actuals_without_opening_the_archive(monkeypat
     evolution.analyze_evolution(days=2)
 
     assert "No actuals found" in capsys.readouterr().out
+
+
+def test_fetch_all_predictions_parses_mixed_fractional_timestamps(monkeypatch, tmp_path):
+    """Mixed fractional/non-fractional ISO strings must parse in both columns."""
+    conn = sqlite3.connect(tmp_path / "hepo.db")
+    conn.execute(
+        """CREATE TABLE predictions (
+            target_timestamp TEXT, generated_at TEXT, predicted_usage_kw REAL,
+            battery_action TEXT, version TEXT, grid_import_kwh REAL,
+            import_price REAL, grid_export_kwh REAL, export_price REAL
+        )"""
+    )
+    base = FIXED_NOW - timedelta(hours=1)
+    rows = [
+        (base.isoformat(timespec="microseconds"), (base - timedelta(hours=1)).isoformat(timespec="seconds"),
+         2.0, "charge", "1.0.0", 1.0, 0.10, 0.0, 0.08),
+        (base.isoformat(timespec="seconds"), (base - timedelta(hours=2)).isoformat(timespec="microseconds"),
+         3.0, "discharge", "2.0.0", 2.0, 0.20, 0.5, 0.08),
+    ]
+    conn.executemany("INSERT INTO predictions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(evolution, "datetime", FrozenDatetime)
+    monkeypatch.setattr(evolution, "db_exists", lambda: True)
+    monkeypatch.setattr(evolution, "get_db_connection", lambda: sqlite3.connect(tmp_path / "hepo.db"))
+
+    df = evolution.fetch_all_predictions(days=2)
+
+    assert len(df) == 2
+    assert df["predicted_usage_kw"].tolist() == [2.0, 3.0]
+    assert str(df["target_timestamp"].dtype).startswith("datetime64")
+    assert str(df["generated_at"].dtype).startswith("datetime64")
+
+
+def test_fetch_all_predictions_propagates_archive_read_errors(monkeypatch):
+    """Archive read failures must not be swallowed as an empty prediction set."""
+    monkeypatch.setattr(evolution, "db_exists", lambda: True)
+    monkeypatch.setattr(
+        evolution, "get_db_connection",
+        lambda: (_ for _ in ()).throw(RuntimeError("archive read failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="archive read failed"):
+        evolution.fetch_all_predictions(days=1)
